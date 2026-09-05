@@ -31,6 +31,8 @@ class GridLine {
     this.bubbleEnd = def.bubbleEnd || 'both';
     this.verticalExtent = Object.assign({ min: 0, max: 100 },
       def.verticalExtent || {});
+    this.locked = !!def.locked; // grips refuse dragging, deletion refused
+    this.hidden = !!def.hidden; // leaves render, snapping and grips
   }
 
   static uuid() {
@@ -158,6 +160,8 @@ class GridLine {
     if (this.bubbleEnd !== 'both') r.bbl = this.bubbleEnd;
     if (this.verticalExtent.min !== 0 || this.verticalExtent.max !== 100)
       r.ve = [this.verticalExtent.min, this.verticalExtent.max];
+    if (this.locked) r.lk = 1;
+    if (this.hidden) r.hd = 1;
     return r;
   }
 
@@ -187,6 +191,8 @@ class GridLine {
       mid: isCurved ? [mid[0], mid[1]] : null,
       isCurved, bubbleEnd,
       verticalExtent: { min: ve[0], max: ve[1] },
+      locked: !!(rec.lk || rec.locked),
+      hidden: !!(rec.hd || rec.hidden),
     });
   }
 }

@@ -336,11 +336,49 @@
     cat_framing: '#b35900',
   };
 
+  // eye / lock toggles shared by every project row (elements, grids, levels)
+  function flagBtns(kind, id, locked, hidden) {
+    return `<button class="elb-flag f-eye${hidden ? ' off' : ''}" data-flag="hidden" data-kind="${kind}" data-id="${esc(id)}" title="${hidden ? 'Show in viewport' : 'Hide from viewport (display only)'}">${hidden ? '\u{1F648}' : '\u{1F441}'}</button>` +
+      `<button class="elb-flag f-lock${locked ? ' on' : ''}" data-flag="locked" data-kind="${kind}" data-id="${esc(id)}" title="${locked ? 'Unlock (allow select / delete)' : 'Lock (no select, no delete, no edits)'}">${locked ? '\u{1F512}' : '\u{1F513}'}</button>`;
+  }
+
   function renderTree() {
     if (!treeEl || !catalog) return;
+    const app = window.app;
     const filter = (panel.querySelector('#elb-filter').value || '').toLowerCase();
     const exp = state.expanded;
     let html = '';
+    // ---- project datums: levels and grid lines live here too ----
+    const datumSection = (key, label, rows) => {
+      const open = exp.has('sec:' + key);
+      let h = `<div class="elb-node elb-cat${open ? ' open' : ''}" data-sec="${key}">
+        <span class="elb-tw">${open ? '\u25BE' : '\u25B8'}</span>
+        <span class="elb-ic" style="background:#64748b"></span>
+        <span class="elb-lab">${label}</span>
+        <span class="elb-count">${rows.length || ''}</span>
+      </div>`;
+      if (open) for (const r of rows) h += r;
+      return h;
+    };
+    if (app) {
+      const lvls = (app.levelManager && app.levelManager.levels) || [];
+      const lvRows = lvls.filter(l => !filter || l.name.toLowerCase().includes(filter))
+        .map(l => `<div class="elb-node elb-elem elb-datum" title="Level plane at ${(+l.elevation).toFixed(2)} m">
+          <span class="elb-tw"></span>
+          <span class="elb-lab">${esc(l.name)} <span class="elb-lvl">${(+l.elevation).toFixed(2)} m</span></span>
+          ${flagBtns('level', l.id, !!l.locked, !!l.hidden)}
+        </div>`);
+      html += datumSection('levels', 'Levels', lvRows);
+      const gm = app.gridManager;
+      const grids = (gm && gm.grids) || [];
+      const grRows = grids.filter(g => !filter || g.name.toLowerCase().includes(filter))
+        .map(g => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')})">
+          <span class="elb-tw"></span>
+          <span class="elb-lab">${esc(g.name)} <span class="elb-lvl">${esc(g.system || 'Main')}</span></span>
+          ${flagBtns('grid', g.id, !!g.locked, !!g.hidden)}
+        </div>`);
+      html += datumSection('grids', 'Grid Lines', grRows);
+    }
     for (const cat of catalog.categories) {
       const fams = catalog.families.filter(f => f.categoryId === cat.id);
       const famsVisible = fams.filter(f => !filter ||
@@ -385,9 +423,11 @@
             for (const el of els) {
               const tag = state.level === 'all' && el.levelId
                 ? `<span class="elb-lvl" title="${esc(lvName(el.levelId) || el.levelId)}">${esc(lvName(el.levelId) || el.levelId)}</span>` : '';
-              html += `<div class="elb-node elb-elem" data-elem="${esc(el.id)}" title="Click to select in the model">
+              const ent = app && app.bim ? app.bim.getEntityById(el.id) : null;
+              html += `<div class="elb-node elb-elem${ent && ent.hidden ? ' is-hidden' : ''}" data-elem="${esc(el.id)}" title="Click to select in the model">
                 <span class="elb-tw"></span>
                 <span class="elb-lab">${esc(el.name || el.id)}</span>${tag}
+                ${flagBtns('element', el.id, !!(ent && ent.locked), !!(ent && ent.hidden))}
                 <span class="elb-add" data-add-type="${esc(el.typeId)}" title="Place another one like this">＋</span>
               </div>`;
             }
@@ -404,13 +444,36 @@
 
   function initTreeEvents() {
     treeEl.addEventListener('click', ev => {
+      // eye / lock toggles — they never expand or select anything
+      const flag = ev.target.closest('.elb-flag');
+      if (flag) {
+        ev.stopPropagation();
+        const app = window.app;
+        if (app && app.setItemFlags) {
+          const isLock = flag.dataset.flag === 'locked';
+          const cur = flag.classList.contains(isLock ? 'on' : 'off');
+          app.setItemFlags(flag.dataset.kind, flag.dataset.id, { [flag.dataset.flag]: !cur });
+        }
+        return;
+      }
       const node = ev.target.closest('.elb-node');
       if (!node) return;
+      if (node.dataset.sec) {
+        const k = 'sec:' + node.dataset.sec;
+        state.expanded.has(k) ? state.expanded.delete(k) : state.expanded.add(k);
+        saveState(); renderTree();
+        return;
+      }
       // the ＋ affordance places elements: on a type row it arms that type's
       // tool, on a placed element it places ANOTHER one like it
       const add = ev.target.closest('.elb-add');
       if (add) {
         ev.stopPropagation();
+        // Grid selection active (Grid Place tool): the + places instances
+        // ON the selected intersections/lines instead of just arming the
+        // tool — occupied intersections are skipped, never duplicated
+        const app2 = window.app;
+        if (app2 && app2.placeTypeAtGridSelection && app2.placeTypeAtGridSelection(add.dataset.addType)) return;
         activateType({ typeId: add.dataset.addType });
         return;
       }

@@ -299,9 +299,10 @@ class Viewport {
     const elementFaceIds = (this.app.elements && this.app.elements.rebuild) ? this.app.elements.rebuild() : new Set();
     // display-only view filters (Level View plan isolation) — never model state
     const ff = this.faceFilter || null, ef = this.edgeFilter || null, elf = this.elementFilter || null;
-    if (elf && this.app.elements)
+    // hidden elements leave the render (and with it, picking) entirely
+    if (this.app.elements)
       for (const el of this.app.elements.list())
-        el.group.visible = !!elf(el.entity);
+        el.group.visible = !el.entity.hidden && (elf ? !!elf(el.entity) : true);
     const pos = [], col = [], nor = [];
     this.triangleFace = [];
     const sel = this.app.sel;
@@ -340,6 +341,8 @@ class Viewport {
     const ep = [];
     for (const e of model.edges.values()) {
       if (e.hidden || (ef && !ef(e))) continue;
+      const eu = e.userData && e.userData.bimEntityId;
+      if (eu && this.app.isEntityHidden(eu)) continue; // hidden element edges go too
       const a = model.vp(e.a), b = model.vp(e.b);
       if (!a || !b) continue;
       ep.push(a.x, a.y, a.z, b.x, b.y, b.z);
@@ -399,6 +402,7 @@ class Viewport {
     if (grids && grids.length) {
       let xa = Infinity, ya = Infinity, xb = -Infinity, yb = -Infinity;
       for (const g of grids) {
+        if (g.hidden) continue; // hidden grids neither render nor size the planes
         for (const p of g.polyline()) {
           if (p[0] < xa) xa = p[0];
           if (p[0] > xb) xb = p[0];
@@ -410,6 +414,7 @@ class Viewport {
       x0 = xa - M; y0 = ya - M; x1 = xb + M; y1 = yb + M;
     }
     for (const lvl of levels || []) {
+      if (lvl.hidden) continue; // hidden levels leave the viewport
       // level datums sit slightly ABOVE the grid line planes (grids draw at
       // the same elevations) so they always read on top — no z-fighting, no
       // hiding beneath the dashed grid lines
@@ -476,8 +481,9 @@ class Viewport {
       if (c.material) c.material.dispose();
     }
     this._gridGrips = []; // [{ gridId, which:'start'|'end', p:{x,y,z} }]
-    const zs = (levels || []).map(l => l.elevation).sort((a, b) => a - b);
+    const zs = (levels || []).map(l => l.elevation).filter(z => z != null).sort((a, b) => a - b);
     for (const g of grids || []) {
+      if (g.hidden) continue; // hidden grids leave the viewport and the grips
       const covered = zs.filter(z => g.covers(z));
       if (!covered.length) continue;
       const zGrip = covered[0];
@@ -985,9 +991,16 @@ class Viewport {
     this.applyCamera();
     this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
     // the merged mesh AND every element's unified Group are pick targets;
-    // each mesh carries its own triangle -> faceId map in userData
+    // each mesh carries its own triangle -> faceId map in userData.
+    // Locked / hidden elements are not pick targets at all.
+    const app = this.app;
+    const pickable = obj => {
+      const eid = obj.userData && obj.userData.elementId;
+      if (!eid) return true;
+      return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
+    };
     const targets = [this.faceMesh];
-    if (this.elementsRoot) targets.push(...this.elementsRoot.children);
+    if (this.elementsRoot) targets.push(...this.elementsRoot.children.filter(pickable));
     const hits = this.raycaster.intersectObjects(targets, true);
     if (!hits.length) return null;
     // on coincident (coplanar) hits prefer the smallest face — drawing over a
@@ -1001,6 +1014,7 @@ class Viewport {
       if (fid == null) continue;
       const f = this.app.model.faces.get(fid);
       if (!f) continue;
+      if (this.app.isFaceLocked(f) || this.app.isEntityHidden(f.userData && f.userData.bimEntityId)) continue;
       const area = this.app.model.faceArea(f);
       if (area < bestArea) { bestArea = area; best = fid; }
     }

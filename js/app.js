@@ -341,6 +341,7 @@ class LevelManager {
   canRemove(id) {
     const lvl = this.getLevel(id);
     if (!lvl) return 'Level not found';
+    if (lvl.locked) return `Level ${lvl.name} is locked — unlock it in the Element Browser first`;
     if (this.levels.length <= 1) return 'At least one level is required';
     const u = this.usage(id);
     if (u.total) {
@@ -1508,6 +1509,7 @@ class App {
   selectElement(entId, mode = 'replace') {
     const ent = this.bim.getEntityById(entId);
     if (!ent) return;
+    if (ent.locked) { this.toast(`${ent.type} ${ent.id} is locked — unlock it in the Element Browser`, true); return; }
     const sel = this.selectionForElement(ent);
     if (mode === 'toggle') this.toggleEntities(sel);
     else { this.sel = sel; this.onSelectionChanged(); }
@@ -1533,6 +1535,48 @@ class App {
     const f = this.model.faces.get(fid);
     const uid = f && f.userData && f.userData.bimEntityId;
     return uid ? this.bim.getEntityById(uid) : null;
+  }
+  // ---------------------------------------------- project item lock & hide
+  // Flags live on the entity/level/grid objects themselves (deep-snapshotted
+  // with the model), so they survive undo, autosave and file round-trips.
+  // Locked items refuse selection, deletion and direct edits; hidden items
+  // leave the render and every pick path entirely.
+  isEntityLocked(id) { const e = this.bim.getEntityById(id); return !!(e && e.locked); }
+  isFaceLocked(f) {
+    const uid = f && f.userData && f.userData.bimEntityId;
+    return uid ? this.isEntityLocked(uid) : false;
+  }
+  isEdgeLocked(e) {
+    const uid = e && e.userData && e.userData.bimEntityId;
+    return uid ? this.isEntityLocked(uid) : false;
+  }
+  isEntityHidden(id) { const e = this.bim.getEntityById(id); return !!(e && e.hidden); }
+  /** Toggle lock/hidden on a BIM element, grid line, or level.
+   * patch: { locked?: bool, hidden?: bool } */
+  setItemFlags(kind, id, patch) {
+    if (kind === 'element') {
+      const ent = this.bim.getEntityById(id);
+      if (!ent) return;
+      Object.assign(ent, patch);
+      if (patch.locked || patch.hidden) { // locked/hidden things can't stay selected
+        for (const fid of ent.faces) this.sel.faces.delete(fid);
+        for (const eid of ent.edges) this.sel.edges.delete(eid);
+        this.onSelectionChanged();
+      }
+      this.view.rebuild();
+      this._saveAutosave();
+    } else if (kind === 'grid') {
+      const g = this.gridManager && this.gridManager.getGrid(id);
+      if (!g) return;
+      Object.assign(g, patch);
+      this.onGridsChanged();
+    } else if (kind === 'level') {
+      const l = this.levelManager.getLevel(id);
+      if (!l) return;
+      Object.assign(l, patch);
+      this.onLevelsChanged();
+    }
+    if (window.ElementBrowser) ElementBrowser.refresh();
   }
   /** Quantities for the properties panel and the database record. */
   elementQuantities(ent) {
@@ -2752,6 +2796,8 @@ class App {
     const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
     let best = null, bd = 12;
     for (const g of this.view.gridGripPoints()) {
+      const gl = this.gridManager.getGrid(g.gridId);
+      if (gl && gl.locked) continue; // locked grids refuse dragging
       const s = this.view.worldToScreenPixels(g.p);
       if (!s.visible) continue;
       const d = Math.hypot(s.x - q.x, s.y - q.y);
@@ -2794,7 +2840,7 @@ class App {
     const ef = this.view.edgeFilter || null; // Level View hides filtered edges from picking too
     let best = null, bd = tol;
     for (const e of model.edges.values()) {
-      if (e.hidden || (ef && !ef(e))) continue;
+      if (e.hidden || (ef && !ef(e)) || this.isEdgeLocked(e)) continue;
       const a = model.vp(e.a), b = model.vp(e.b);
       if (!a || !b) continue;
       const sa = this.view.worldToScreenPixels(a), sb = this.view.worldToScreenPixels(b);
@@ -3198,6 +3244,86 @@ class App {
   }
 
   // ------------------------------------------------------------------ edit ops
+  // Element Browser "+" with a Grid Place selection active: place instances
+  // of the chosen catalog type ON the selected grid targets. Columns go to
+  // the selected intersections — ones that already carry a column are
+  // SKIPPED (never stacked); wall types place along selected grid lines.
+  placeTypeAtGridSelection(typeId) {
+    const gp = this.tools && this.tools.gridplace;
+    if (!gp || !this.db || !this.elements) return false;
+    const hasIx = gp.selIx && gp.selIx.size > 0;
+    const hasLines = gp.selLine && gp.selLine.size > 0;
+    if (!hasIx && !hasLines) return false; // no grid selection -> arm the tool
+    const cat2 = this.elements._catalog || {};
+    const type = (cat2.types || []).find(t => t.id === typeId);
+    if (!type) return false;
+    const fam = (cat2.families || []).find(f => f.id === type.familyId);
+    const catName = (((cat2.categories || []).find(c => c.id === (fam || {}).categoryId) || {}).name || '').toLowerCase();
+    const dp = type.defaultParameters || {};
+    if (catName.indexOf('column') >= 0) {
+      const pts = gp._selectedPoints();
+      const occupied = p => this.bim.entities.some(e =>
+        e.type === 'column' && e.params && e.params.base &&
+        Math.hypot(e.params.base[0] - p[0], e.params.base[1] - p[1]) < 0.26);
+      const free = pts.filter(p => !occupied(p));
+      const skipped = pts.length - free.length;
+      if (!free.length) { this.toast(skipped ? `All ${skipped} selected intersection${skipped === 1 ? '' : 's'} already ${skipped === 1 ? 'has' : 'have'} a column — nothing to add` : 'No intersections selected'); return true; }
+      const w = Math.max(0.05, +dp.width || 0.3), d = Math.max(0.05, +dp.depth || 0.3);
+      const z0 = this.levelManager.getElevation(this.bimOptions.baseLevel);
+      let n = 0;
+      this.transaction.run('place at grids', m => {
+        m.bimHold = true;
+        try {
+          for (const p of free) {
+            const params = {
+              base: [p[0], p[1], z0], width: w, depth: d,
+              baseLevelId: this.bimOptions.baseLevel,
+              topLevelId: this.bimOptions.topConstraint !== 'unconnected' ? this.bimOptions.topConstraint : null,
+              baseOffset: 0, topOffset: 0,
+              height: Math.max(0.1, this.bimOptions.unconnectedHeight || 3),
+              catalogTypeId: typeId,
+            };
+            const faces = this.structural.buildColumn(G, m, params);
+            const b = this.structural.columnBounds(params);
+            const roles = {}; const edges = [];
+            for (const f of faces) {
+              if (f.userData) continue;
+              const c = m.faceCentroid(f);
+              roles[f.id] = Math.abs(c.z - b.zEnd) < 1e-6 ? 'top' : Math.abs(c.z - b.zStart) < 1e-6 ? 'bottom' : 'side';
+              for (const r of m.rings(f)) for (let i = 0; i < r.length; i++) {
+                const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+                if (e && !e.userData) edges.push(e.id);
+              }
+            }
+            this.bim.create('column', {
+              ...params, baseLevel: params.baseLevelId,
+              topConstraint: params.topLevelId || 'unconnected', height: b.height,
+            }, roles, edges);
+            n++;
+          }
+        } finally { m.bimHold = false; }
+      });
+      this.cleanupWires();
+      if (window.ElementBrowser && ElementBrowser.refresh) ElementBrowser.refresh();
+      this.toast(`Placed ${n} × ${type.name}${skipped ? ` — skipped ${skipped} (column${skipped === 1 ? '' : 's'} already there)` : ''}`);
+      return true;
+    }
+    if (catName.indexOf('wall') >= 0 && hasLines) {
+      const prevT = gp.state.wallThickness;
+      gp.state.wallThickness = Math.max(0.05, +dp.thickness || 0.2);
+      const prevWhat = gp.state.placeWhat, prevSel = gp.state.selectWhat;
+      gp.state.placeWhat = 'walls'; gp.state.selectWhat = 'lines';
+      try { gp._place(); } finally {
+        gp.state.wallThickness = prevT; gp.state.placeWhat = prevWhat; gp.state.selectWhat = prevSel;
+      }
+      if (window.ElementBrowser && ElementBrowser.refresh) ElementBrowser.refresh();
+      return true;
+    }
+    this.toast(catName.indexOf('wall') >= 0
+      ? 'Walls need Grid LINES selected (Grid Place: Select → Grid Lines)'
+      : `${(fam || {}).categoryId ? (catName || 'this category') : 'This type'} places by drawing — doors/windows need a wall host`);
+    return true;
+  }
   // Clean Up: purge every wire edge (attached to no face) in one undoable
   // step — construction residue from BIM operations plus any orphaned
   // free-drawn lines. Everything with a face is untouched.
@@ -3235,9 +3361,22 @@ class App {
   }
   deleteSelection() {
     if (!this.sel.faces.size && !this.sel.edges.size) return;
+    // locked elements keep their geometry — only the free part of the
+    // selection goes, and the user hears why
+    const faces = [...this.sel.faces].filter(id => {
+      const f = this.model.faces.get(id);
+      return f && !this.isFaceLocked(f);
+    });
+    const edges = [...this.sel.edges].filter(id => {
+      const e = this.model.edges.get(id);
+      return e && !this.isEdgeLocked(e);
+    });
+    const skipped = this.sel.faces.size - faces.length + this.sel.edges.size - edges.length;
+    if (skipped) this.toast(`Skipped ${skipped} locked item${skipped === 1 ? '' : 's'} — unlock in the Element Browser to delete`, true);
+    if (!faces.length && !edges.length) { this.clearSelection(); return; }
     this.run('delete', m => {
-      for (const id of [...this.sel.faces]) m.deleteFace(id);
-      const edgeIds = [...this.sel.edges].filter(id => m.edges.has(id));
+      for (const id of faces) m.deleteFace(id);
+      const edgeIds = edges.filter(id => m.edges.has(id));
       if (edgeIds.length) m.deleteEdgeIds(edgeIds);
     });
     this.sel = { edges: new Set(), faces: new Set() };

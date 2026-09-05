@@ -99,6 +99,7 @@ class GridManager {
   removeGrid(id) {
     const g = this.getGrid(id);
     if (!g) return 'Grid not found';
+    if (g.locked) return `Grid ${g.name} is locked — unlock it in the Element Browser first`;
     const u = this.usage(id);
     if (u.total) {
       const kind = u.walls && u.columns ? 'walls / columns' : (u.walls ? `wall${u.walls === 1 ? '' : 's'}` : `column${u.columns === 1 ? '' : 's'}`);
@@ -120,6 +121,7 @@ class GridManager {
         // grids of DIFFERENT systems never interact (two named systems may
         // overlap in plan without creating phantom A-1 intersections)
         if ((gs[i].system || 'Main') !== (gs[j].system || 'Main')) continue;
+        if (gs[i].hidden || gs[j].hidden) continue; // hidden grids create no snap targets
         const p = GridLine.intersect(gs[i], gs[j]);
         if (p) out.push({ p, a: gs[i], b: gs[j] });
       }
