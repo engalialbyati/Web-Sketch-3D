@@ -442,9 +442,33 @@ class BimEntityManager {
     const p = ent.params;
     const hasBottom = ent.faces.some(id => {
       const f = m.faces.get(id);
-      return f && f.userData && f.userData.role === 'bottom';
+      return f && f.userData && f.userData.role === 'bottom' && f.userData.bimEntityId === ent.id;
     });
     if (hasBottom) return false;
+    // CLAIM-FIRST: a join rebuild may already have produced the underside
+    // as unstamped faces (punch splits during re-extrusion) — adopt those
+    // instead of drawing a duplicate cap over them
+    const dir0 = { x: p.end[0] - p.base[0], y: p.end[1] - p.base[1] };
+    const L0 = Math.hypot(dir0.x, dir0.y) || 1;
+    const nx0 = -dir0.y / L0, ny0 = dir0.x / L0;
+    const inBand0 = q => {
+      const dx = q.x - p.base[0], dy = q.y - p.base[1];
+      const t = (dx * dir0.x + dy * dir0.y) / L0;
+      const s = Math.abs(dx * nx0 + dy * ny0);
+      return t >= -0.3 && t <= L0 + 0.3 && s <= (p.thickness || 0.2) / 2 + 0.3;
+    };
+    let claimed = 0;
+    for (const f of [...m.faces.values()]) {
+      if (f.userData || f.hidden) continue;
+      const pts = m.pts(f.loop);
+      if (!pts.length || !pts.every(q => Math.abs(q.z - p.base[2]) < 1e-6)) continue;
+      if (!pts.every(inBand0)) continue;
+      if (G.loopArea(pts) < 1e-6) continue;
+      f.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'bottom' };
+      ent.faces.push(f.id);
+      claimed++;
+    }
+    if (claimed) return true;
     let ring;
     try { ring = this.wallRing(p); } catch (e) { return false; }
     if (!ring || ring.length < 3) return false;
@@ -1612,6 +1636,18 @@ class App {
     return uid ? this.isEntityLocked(uid) : false;
   }
   isEntityHidden(id) { const e = this.bim.getEntityById(id); return !!(e && e.hidden); }
+  // Edge ownership drives hide: a wall's outlines must vanish with its faces.
+  // Rebuild paths (joins, resizes, grid moves, hosted re-cuts) restamp FACES
+  // but can leave regenerated edges anonymous — restamp from ent.edges before
+  // any render sync so no element hides "half".
+  refreshEdgeStamps() {
+    for (const ent of this.bim.entities)
+      for (const eid of ent.edges) {
+        const e = this.model.edges.get(eid);
+        if (e && !(e.userData && e.userData.bimEntityId))
+          e.userData = { bimEntityId: ent.id, bimType: ent.type, role: 'profile' };
+      }
+  }
   /** Toggle lock/hidden on a BIM element, grid line, or level.
    * patch: { locked?: bool, hidden?: bool } */
   setItemFlags(kind, id, patch, lvlId) {
@@ -1634,6 +1670,7 @@ class App {
         }
       }
       this.onSelectionChanged();
+      this.refreshEdgeStamps();
       this.view.rebuild();
       this._saveAutosave();
       if (window.ElementBrowser) ElementBrowser.refresh();
@@ -1710,6 +1747,7 @@ class App {
         for (const eid of ent.edges) this.sel.edges.delete(eid);
         this.onSelectionChanged();
       }
+      this.refreshEdgeStamps();
       this.view.rebuild();
       this._saveAutosave();
     } else if (kind === 'grid') {
@@ -2952,10 +2990,17 @@ class App {
     const zsAll = (this.levelManager.levels || [])
       .map(l => l.elevation).filter(z => z != null).sort((a, b) => a - b);
     let best = null, bd = tol;
+    const lvls = this.levelManager.levels || [];
     for (const g of this.gridManager.grids) {
       if (g.hidden || g.locked) continue;
-      const covered = zsAll.filter(z => g.covers(z));
-      const zList = covered.length ? covered : [0];
+      // only copies that actually RENDER are selectable: a grid hidden at
+      // Level 1 (per-level eye) selects from its Level-2 line, not the ghost
+      const covered = zsAll.filter(z => {
+        if (!g.covers(z)) return false;
+        const l = lvls.find(x => Math.abs(x.elevation - z) < 1e-6);
+        return !l || !g.hiddenAt(l.id);
+      });
+      const zList = covered.length ? covered : [];
       const poly = g.polyline();
       for (const z of zList) {
         for (let i = 0; i < poly.length - 1; i++) {
@@ -3762,6 +3807,7 @@ class App {
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates
+    this.refreshEdgeStamps();
     this.view.rebuild();
     this.updateInfo();
     this.refreshGroups();

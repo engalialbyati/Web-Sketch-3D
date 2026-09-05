@@ -492,10 +492,13 @@ class Viewport {
       const zGrip = zs[0];
       const poly = g.polyline();
       const selGrid = g.id === selGridId; // selected grid reads in amber
+      // amber only the copy on the LEVEL it was selected from (a level-2
+      // selection highlights the level-2 line, not every copy) — but if the
+      // recorded z matches none of the rendered copies, fall back to ALL of
+      // them: selection feedback must never silently disappear
+      const zKnown = selGridZ == null || zs.some(z => Math.abs(z - selGridZ) < 1e-6);
       for (const z of zs) {
-        // amber only the copy on the LEVEL it was selected from (a level-2
-        // selection highlights the level-2 line, not every copy)
-        const sel = selGrid && (selGridZ == null || Math.abs(z - selGridZ) < 1e-6);
+        const sel = selGrid && (selGridZ == null || !zKnown || Math.abs(z - selGridZ) < 1e-6);
         const pts = poly.map(p => new THREE.Vector3(p[0], p[1], z));
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
