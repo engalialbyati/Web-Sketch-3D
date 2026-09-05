@@ -58,6 +58,7 @@
       view.clearPreview();
       if (!this.script) return;
       m.bimHold = true;
+      m.noAutoIntersect = true; // ghost geometry is disposable — never intersect it with the model
       let built = null;
       try {
         built = app.scriptElements.buildInto(m, this.script, this.values,
@@ -74,6 +75,7 @@
           for (const eid of built.edges) m.edges.delete(eid);
         }
         m.bimHold = false;
+        m.noAutoIntersect = false;
         // no m.gc() per preview — ghost orphans accumulate harmlessly during
         // the drag and are swept once, in cleanup() / after a placement
       }

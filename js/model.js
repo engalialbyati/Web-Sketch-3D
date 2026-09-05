@@ -10,11 +10,19 @@
 // ---------------------------------------------------------------------------
 let __eid = 1;
 const nid = () => __eid++;
+// canonical key for the vertex pair of an edge (ids are numbers from nid())
+const edgePairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
 
 class Model {
   constructor() {
     this.vertices = new Map();
     this.edges = new Map();
+    // vertex-pair -> edge id. Kept in lockstep with this.edges by
+    // _addEdge/_delEdge so findEdge is O(1) — without it every kernel op
+    // (weld, ring, cap, side) scanned ALL edges and models went quadratic:
+    // ~60 ms per pushPull by a few hundred faces, felt worst in scripted
+    // elements whose ghost rebuilds run dozens of ops per drag.
+    this._edgeIndex = new Map();
     this.faces = new Map();
     this.curves = new Map();
     this.groups = new Map();   // gid -> {id, name, solid}
@@ -38,6 +46,11 @@ class Model {
     this.bimDirty = new Set();
     this._bimHoldDepth = 0;
     this._bimHoldEdges = null;
+    // preview builds (drag ghosts) set this: their geometry is deleted the
+    // moment the preview refreshes, so intersecting it with the model is
+    // wasted work — and it was the dominant cost of dragging scripted
+    // elements around in anything but an empty project
+    this.noAutoIntersect = false;
   }
   // BIM operations bracket their mutations with bimHold = true/false (a
   // depth counter: nested holds release only when the outermost one ends).
@@ -57,7 +70,7 @@ class Model {
         for (const id of [...this.edges.keys()]) {
           if (born.has(id)) continue;
           const e = this.edges.get(id);
-          if (e && this.facesAdjacentToEdge(e).length === 0) this.edges.delete(id);
+          if (e && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
         }
         this.gc();
       } else if (this._bimHoldDepth < 0) this._bimHoldDepth = 0;
@@ -106,10 +119,27 @@ class Model {
     if (!arr) this._vh.set(k, arr = []);
     arr.push(id);
   }
+  // drop a vertex from its cell — call BEFORE moving or deleting it. Moves
+  // and gc stay incremental: invalidating the whole hash made the next
+  // vertexAt rebuild it over every vertex, so push-happy code (extrudes,
+  // scripted elements) went quadratic as the model grew.
+  _vhRemove(id) {
+    if (!this._vh) return;
+    const v = this.vertices.get(id);
+    if (!v) return;
+    const cell = Model.WELD_EPS * 2;
+    const k = Math.floor(v.x / cell) + '|' + Math.floor(v.y / cell) + '|' + Math.floor(v.z / cell);
+    const arr = this._vh.get(k);
+    if (!arr) return;
+    const i = arr.indexOf(id);
+    if (i >= 0) arr.splice(i, 1);
+    if (!arr.length) this._vh.delete(k);
+  }
   invalidateVertexHash() { this._vh = null; }
   setVertex(vid, p) {
+    this._vhRemove(vid);
     this.vertices.set(vid, p);
-    this.invalidateVertexHash();
+    this._vhAdd(vid, p, Model.WELD_EPS * 2);
   }
 
   // B-rep invariant #2 — T-junction welding for drawn points: reuse a nearby
@@ -122,10 +152,23 @@ class Model {
     if (se != null) return se; // existing vertex, or a fresh edge split
     return this.vertexAt(p);
   }
+  // All edge mutations funnel through these two so the pair index can never
+  // drift from the map. (load() rebuilds the index wholesale.)
+  _addEdge(e) {
+    this.edges.set(e.id, e);
+    this._edgeIndex.set(edgePairKey(e.a, e.b), e.id);
+    return e;
+  }
+  _delEdge(id) {
+    const e = this.edges.get(id);
+    if (!e) return;
+    this.edges.delete(id);
+    const k = edgePairKey(e.a, e.b);
+    if (this._edgeIndex.get(k) === id) this._edgeIndex.delete(k);
+  }
   findEdge(a, b) {
-    for (const e of this.edges.values())
-      if ((e.a === a && e.b === b) || (e.a === b && e.b === a)) return e;
-    return null;
+    const id = this._edgeIndex.get(edgePairKey(a, b));
+    return id == null ? null : this.edges.get(id) || null;
   }
   edgeLength(e) { return G.dist(this.vp(e.a), this.vp(e.b)); }
   curveEdges(cid) {
@@ -142,10 +185,10 @@ class Model {
     // reuse existing half-edges (e.g. the drawn face's ring already provides
     // one side of the split) so the vertex pair never gets a twin edge
     let e1 = this.findEdge(e.a, m);
-    if (!e1) { e1 = { id: nid(), a: e.a, b: m, curveId: 0 }; this.edges.set(e1.id, e1); }
+    if (!e1) e1 = this._addEdge({ id: nid(), a: e.a, b: m, curveId: 0 });
     let e2 = this.findEdge(m, e.b);
-    if (!e2) { e2 = { id: nid(), a: m, b: e.b, curveId: 0 }; this.edges.set(e2.id, e2); }
-    if (e1.id !== e.id && e2.id !== e.id) this.edges.delete(e.id);
+    if (!e2) e2 = this._addEdge({ id: nid(), a: m, b: e.b, curveId: 0 });
+    if (e1.id !== e.id && e2.id !== e.id) this._delEdge(e.id);
     for (const f of this.faces.values()) for (const ring of this.rings(f)) {
       const L = ring, n = L.length;
       for (let i = 0; i < n; i++) {
@@ -257,7 +300,7 @@ class Model {
         let e = this.findEdge(chain[i], chain[i + 1]);
         if (!e) {
           e = { id: nid(), a: chain[i], b: chain[i + 1], curveId: 0, gid: this.currentGid || 0 };
-          this.edges.set(e.id, e);
+          this._addEdge(e);
         }
         // a chain segment whose ends both sit on a crossed face's ring splits
         // that face along the chord (the footprint interior partition)
@@ -268,7 +311,7 @@ class Model {
       return last;
     }
     const e = { id: nid(), a, b, curveId: 0, gid: this.currentGid || 0 };
-    this.edges.set(e.id, e);
+    this._addEdge(e);
     this.splitFacesAt(a, b);
     this.autoFace(e);
     return e;
@@ -288,7 +331,7 @@ class Model {
     for (let i = 0; i < m; i++) {
       const a = vids[i], b = vids[(i + 1) % n];
       let e = this.findEdge(a, b);
-      if (!e) { e = { id: nid(), a, b, curveId: cid, gid: this.currentGid || 0 }; this.edges.set(e.id, e); }
+      if (!e) e = this._addEdge({ id: nid(), a, b, curveId: cid, gid: this.currentGid || 0 });
       else if (cid && !e.curveId) e.curveId = cid;
       edges.push(e);
     }
@@ -316,14 +359,14 @@ class Model {
           const chain = [a, ...between.map(x => x.id), b];
           for (let c = 0; c < chain.length - 1; c++) {
             let ce = this.findEdge(chain[c], chain[c + 1]);
-            if (!ce) { ce = { id: nid(), a: chain[c], b: chain[c + 1], curveId: 0 }; this.edges.set(ce.id, ce); }
+            if (!ce) ce = this._addEdge({ id: nid(), a: chain[c], b: chain[c + 1], curveId: 0 });
             if (c === 0) e = ce;
           }
           vids.splice(i + 1, 0, ...between.map(x => x.id)); // ring follows the chain
           out.push(e);
           continue;
         }
-        e = { id: nid(), a, b, curveId: 0 }; this.edges.set(e.id, e);
+        e = this._addEdge({ id: nid(), a, b, curveId: 0 });
       }
       out.push(e);
     }
@@ -583,7 +626,7 @@ class Model {
         const seeds = mf._weldSeeds || [];
         delete mf._weldSeeds;
         const welded = this._weldCollinearInLoop(mf, [e.a, e.b, ...seeds]);
-        this.edges.delete(e.id);
+        this._delEdge(e.id);
         return { ok: true, action: 'healed', merged: mf.id, welded };
       }
       // a live push/pull owner cannot fuse (its extrude state cannot survive
@@ -594,18 +637,18 @@ class Model {
       this._bimRemoveFaces(adj); // Case B — the shell opens
       adj.forEach(f => this.faces.delete(f.id));
       this._extrudePrune(adj.map(f => f.id));
-      this.edges.delete(e.id);
+      this._delEdge(e.id);
       return { ok: true, action: 'opened', removedFaces: adj.map(f => f.id) };
     }
     if (adj.length === 1 && this._healSpike(adj[0], e)) { // Case C, spiked ring
-      this.edges.delete(e.id);
+      this._delEdge(e.id);
       return { ok: true, action: 'spike', face: adj[0].id };
     }
     // Case C — wire edge, plain boundary edge, or non-manifold leftover
     this._bimRemoveFaces(adj);
     adj.forEach(f => this.faces.delete(f.id));
     this._extrudePrune(adj.map(f => f.id));
-    this.edges.delete(e.id);
+    this._delEdge(e.id);
     return { ok: true, action: adj.length ? 'opened' : 'wire', removedFaces: adj.map(f => f.id) };
   }
 
@@ -666,10 +709,10 @@ class Model {
       const j = (i - 1 + loop.length) % loop.length;
       if (!this.findEdge(loop[j], loop[i % loop.length])) {
         const id = nid();
-        this.edges.set(id, { id, a: loop[j], b: loop[i % loop.length], curveId: 0, gid: f.gid || 0 });
+        this._addEdge({ id, a: loop[j], b: loop[i % loop.length], curveId: 0, gid: f.gid || 0 });
       }
-      if (!this.facesAdjacentToEdge(e1).length) this.edges.delete(e1.id);
-      if (!this.facesAdjacentToEdge(e2).length) this.edges.delete(e2.id);
+      if (!this.facesAdjacentToEdge(e1).length) this._delEdge(e1.id);
+      if (!this.facesAdjacentToEdge(e2).length) this._delEdge(e2.id);
       queue.add(loop[j]); queue.add(loop[i % loop.length]);
     }
     return welded;
@@ -875,7 +918,7 @@ class Model {
     for (const id of [...this.edges.keys()]) {
       if (snap.has(id)) continue;
       const e = this.edges.get(id);
-      if (e && this.facesAdjacentToEdge(e).length === 0) this.edges.delete(id);
+      if (e && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
     }
     this.gc();
   }
@@ -899,7 +942,7 @@ class Model {
   // transaction. Returns how many edges were removed.
   purgeWireEdges() {
     const wires = this.wireEdges();
-    for (const e of wires) this.edges.delete(e.id);
+    for (const e of wires) this._delEdge(e.id);
     if (wires.length) this.gc();
     return wires.length;
   }
@@ -913,7 +956,7 @@ class Model {
     const n = loop.length;
     for (let i = 0; i < n; i++) {
       const e = this.findEdge(loop[i], loop[(i + 1) % n]);
-      if (e && this.facesAdjacentToEdge(e).length === 0) this.edges.delete(e.id);
+      if (e && this.facesAdjacentToEdge(e).length === 0) this._delEdge(e.id);
     }
     this.gc();
   }
@@ -921,8 +964,7 @@ class Model {
   gc() {
     const used = new Set();
     for (const e of this.edges.values()) { used.add(e.a); used.add(e.b); }
-    for (const [id] of this.vertices) if (!used.has(id)) this.vertices.delete(id);
-    this.invalidateVertexHash();
+    for (const [id] of this.vertices) if (!used.has(id)) { this._vhRemove(id); this.vertices.delete(id); }
     for (const [id, f] of this.faces) {
       f.loop = f.loop.filter(v => this.vertices.has(v));
       f.holes = (f.holes || []).map(h => h.filter(v => this.vertices.has(v))).filter(h => h.length >= 3);
@@ -1930,7 +1972,7 @@ class Model {
           }
           if (!this.findEdge(a0, t0)) {
             const ve = { id: nid(), a: a0, b: t0, curveId: 0 };
-            this.edges.set(ve.id, ve);
+            this._addEdge(ve);
           }
           if (!this.findEdge(t0, t1)) {
             const be = this.findEdge(a0, a1);
@@ -1941,7 +1983,7 @@ class Model {
               this.curves.set(cid, { ...cm, center: cm.center ? G.add(cm.center, G.mul(n, offset)) : cm.center });
             }
             const te = { id: nid(), a: t0, b: t1, curveId: cid };
-            this.edges.set(te.id, te);
+            this._addEdge(te);
           }
           const loop = ri === 0 ? [a0, a1, t1, t0] : [a0, t0, t1, a1];
           // the segment beyond the rear face is SOLID material, not a carved
@@ -2051,20 +2093,20 @@ class Model {
         };
         face.loop = topRings[0];
         face.holes = topRings.slice(1);
-        this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
+        if (!this.noAutoIntersect) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
         return true;
       }
       // exact through-punch: the sweep is consumed as a lined opening between
       // the host hole and the punched far face — no pushed face survives
       this.faces.delete(face.id);
       this.gc();
-      this.autoIntersect([...sideIds].filter(id => this.faces.has(id)));
+      if (!this.noAutoIntersect) this.autoIntersect([...sideIds].filter(id => this.faces.has(id)));
       return true;
     }
     face.extrude = { axis: n, anchor: anchorOuter, anchorHoles, sides: sideIds, cap: capId, extended: extensions, culled };
     face.loop = topRings[0];
     face.holes = topRings.slice(1);
-    this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
+    if (!this.noAutoIntersect) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
     return true;
   }
 
@@ -2253,7 +2295,7 @@ class Model {
         onChord.sort((p, q) => p.t - q.t);
         if (!this.findEdge(id1, id2)) {
           const eid = nid();
-          this.edges.set(eid, { id: eid, a: id1, b: id2, curveId: 0, gid: (cur.gid || A.gid) || 0 });
+          this._addEdge({ id: eid, a: id1, b: id2, curveId: 0, gid: (cur.gid || A.gid) || 0 });
         }
         this.splitFacesAt(id1, id2, skipProtected); // divides every ring carrying both ends
         // then walk the chord, splitting each sub-edge at the next interior
@@ -2283,6 +2325,12 @@ class Model {
   autoIntersect(changedIds) {
     let queue = changedIds.filter(id => this.faces.has(id));
     const seen = new Set(); // id pairs already processed
+    // An AABB is a pure function of the face's rings: memoize it for the
+    // scan and drop entries only when an intersection mutates that face.
+    // Recomputing both boxes for every candidate pair made this the single
+    // hottest path in the app once a model passed a few hundred faces.
+    const boxes = new Map();
+    const box = f => { let b = boxes.get(f.id); if (b == null) boxes.set(f.id, b = this.faceAABB(f)); return b; };
     let guard = 0;
     while (queue.length && guard++ < 64) {
       const next = [];
@@ -2295,10 +2343,12 @@ class Model {
           seen.add(pk);
           const A = this.faces.get(cid); // fresh: a split may have replaced it
           if (!A) break;
-          if (!Model.aabbOverlap(this.faceAABB(A), this.faceAABB(f))) continue;
+          if (!Model.aabbOverlap(box(A), box(f))) continue;
           const ids0 = new Set(this.faces.keys());
           if (this.intersectFaces(A, f)) {
             mutated = true;
+            boxes.delete(cid); // rings changed under the intersection
+            boxes.delete(f.id);
             for (const nid2 of this.faces.keys()) if (!ids0.has(nid2)) next.push(nid2);
           }
         }
@@ -2406,7 +2456,7 @@ class Model {
       }
     }
     for (const [id, e] of [...this.edges])
-      if ((topVerts.has(e.a) || topVerts.has(e.b)) && !usedElsewhere.has(id)) this.edges.delete(id);
+      if ((topVerts.has(e.a) || topVerts.has(e.b)) && !usedElsewhere.has(id)) this._delEdge(id);
     face.loop = E.anchor;
     face.holes = E.anchorHoles || [];
     face.extrude = null;
@@ -2448,7 +2498,6 @@ class Model {
       const p = this.vp(vid);
       if (p) this.setVertex(vid, fn(G.clone(p)));
     }
-    this.invalidateVertexHash();
   }
   clearExtrudes() { for (const f of this.faces.values()) f.extrude = null; }
 
@@ -2814,6 +2863,8 @@ class Model {
     if (!data || !data.v) return;
     this.vertices = new Map(data.v.map(([id, x, y, z]) => [id, { x, y, z }]));
     this.edges = new Map((data.e || []).map(([id, a, b, cid, gid, ud, hid]) => [id, { id, a, b, curveId: cid || 0, gid: gid || 0, userData: ud || null, hidden: !!hid }]));
+    this._edgeIndex = new Map(); // derived from the edges, never serialized
+    for (const e of this.edges.values()) this._edgeIndex.set(edgePairKey(e.a, e.b), e.id);
     this.curves = new Map((data.c || []).map(([id, m]) => [id, m]));
     this.groups = new Map((data.g || []).map(([id, g]) => [id, g]));
     this.faces = new Map((data.f || []).map(x => [x.id, {
@@ -2898,7 +2949,7 @@ class Model {
       let e = this.findEdge(a, b);
       if (!e) {
         e = { id: nid(), a, b, curveId: cid ? cmap.get(cid) || 0 : 0 };
-        this.edges.set(e.id, e);
+        this._addEdge(e);
       } else if (cid && !e.curveId) e.curveId = cmap.get(cid) || 0;
     }
     const out = [];
