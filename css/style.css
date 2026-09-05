@@ -728,7 +728,9 @@ body.mode-bim #hint { color: #1f4e79; }
 #eipbanner #eip-cancel:hover { background: #fdecec; }
 
 /* ============ Element Browser palette (floating & dockable) ============ */
-#elbrowser {
+/* #layerpanel (Layers palette, ui-layers.js) and #fampanel (Families palette,
+   ui-families.js) share this chrome exactly. */
+#elbrowser, #layerpanel, #fampanel {
   position: absolute;
   width: 232px;
   background: #fbfbfc;
@@ -740,16 +742,18 @@ body.mode-bim #hint { color: #1f4e79; }
   max-height: calc(100% - 16px);
   min-height: 0;
 }
-#elbrowser.docked-left { left: 8px !important; top: 8px !important; bottom: 8px; border-radius: 7px; }
-#elbrowser.docked-right { right: 8px !important; left: auto !important; top: 8px !important; bottom: 8px; }
-#elbrowser.floating { max-height: calc(100% - 24px); }
-#elbrowser.dock-preview-left { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
-#elbrowser.dock-preview-right { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
-#elbrowser.collapsed #elb-body { display: none; }
-#elbrowser.collapsed { bottom: auto; }
-#elbrowser.hidden { display: none; }
+#elbrowser.docked-left, #layerpanel.docked-left, #fampanel.docked-left { left: 8px !important; top: 8px !important; bottom: 8px; border-radius: 7px; }
+#elbrowser.docked-right, #layerpanel.docked-right, #fampanel.docked-right { right: 8px !important; left: auto !important; top: 8px !important; bottom: 8px; }
+/* the BlenderKit palette owns the right edge by default — tuck beside it */
+#layerpanel.beside-bkb.docked-right { right: 288px !important; }
+#elbrowser.floating, #layerpanel.floating, #fampanel.floating { max-height: calc(100% - 24px); }
+#elbrowser.dock-preview-left, #layerpanel.dock-preview-left, #fampanel.dock-preview-left { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
+#elbrowser.dock-preview-right, #layerpanel.dock-preview-right, #fampanel.dock-preview-right { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
+#elbrowser.collapsed #elb-body, #layerpanel.collapsed #lay-body, #fampanel.collapsed #fam-body { display: none; }
+#elbrowser.collapsed, #layerpanel.collapsed, #fampanel.collapsed { bottom: auto; }
+#elbrowser.hidden, #layerpanel.hidden, #fampanel.hidden { display: none; }
 
-#elb-head {
+#elb-head, #lay-head, #fam-head {
   display: flex; align-items: center; gap: 6px;
   padding: 6px 6px 6px 9px;
   background: linear-gradient(#f4f5f8, #e9ebef);
@@ -759,7 +763,7 @@ body.mode-bim #hint { color: #1f4e79; }
   user-select: none;
   touch-action: none;
 }
-#elbrowser.collapsed #elb-head { border-bottom: none; border-radius: 7px; }
+#elbrowser.collapsed #elb-head, #layerpanel.collapsed #lay-head, #fampanel.collapsed #fam-head { border-bottom: none; border-radius: 7px; }
 .elb-grip { color: #a6adb4; font-size: 11px; letter-spacing: -1px; }
 .elb-title { flex: 1; font-weight: 600; font-size: 12.5px; color: #3b4148; }
 .elb-btn {
@@ -769,7 +773,7 @@ body.mode-bim #hint { color: #1f4e79; }
 }
 .elb-btn:hover { background: #dde3e9; color: #26292e; }
 
-#elb-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#elb-body, #lay-body, #fam-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .elb-search { padding: 6px 8px; border-bottom: 1px solid #e6e9ec; display: flex; flex-direction: column; gap: 5px; }
 .elb-search input {
   width: 100%; border: 1px solid #d3d7db; border-radius: 5px;
@@ -835,6 +839,207 @@ body.mode-bim #hint { color: #1f4e79; }
   pointer-events: none;
 }
 
+/* ============ Layers palette (AutoCAD-style layer manager) ============ */
+/* Chrome shared with #elbrowser above; rows reuse .elb-node/.elb-flag. */
+#lay-tree { overflow: auto; padding: 4px 2px 8px 2px; flex: 1; }
+.lay-row { padding-left: 6px !important; cursor: default; }
+.lay-row .elb-lab { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.lay-row.is-cur {
+  background: #e3ecf9;
+  box-shadow: inset 2px 0 0 #3e66c4;
+}
+.lay-row.is-cur .elb-lab { color: #1d4f9c; font-weight: 600; }
+.lay-row.is-off .elb-lab { text-decoration: line-through; opacity: .55; }
+.lay-cur { /* the current-layer radio dot */
+  width: 12px; height: 12px; flex: none;
+  border: 1.5px solid #b6bec6; border-radius: 50%;
+  background: transparent; cursor: pointer; padding: 0;
+}
+.lay-cur:hover { border-color: #3e66c4; }
+.lay-cur.on { border-color: #3e66c4; background: #3e66c4; box-shadow: 0 0 0 2px rgba(62, 102, 196, .25); }
+.lay-color {
+  width: 13px; height: 13px; flex: none;
+  border: 1px solid #b6bec6; border-radius: 3.5px;
+  cursor: pointer; padding: 0;
+}
+.lay-color:hover { border-color: #3e66c4; transform: scale(1.15); }
+.lay-count-note { color: #8a929a; }
+.lay-move { /* ⇨ move the selection onto this layer */
+  flex: none; width: 17px; height: 17px; line-height: 15px; text-align: center;
+  border: 1px solid transparent; border-radius: 4px; background: transparent;
+  color: #3e66c4; font-size: 12px; cursor: pointer; padding: 0;
+  opacity: 0;                    /* only on hover — rows stay calm */
+}
+.lay-row:hover .lay-move { opacity: 1; }
+.lay-move:hover { background: #dbe6f3; border-color: #b9cbe8; }
+.lay-del {
+  flex: none; width: 17px; height: 17px; line-height: 15px; text-align: center;
+  border: 1px solid transparent; border-radius: 4px; background: transparent;
+  color: #a0616d; font-size: 10px; cursor: pointer; padding: 0;
+  opacity: 0;
+}
+.lay-row:hover .lay-del { opacity: 1; }
+.lay-del:hover { background: #f6e3e5; border-color: #e3b6bb; }
+.lay-del.dis { visibility: hidden; } /* layer 0 is undeletable */
+.lay-quick { display: flex; gap: 5px; }
+.lay-quick button {
+  flex: 1; border: 1px solid #d3d7db; border-radius: 5px; background: #fff;
+  color: #2b2f33; font-size: 11.5px; padding: 3px 6px; cursor: pointer;
+}
+.lay-quick button:hover { border-color: #3e66c4; color: #1d4f9c; background: #f2f6fd; }
+#lay-ctx { /* row right-click menu (isolate / select / rename / delete) */
+  position: fixed; z-index: 80; min-width: 150px;
+  background: #fff; border: 1px solid #c3c9cf; border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(20, 30, 45, .22); padding: 4px;
+}
+.lay-ctx-item {
+  padding: 5px 10px; font-size: 12.3px; color: #3b4148;
+  border-radius: 4px; cursor: pointer; white-space: nowrap;
+}
+.lay-ctx-item:hover { background: #e7edf5; color: #1d4f9c; }
+/* layer dot tag on Element Browser element rows */
+.lay-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; margin-left: 5px; }
+
+/* ============ BlenderKit Assets palette (floating & dockable) ============ */
+/* Same chrome as the Element Browser (shares .elb-grip/.elb-title/.elb-btn);
+   wider so the result grid fits two thumbnail columns. */
+#bkbrowser {
+  position: absolute;
+  width: 272px;
+  background: #fbfbfc;
+  border: 1px solid #c3c9cf;
+  border-radius: 7px;
+  box-shadow: 0 10px 28px rgba(20, 30, 45, .18);
+  z-index: 30;
+  display: flex; flex-direction: column;
+  max-height: calc(100% - 16px);
+  min-height: 0;
+}
+#bkbrowser.docked-left { left: 8px !important; top: 8px !important; bottom: 8px; }
+#bkbrowser.docked-right { right: 8px !important; left: auto !important; top: 8px !important; bottom: 8px; }
+#bkbrowser.floating { max-height: calc(100% - 24px); }
+#bkbrowser.dock-preview-left, #bkbrowser.dock-preview-right { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
+#bkbrowser.collapsed #bkb-body { display: none; }
+#bkbrowser.collapsed { bottom: auto; }
+#bkbrowser.hidden { display: none; }
+
+#bkb-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 6px 6px 9px;
+  background: linear-gradient(#f4f5f8, #e9ebef);
+  border-bottom: 1px solid #d3d7db;
+  border-radius: 7px 7px 0 0;
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+#bkbrowser.collapsed #bkb-head { border-bottom: none; border-radius: 7px; }
+#bkb-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+
+.bkb-search { display: flex; gap: 5px; padding: 6px 8px 4px; }
+.bkb-search input {
+  flex: 1; min-width: 0; border: 1px solid #d3d7db; border-radius: 5px;
+  padding: 3px 8px; font-size: 12px; background: #fff; color: #2b2f33;
+}
+.bkb-search input:focus { outline: none; border-color: #3e66c4; }
+.bkb-search button {
+  flex: none; width: 26px; border: 1px solid #d3d7db; border-radius: 5px;
+  background: #fff; color: #3e66c4; cursor: pointer; font-size: 14px; line-height: 1;
+}
+.bkb-search button:hover { background: #dbe6f3; border-color: #b9cbe8; }
+
+#bkb-tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 8px 6px; border-bottom: 1px solid #e6e9ec; }
+.bkb-tag {
+  border: 1px solid #d3d7db; border-radius: 10px; background: #fff;
+  color: #4a525a; font-size: 10.5px; padding: 1px 7px; cursor: pointer; line-height: 1.5;
+}
+.bkb-tag:hover { background: #eef2f7; }
+.bkb-tag.active { background: #cfe0f5; border-color: #a9c6e8; color: #1d4f9c; }
+body.mode-bim .bkb-tag.active { background: #ddd5f1; border-color: #b7a8e0; color: #4c2f96; }
+
+/* results: responsive 2-column thumbnail grid (collapses to 1 when narrow) */
+#bkb-grid {
+  flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 6px; padding: 6px 8px; align-content: start;
+}
+#bkb-grid.loading { opacity: .55; pointer-events: none; }
+.bkb-card {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid #e3e6ea; border-radius: 6px; background: #fff;
+  cursor: pointer; overflow: hidden; transition: box-shadow .12s, border-color .12s;
+}
+.bkb-card:hover { border-color: #a9c6e8; box-shadow: 0 2px 8px rgba(30, 60, 110, .14); }
+.bkb-card:hover .bkb-name { color: #1d4f9c; }
+.bkb-card.busy { pointer-events: none; }
+.bkb-card.unavailable { opacity: .45; cursor: not-allowed; filter: grayscale(.5); }
+.bkb-card.unavailable:hover { border-color: #e3e6ea; box-shadow: none; }
+.bkb-card.unavailable:hover .bkb-name { color: #3b4148; }
+/* file-type badge: GLB = ready-made glTF (no Blender), blend = needs a local
+   Blender install. Colors follow the ok/warn badge idiom (.ok-badge/.warn-badge). */
+.bkb-badge {
+  position: absolute; left: 4px; top: 4px; z-index: 2;
+  border-radius: 8px; padding: 0 6px; font-size: 9.5px; font-weight: 700;
+  line-height: 1.6; letter-spacing: .3px; text-transform: uppercase;
+  box-shadow: 0 1px 3px rgba(20, 30, 45, .25); pointer-events: none;
+}
+.bkb-badge.glb { background: #cfe0f5; color: #1d4f9c; }
+.bkb-badge.blend { background: #fdf0e3; color: #9c5708; }
+/* "GLB only" filter chip — same pill idiom as the quick-search tags */
+.bkb-glbonly {
+  border: 1px solid #d3d7db; border-radius: 10px; background: #fff; color: #4a525a;
+  font-size: 10.5px; font-weight: 600; padding: 1px 7px; cursor: pointer; line-height: 1.5;
+}
+.bkb-glbonly:hover { background: #eef2f7; }
+.bkb-glbonly.active { background: #cfe0f5; border-color: #a9c6e8; color: #1d4f9c; }
+body.mode-bim .bkb-glbonly.active { background: #ddd5f1; border-color: #b7a8e0; color: #4c2f96; }
+.bkb-thumb { position: relative; aspect-ratio: 1 / 1; background: #eef0f3; overflow: hidden; }
+.bkb-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bkb-card.busy .bkb-thumb img { filter: grayscale(.6) brightness(.85); }
+.bkb-nothumb { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #98a0a8; font-size: 11px; }
+.bkb-spin {
+  display: none; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+  border: 3px solid rgba(255, 255, 255, .55); border-top-color: #3e66c4; border-radius: 50%;
+  animation: bkb-rot .8s linear infinite;
+}
+.bkb-card.busy .bkb-spin { display: block; }
+@keyframes bkb-rot { to { transform: rotate(360deg); } }
+.bkb-name {
+  padding: 4px 6px 0; font-size: 11.5px; font-weight: 600; color: #3b4148;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bkb-author {
+  padding: 0 6px 5px; font-size: 10.5px; color: #8a929a;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* placed assets (the scene registry) */
+#bkb-placed { border-top: 1px solid #e6e9ec; max-height: 128px; overflow-y: auto; padding: 4px 8px 6px; }
+#bkb-placed.hidden { display: none; }
+.bkb-placed-h { font-size: 10.5px; font-weight: 600; color: #6a7178; text-transform: uppercase; letter-spacing: .3px; padding: 2px 0 3px; }
+.bkb-placed-row { display: flex; align-items: center; gap: 6px; padding: 1px 2px; border-radius: 4px; font-size: 12px; color: #3b4148; }
+.bkb-placed-row:hover { background: #e7edf5; }
+.bkb-placed-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bkb-rm { flex: none; border: none; background: transparent; color: #8a929a; cursor: pointer; font-size: 11px; width: 18px; height: 18px; border-radius: 4px; line-height: 1; }
+.bkb-rm:hover { background: #fdecec; color: #c5221f; }
+/* kind chip + define-as controls on placed-asset rows */
+.bkb-kind { flex: none; border-radius: 8px; padding: 0 6px; font-size: 9px; font-weight: 700; text-transform: uppercase; line-height: 1.6; }
+.bkb-kind.door, .bkb-kind.window { background: #cfe0f5; color: #1d4f9c; }
+.bkb-kind.object { background: #e4e7ec; color: #4a525a; }
+.bkb-def { flex: none; border: none; background: transparent; color: #8a929a; cursor: pointer; font-size: 12px; width: 18px; height: 18px; border-radius: 4px; line-height: 1; }
+.bkb-def:hover { background: #e7edf5; color: #1d4f9c; }
+.bkb-defrow { flex: none; display: flex; gap: 3px; }
+.bkb-defk { border: 1px solid #a9c6e8; border-radius: 8px; background: #cfe0f5; color: #1d4f9c; font-size: 9.5px; font-weight: 600; padding: 0 6px; cursor: pointer; line-height: 1.5; }
+.bkb-defk:hover { filter: brightness(1.05); }
+/* Element Browser: downloaded-asset types carry a thumbnail */
+.elb-thumb { flex: none; width: 20px; height: 20px; object-fit: cover; border-radius: 3px; border: 1px solid #d3d7db; }
+
+#bkb-status {
+  border-top: 1px solid #e6e9ec; padding: 4px 8px; font-size: 11px; color: #6a7178;
+  min-height: 22px; line-height: 1.4; border-radius: 0 0 7px 7px;
+}
+#bkb-status.err { color: #c5221f; }
+
 /* ============ Element inspector (Entity Info tray) ============ */
 .gi-name { font-weight: 700; font-size: 13px; display: flex; align-items: baseline; gap: 6px; }
 .gi-cat { color: #5b3fa8; }
@@ -873,3 +1078,60 @@ body.mode-bim #hint { color: #1f4e79; }
 .elb-node.is-hidden > .elb-lab { opacity: .45; text-decoration: line-through; }
 .elb-datum .elb-lvl { opacity: .65; font-size: 10.5px; }
 .elb-levelgrp .elb-lvl { opacity: .6; font-size: 10.5px; }
+
+/* ============ Families palette (design catalog, ui-families.js) ============ */
+/* Chrome comes from the shared Element Browser rules above (#fampanel joins
+   #elbrowser/#layerpanel). Below: catalog chips, the card grid and the
+   dimensions dialog. */
+#fam-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 8px 6px; border-bottom: 1px solid #e6e9ec; }
+/* the Element Browser palette owns its dock edge by default — tuck beside it */
+#fampanel.beside-elb.docked-left { left: 248px !important; }
+#fampanel.beside-elb.docked-right { right: 248px !important; }
+.fam-chip {
+  border: 1px solid #d3d7db; border-radius: 10px; background: #fff;
+  color: #4a525a; font-size: 10.5px; padding: 1px 7px; cursor: pointer; line-height: 1.5;
+}
+.fam-chip:hover { background: #eef2f7; }
+.fam-chip.on { background: #cfe0f5; border-color: #a9c6e8; color: #1d4f9c; }
+body.mode-bim .fam-chip.on { background: #ddd5f1; border-color: #b7a8e0; color: #4c2f96; }
+
+#fam-grid {
+  flex: 1; min-height: 80px; overflow-y: auto; overflow-x: hidden;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px; padding: 6px 8px; align-content: start;
+}
+.fam-card {
+  display: flex; flex-direction: column; min-width: 0;
+  border: 1px solid #e3e6ea; border-radius: 6px; background: #fff;
+  cursor: pointer; overflow: hidden; text-align: center;
+  transition: box-shadow .12s, border-color .12s;
+}
+.fam-card:hover { border-color: #a9c6e8; box-shadow: 0 2px 8px rgba(30, 60, 110, .14); }
+.fam-card:hover .fam-name { color: #1d4f9c; }
+.fam-thumb { display: block; width: 100%; height: 64px; background: #f4f6fa; flex: none; }
+.fam-name {
+  padding: 4px 5px 1px; font-size: 11px; font-weight: 600; color: #3b4148;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fam-grp {
+  padding: 0 5px 6px; font-size: 9.5px; color: #8b939b;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* dimensions dialog (app.dialog content) */
+.fam-dlg-head { display: flex; gap: 10px; align-items: flex-start; }
+.fam-dlg-head .fam-thumb { width: 64px; height: 64px; flex: none; background: #f4f6fa; border-radius: 5px; }
+.fam-desc { margin: 2px 0 0; font-size: 12px; opacity: .8; max-width: 380px; }
+.fam-grp-badge {
+  background: #eef0f8; color: #7c86b8; border-radius: 8px;
+  padding: 0 6px; font-size: 10px; font-weight: 600; vertical-align: 1px;
+}
+.fam-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.fam-row-l { width: 110px; opacity: .8; flex: none; }
+.fam-row input, .fam-row select {
+  flex: 1; min-width: 0; padding: 3px 8px; font-size: 12px;
+  border: 1px solid #d3d7db; border-radius: 4px; background: #fff; color: #2b2f33;
+}
+.fam-row input:focus, .fam-row select:focus { outline: none; border-color: #3e66c4; }
+.fam-row-u { width: 18px; opacity: .6; font-size: 11px; flex: none; }
+.fam-note { opacity: .7; margin: 8px 0 0; font-size: 11.5px; }

@@ -25,13 +25,17 @@
 // ---------------------------------------------------------------------------
 (function (root) {
 
-  const STORES = ['categories', 'families', 'types', 'elements', 'grids'];
+  const STORES = ['categories', 'families', 'types', 'elements', 'grids', 'scripts'];
   const DB_NAME = 'websketch-bim';
   // v2 adds the `grids` store — the GridSystem schema (GridLine.js):
   //   { id, name, s:[x,y], e:[x,y], m:[x,y]|0, curved:0|1, bbl, ve:[min,max] }
   // Grids live synchronously on the model for snapping/undo; this store is
   // the durable relational copy, mirrored by GridManager.syncToDb().
-  const DB_VERSION = 2;
+  // v3 adds the `scripts` store — user-coded parametric element types
+  // (Scripted Elements): { id, name, src, updatedAt }. The SOURCE TEXT is
+  // what persists (a compiled function could not round-trip); scripts are
+  // recompiled on load by js/script-elements.js.
+  const DB_VERSION = 3;
   const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
   // ------------------------------------------------------------ adapters
@@ -90,13 +94,20 @@
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
-      req.onblocked = () => reject(new Error('IndexedDB open blocked'));
+      // a version upgrade (v2 → v3 …) cannot proceed while ANY other tab
+      // still holds the older connection — surface it instead of hanging
+      req.onblocked = () => reject(new Error(
+        'database upgrade blocked — close or reload your other WebSketch3D tabs, then reload this page'));
     });
   }
 
   // ------------------------------------------------------------- catalog seed
   // The default project catalog. Ids are stable strings so records reference
   // them across sessions; dynamically created types use generated ids.
+  // NOTE: the parametric Column design families (Tuscan … Drop Panel) are
+  // deliberately NOT seeded — the Element Browser stays minimal, and a design
+  // joins the catalog only when the user sizes one in the Families panel
+  // (db.ensureFamily + ensureType) or places a family column.
   const SEED = {
     categories: [
       { id: 'cat_wall', name: 'Wall' },
@@ -145,7 +156,7 @@
       { id: 'typ_door_1830x2134', familyId: 'fam_door_double', name: '1830 x 2134', defaultParameters: { width: 1.8, height: 2.1, sill: 0, defaultHeight: 2.1, material: 'Wood' } },
       { id: 'typ_fnd_600x300', familyId: 'fam_fnd_strip', name: 'Strip 600 x 300', defaultParameters: { thickness: 0.3, defaultHeight: 0.3, width: 0.6, material: 'Concrete' } },
       { id: 'typ_fnd_grade150', familyId: 'fam_fnd_grade', name: 'Slab on Grade — 150 mm', defaultParameters: { thickness: 0.15, defaultHeight: 0.15, material: 'Concrete' } },
-      { id: 'typ_col_300x300', familyId: 'fam_col_rect', name: 'Column 300 x 300', defaultParameters: { width: 0.3, depth: 0.3, defaultHeight: 3.0, material: 'Concrete' } },
+      { id: 'typ_col_300x300', familyId: 'fam_col_rect', name: 'Column 300 x 300', defaultParameters: { family: 'rect', width: 0.3, depth: 0.3, defaultHeight: 3.0, material: 'Concrete' } },
       { id: 'typ_beam_rect_400', familyId: 'fam_beam_framing', name: 'Rectangular — 400 mm', defaultParameters: { profile: 'rectangular', height: 0.4, webWidth: 0.25, material: 'Concrete' } },
       { id: 'typ_beam_rect_500', familyId: 'fam_beam_framing', name: 'Rectangular — 500 mm', defaultParameters: { profile: 'rectangular', height: 0.5, webWidth: 0.25, material: 'Concrete' } },
       { id: 'typ_beam_rect_600', familyId: 'fam_beam_framing', name: 'Rectangular — 600 mm', defaultParameters: { profile: 'rectangular', height: 0.6, webWidth: 0.3, material: 'Concrete' } },
@@ -208,6 +219,13 @@
     async putCategory(rec) { return this.store.put('categories', { ...rec }); }
     async putFamily(rec) { return this.store.put('families', { ...rec }); }
     async putType(rec) { return this.store.put('types', { ...rec }); }
+    /** Find or create a family by exact id (design families join the catalog
+     *  on demand — the user defines one in the Families panel). */
+    async ensureFamily(id, categoryId, name) {
+      const f = await this.store.get('families', id);
+      if (f) return f;
+      return this.store.put('families', { id, categoryId, name });
+    }
     /** Find or create a type in a family by exact name (dynamic type catalog). */
     async ensureType(familyId, name, defaultParameters) {
       const sibs = await this.store.getAll('types', 'familyId', familyId);
@@ -327,6 +345,14 @@
         if (!live.has(row.id)) await this.store.delete('grids', row.id);
       return live.size;
     }
+
+    // ------------------------------------------------- Scripted Elements CRUD
+    // User-coded element types, persisted as SOURCE TEXT ({id, name, src,
+    // updatedAt}); script-elements.js compiles/validates on load.
+    async putScript(rec) { return this.store.put('scripts', rec); }
+    async getScript(id) { return this.store.get('scripts', id); }
+    async getAllScripts() { return this.store.getAll('scripts'); }
+    async deleteScript(id) { return this.store.delete('scripts', id); }
   }
 
   BimDatabase.IDENTITY = IDENTITY;

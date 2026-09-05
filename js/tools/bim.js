@@ -345,7 +345,12 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
         footprint = app.bim.wallRing(previewParams);
       }
     }
-    if (G.loopArea(footprint) < 1e-4) { app.toast('Wall footprint is degenerate'); return; }
+    if (G.loopArea(footprint) < 1e-4 || G.ringDegenerate(footprint)) {
+      // join caps (miter apex, butt wrap) can extend past a short wall's own
+      // body — shorter than its thickness, the band doubles back on itself
+      app.toast('Wall is too short for its thickness at this join — nothing built', true);
+      return;
+    }
     const a = r.pts[0], b = r.pts[r.pts.length - 1];
     const baseZ = app.levelManager.getElevation(app.bimOptions.baseLevel);
     // STRUCTURAL CLEARANCE — a level-bounded infill wall under slabs / drop
@@ -388,6 +393,12 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
       // the join transaction fires opDone BEFORE this wall is extruded —
       // the empty-faces sweep there would reap the pre-registration
       ent._pending = true;
+      // DRY-RUN the join records: every joined neighbor must stay buildable
+      // (its rebuilt ring non-degenerate) or the whole commit is refused —
+      // rebuildWallWithHosts refuses degenerate rings by NOT rebuilding, so
+      // an unvetted join would silently swallow the neighbor's geometry
+      const undo = [];
+      let refused = false;
       for (const side of ['start', 'end']) {
         const j = joins[side];
         if (!j) continue;
@@ -395,22 +406,48 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
         // miter is symmetric
         const myMode = j.mode;
         const theirMode = j.mode === 'butt' ? 'buttTrim' : 'miter';
+        const snapMine = JSON.stringify(ent.params.joins || 0);
+        const snapTheirs = JSON.stringify(j.ent.params.joins || 0);
         app.bim.joinWalls(ent.id, j.ent.id, side, j.side, myMode, theirMode);
+        undo.push(() => {
+          ent.params.joins = JSON.parse(snapMine);
+          j.ent.params.joins = JSON.parse(snapTheirs);
+        });
+        let nr = null;
+        try { nr = app.bim.wallRing(j.ent.params); } catch (e) { nr = null; }
+        if (!nr || G.ringDegenerate(nr)) { refused = true; break; }
+      }
+      if (refused) {
+        for (const u of undo) u(); // restore every wall's join records
+        app.bim.detach(ent.id);
+        app.toast('Corner too tight for these wall thicknesses — nothing built', true);
+        return;
+      }
+      for (const side of ['start', 'end']) {
+        const j = joins[side];
+        if (!j) continue;
         app.transaction.run('wall join', () => app.bim.rebuildWallWithHosts(j.ent.id, false));
       }
     }
     const facesBefore = new Set(app.model.faces.keys());
     const edgesBefore = new Set(app.model.edges.keys());
     let ok = false;
-    app.transaction.run('wall', m => {
-      m.bimHold = true; // the new wall deliberately meets its neighbors
+    const tx = app.transaction.begin('wall');
+    try {
+      app.model.bimHold = true; // the new wall deliberately meets its neighbors
       try {
-        const f = m.addFaceFromRings(footprint.map(p => G.clone(p)));
+        const f = app.model.addFaceFromRings(footprint.map(p => G.clone(p)));
         if (!f) throw new Error('degenerate wall footprint');
-        if (!m.pushPull(f, wallH)) throw new Error('wall extrusion failed');
+        if (!app.model.pushPull(f, wallH)) throw new Error('wall extrusion failed');
         ok = true;
-      } finally { m.bimHold = false; }
-    });
+      } finally { app.model.bimHold = false; }
+      tx.commit();
+    } catch (e) {
+      tx.rollback();
+      console.error('[wall] operation failed and was rolled back', e);
+      app.toast('wall failed — model restored', true);
+    }
+    if (tx.rolledBack) ok = false; // tx-guard rejected the geometry: it is gone, nothing was built
     if (!ok) {
       if (ent) { delete ent._pending; app.bim.detach(ent.id); } // nothing built: registration goes too
       return;
@@ -433,6 +470,14 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
     } else {
       const ent2 = app.bim.create('wall', wallParams, roles, newEdges);
       if (ent2) app.bim.ensureWallBottom(ent2); // founded walls get their underside
+    }
+    // the new wall's extrude repartitions the shared base plane AFTER the
+    // join rebuilds ran — a neighbor's freshly claimed underside can be
+    // split into new unstamped pieces by it. Re-rescue the joined neighbors
+    // LAST so every wall of the corner keeps a live bottom face.
+    for (const side of ['start', 'end']) {
+      const j = joins[side];
+      if (j && j.ent && app.bim.getEntityById(j.ent.id)) app.bim.ensureWallBottom(j.ent);
     }
     if (gridTrim) {
       app.toast(`Wall on grid ${gridTrim.grid.name}: ${fmtLen(gridTrim.len1)} clear — ${fmtLen(gridTrim.len0)} between grids − ${fmtLen(gridTrim.tA)}${gridTrim.tB ? ' − ' + fmtLen(gridTrim.tB) : ''} of column`);
@@ -581,6 +626,9 @@ class FloorTool extends Tool {
       },
     };
     if (app.preTrimWallsFor) app.preTrimWallsFor(pendingSlab);
+    // drop-panel columns under this slab re-hang below its future soffit
+    // FIRST — the sweep then never lands on their heads (and they don't punch)
+    if (app.syncDropPanels) app.syncDropPanels([pendingSlab]);
     const colHoles = new Map(); // region index -> punch rings
     if (app.structural) {
       v.regions.forEach((region, i) => {
@@ -601,7 +649,9 @@ class FloorTool extends Tool {
           const f = mm.addFaceFromRings(region.outer.map(p => G.clone(p)),
             region.holes.map(h => h.map(p => G.clone(p))).concat(punches));
           if (!f) throw new Error('degenerate slab boundary');
-          if (!mm.pushPull(f, -th)) throw new Error('slab extrusion failed');
+          // forceBaseCap: a slab drawn beside another slab must close into a
+          // solid — the shared boundary edge alone must not swallow its top
+          if (!mm.pushPull(f, -th, true)) throw new Error('slab extrusion failed');
         });
         ok = true;
       } finally { mm.bimHold = false; }
@@ -627,6 +677,9 @@ class FloorTool extends Tool {
     app.setTool('select'); // deactivate() exits sketch mode
     // dynamic infill walls under the new slab trim to their clear height
     const trimmed = app.syncStructuralWalls ? app.syncStructuralWalls() : 0;
+    // drop heads under the new slab (pre-fitted above; this catches any the
+    // pre-fit skipped — e.g. columns whose shaft only now counts as covered)
+    const fitted = app.syncDropPanels ? app.syncDropPanels() : 0;
     // top-face area of the committed regions — the sketch's measured area
     const areaSum = newFaces.reduce((s, f) => s + (roles[f.id] === 'top' ? m.faceArea(f) : 0), 0);
     app.toast(`Slab committed — ${v.regions.length} region${v.regions.length === 1 ? '' : 's'}, ${areaSum.toFixed(2)} m², ${v.regions.reduce((s, r) => s + r.holes.length, 0)} opening(s)`
@@ -736,7 +789,7 @@ class ConvertTool extends Tool {
       const th = mode === 'floor' ? ConvertTool.floorThickness : ConvertTool.slabThickness;
       const zTop = path[0].z;
       app.transaction.run('convert to ' + mode, mm => {
-        if (!mm.pushPull(f, -th)) throw new Error(mode + ' extrusion failed');
+        if (!mm.pushPull(f, -th, true)) throw new Error(mode + ' extrusion failed'); // solid beside neighbors keeps its top
         ok = true;
       });
       if (!ok) return null;
@@ -755,6 +808,7 @@ class ConvertTool extends Tool {
         regions: [{ outer: path.map(p => [p.x, p.y, p.z]), holes: (f.holes || []).map(h => m.pts(h).map(p => [p.x, p.y, p.z])) }],
       }, roles, newEdges);
       if (app.syncStructuralWalls) app.syncStructuralWalls(); // walls under it trim
+      if (app.syncDropPanels) app.syncDropPanels(); // drop heads hang under it
       app.toast(`Converted to ${mode}`);
       if (app._dbSyncDebounced) app._dbSyncDebounced();
       return ent;
@@ -1500,4 +1554,4 @@ class MeasureAreaTool extends Tool {
   onVCB() { return false; }
 }
 
-window.BimTools = Object.assign(window.BimTools || {}, { WallTool, FloorTool, ConvertTool, DoorTool, WindowTool, WallOpeningTool, HostedCut, MeasureAreaTool });
+window.BimTools = Object.assign(window.BimTools || {}, { WallTool, FloorTool, ConvertTool, DoorTool, WindowTool, WallOpeningTool, HostedCut, HostedInsertionTool, MeasureAreaTool });

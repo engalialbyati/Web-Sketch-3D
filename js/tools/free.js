@@ -9,7 +9,7 @@ class SelectTool extends Tool {
   get hint() {
     if (this._awaitLen) return 'Wall length: type the new length + Enter (Esc cancels).';
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
-    return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : 'Select: click an edge or face. Drag = window select. Shift adds. Double-click a face selects its border too.';
+    return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : `Select: click an edge or face. Drag = window select. Shift adds. Double-click a face selects its border too.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`;
   }
   // ---- Revit shape handles for selected parametric walls -------------------
   _wallSel() {
@@ -135,10 +135,11 @@ class SelectTool extends Tool {
       // second click while dragging: commit below via onUp
     }
     // GRID LINES select through hosted geometry (a wall drawn on the grid
-    // covers its line): hitting the hairline wins over the wall beneath
+    // covers its line): hitting the hairline wins over the wall beneath.
+    // Shift/Ctrl+click toggles the line into a multi-selection.
     const gl = this.app._gridLineAt && this.app._gridLineAt(ev);
     if (gl) {
-      this.app.selectGrid(gl.grid.id, gl.z);
+      this.app.selectGrid(gl.grid.id, gl.z, { toggle: ev.shiftKey || ev.ctrlKey });
       this._gdrag = { grid: gl.grid, z: gl.z, last: null, moved: false };
       return;
     }
@@ -346,9 +347,20 @@ class SelectTool extends Tool {
       app.bandGroupMerge(picked, crossing, (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
       if (this._mod) app.toggleEntities(picked);
       else { app.sel = picked; app.onSelectionChanged(); }
+      // grid lines join the window selection: fully inside (window) or
+      // touched (crossing, right-to-left) — same rules as the elements
+      const gl2 = app._gridLinesInBox ? app._gridLinesInBox(x0, y0, x1, y1, crossing) : [];
+      const caughtElems = (picked.faces && picked.faces.size) || (picked.edges && picked.edges.size);
+      if (gl2.length) app.selectGrids(gl2, { add: !!this._mod, keep: !!caughtElems });
     } else {
       const pick = app.pickEntity(ev);
-      if (pick.group != null) {
+      if (pick.asset != null) {
+        // downloaded-asset instance: its own selection category (box outline)
+        app.selectAsset(pick.asset, this._mod ? 'toggle' : 'replace');
+        const rec = app.assets.get(pick.asset);
+        if (rec && !this._mod)
+          app.setStatus(`${rec.name} (${rec.kind}${rec.host ? ' — hosted' : ''}) selected — M to move, Del to remove`);
+      } else if (pick.group != null) {
         app.selectGroup(pick.group, this._mod ? 'toggle' : 'replace');
       } else if (pick.face != null) {
         const f = app.model.faces.get(pick.face);
@@ -1149,21 +1161,44 @@ PushPullTool.lastDist = null;
 // =========================================================== move
 class MoveTool extends Tool {
   static id = 'move';
-  activate() { this.start = null; this.delta = null; this.orig = null; this.snapshot = null; this.dragging = false; this.downXY = null; }
+  activate() { this.start = null; this.delta = null; this.orig = null; this.snapshot = null; this.dragging = false; this.downXY = null; this._assets = null; }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
-    return 'Move: click-drag selected geometry (auto-selects what you click). Hold Ctrl to copy. Arrows lock an axis; type a distance + Enter.';
+    return 'Move: click-drag selected geometry (auto-selects what you click). Hold Ctrl to copy. Arrows lock an axis; type a distance + Enter. Downloaded models drag in plan; hosted doors/windows slide along their wall.';
   }
   onDown(ev) {
     if (ev.button !== 0) return;
     const app = this.app;
     if (!app.sel.faces.size && !app.sel.edges.size) {
-      const pick = app.pickEntity(ev);
-      if (pick.group != null) app.selectGroup(pick.group);
-      else if (pick.face != null) app.sel = { edges: new Set(), faces: new Set([pick.face]) };
-      else if (pick.edges && pick.edges.length) app.sel = { edges: new Set(pick.edges), faces: new Set() };
-      else { app.toast('Nothing selected — click geometry or select it first'); return; }
-      app.onSelectionChanged();
+      if (!app.selAssets.size) {
+        const pick = app.pickEntity(ev);
+        if (pick.asset != null) app.selectAsset(pick.asset);
+        else if (pick.group != null) app.selectGroup(pick.group);
+        else if (pick.face != null) app.sel = { edges: new Set(), faces: new Set([pick.face]) };
+        else if (pick.edges && pick.edges.length) app.sel = { edges: new Set(pick.edges), faces: new Set() };
+        else { app.toast('Nothing selected — click geometry or select it first'); return; }
+        app.onSelectionChanged();
+      }
+    }
+    // ---- downloaded-asset instances (foreign groups, no kernel verts) ----
+    if (app.selAssets.size && app.assets) {
+      const recs = [...app.selAssets].map(id => app.assets.get(id)).filter(Boolean);
+      if (recs.length) {
+        const hosted = recs.filter(r => r.host && app.bim.getEntityById(r.host.wallId));
+        this._assets = {
+          free: recs.filter(r => !r.host).map(r => ({ rec, pos: r.object.position.clone() })),
+          hosted: hosted.length ? { rec: hosted[0], d: hosted[0].host.distance } : null,
+          start: null,
+        };
+        this.start = app.inferPoint(ev, null).p;
+        this._assets.start = this.start;
+        this.downXY = app.view.eventPt(ev);
+        this.dragging = false;
+        this.copyMode = false;
+        if (this._assets.hosted && recs.length > 1)
+          app.setStatus(`Sliding “${this._assets.hosted.rec.name}” along its wall (other selection moves in plan)`);
+        return;
+      }
     }
     const inf = app.inferPoint(ev, null);
     this.start = inf.p;
@@ -1173,6 +1208,36 @@ class MoveTool extends Tool {
     this.dragging = false;
     this.copyMode = ev.ctrlKey;
   }
+  // cursor projected onto the hosted wall's baseline, clamped so the opening
+  // stays inside the wall (same bounds HostedInsertionTool._proj enforces)
+  _hostT(ev) {
+    const app = this.app;
+    const { rec } = this._assets.hosted;
+    const ent = app.bim.getEntityById(rec.host.wallId);
+    if (!ent) return null;
+    const P1 = G.v(...ent.params.base), P2 = G.v(...ent.params.end);
+    const dir = G.norm(G.v(P2.x - P1.x, P2.y - P1.y, 0));
+    const L = G.dist(P1, P2);
+    const gp = app.view.groundAt(app.view.eventPt(ev)) || app.inferPoint(ev, null).p;
+    const half = rec.host.width / 2;
+    const raw = G.dot(G.sub(G.v(gp.x, gp.y, P1.z), P1), dir);
+    return {
+      t: Math.min(Math.max(raw, half + 0.05), Math.max(half + 0.05, L - half - 0.05)),
+      ent, dir, L, P1,
+    };
+  }
+  _applyHostedPreview(rec, t, ent) {
+    const HostedCut = window.BimTools && window.BimTools.HostedCut;
+    if (!HostedCut) return;
+    const info = HostedCut.locate(G, ent.params, {
+      distanceFromStart: t, width: rec.host.width, height: rec.host.height, sillHeight: rec.host.sill,
+    });
+    if (info.error) return;
+    this.app.assets.applyHostedTransform(rec, {
+      ...info,
+      depth: rec.host.depth > 0 ? rec.host.depth : ent.params.thickness,
+    });
+  }
   onMove(ev) {
     const app = this.app, view = app.view;
     if (!this.start) return;
@@ -1180,6 +1245,31 @@ class MoveTool extends Tool {
       const q = view.eventPt(ev);
       if (Math.hypot(q.x - this.downXY.x, q.y - this.downXY.y) < 3) return;
       this.dragging = true;
+    }
+    // ---- asset drags ----
+    if (this._assets) {
+      if (this._assets.hosted) {
+        const pr = this._hostT(ev);
+        if (pr) {
+          this._assets.t = pr.t;
+          this._applyHostedPreview(this._assets.hosted.rec, pr.t, pr.ent);
+          const s = view.toScreen(G.add(pr.P1, G.mul(pr.dir, pr.t)));
+          view.hudLabel(s.x, s.y, fmtLen(pr.t) + ' from start');
+        }
+      }
+      if (this._assets.free.length) {
+        const inf = app.inferPoint(ev, this._assets.start);
+        let delta = G.sub(inf.p, this._assets.start);
+        if (app.lockAxis) delta = G.mul(AXES[app.lockAxis], G.dot(delta, AXES[app.lockAxis]));
+        else if (inf.axis) delta = G.mul(AXES[inf.axis], G.dot(delta, AXES[inf.axis]));
+        this._assets.delta = delta;
+        for (const f of this._assets.free)
+          f.rec.object.position.set(f.pos.x + delta.x, f.pos.y + delta.y, f.pos.z + delta.z);
+        const s = view.toScreen(G.add(this._assets.start, delta));
+        view.hudLabel(s.x, s.y, fmtLen(G.len(delta)));
+      }
+      view.showSnapDot(null);
+      return;
     }
     const inf = app.inferPoint(ev, this.start);
     let delta = G.sub(inf.p, this.start);
@@ -1199,6 +1289,34 @@ class MoveTool extends Tool {
   }
   onUp(ev) {
     const app = this.app;
+    if (this._assets && this.dragging) {
+      const A = this._assets;
+      const finish = () => {
+        // run() snapshots BEFORE its fn runs: restore the pre-drag state so
+        // the undo stack captures it, then apply the final positions inside
+        // the transaction — undo then rolls the whole move back
+        for (const f of A.free) f.rec.object.position.copy(f.pos);
+        if (A.hosted) A.hosted.rec.host.distance = A.hosted.d;
+        app.run('move assets', () => {
+          if (A.hosted && A.t != null) {
+            A.hosted.rec.host.distance = A.t;
+            app.bim.rebuildWallWithHosts(A.hosted.rec.host.wallId);
+          }
+          if (A.delta) for (const f of A.free)
+            f.rec.object.position.set(f.pos.x + A.delta.x, f.pos.y + A.delta.y, f.pos.z + A.delta.z);
+        });
+        // explicit confirmation — a silent move is indistinguishable from a
+        // failed one until the camera moves
+        if (A.hosted && A.t != null)
+          app.toast(`${A.hosted.rec.name} slid to ${fmtLen(A.t)} from the wall's start`);
+        else if (A.delta && A.free.length)
+          app.toast(`Moved ${A.free.length === 1 ? `“${A.free[0].rec.name}”` : A.free.length + ' assets'} ${fmtLen(G.len(A.delta))}`);
+      };
+      finish();
+      this.activate();
+      app.view.clearPreview();
+      return;
+    }
     if (this.dragging && this.delta) {
       if (this.copyMode || (ev.ctrlKey && this.snapshot)) {
         app.run('move copy', m => m.importSubset(m.serializeSubset(app.sel), this.delta));
@@ -1210,10 +1328,35 @@ class MoveTool extends Tool {
     app.view.clearPreview();
   }
   onKey(ev) {
-    if (ev.key === 'Escape' && this.dragging) { this.activate(); this.app.view.clearPreview(); return true; }
+    if (ev.key === 'Escape' && this.dragging) {
+      if (this._assets) { // restore the pre-drag state exactly
+        const A = this._assets;
+        for (const f of A.free) f.rec.object.position.copy(f.pos);
+        if (A.hosted) {
+          A.hosted.rec.host.distance = A.hosted.d;
+          this._applyHostedPreview(A.hosted.rec, A.hosted.d, app.bim.getEntityById(A.hosted.rec.host.wallId));
+        }
+      }
+      this.activate();
+      this.app.view.clearPreview();
+      return true;
+    }
     return false;
   }
   onVCB(text) {
+    if (this._assets && this._assets.hosted && this._assets.t != null) {
+      const L = parseLen(text);
+      if (L == null || L <= 0) return false;
+      const A = this._assets, rec = A.hosted.rec;
+      const ent = app.bim.getEntityById(rec.host.wallId);
+      if (!ent) return false;
+      app.run('slide asset', () => {
+        rec.host.distance = L;
+        app.bim.rebuildWallWithHosts(rec.host.wallId);
+      });
+      this.activate();
+      return true;
+    }
     if (!this.delta) return false;
     const L = parseLen(text);
     if (L == null) return false;

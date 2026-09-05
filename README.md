@@ -23,6 +23,33 @@ step, no server required.
 - Double-click `index.html` (works from `file://`), **or**
 - Serve it: `py -m http.server 8742` → open http://127.0.0.1:8742
 
+## Optional: BlenderKit asset library (local bridge)
+
+The toolbar's **BlenderKit Assets** palette searches BlenderKit's free model
+library and drops models into the scene as real geometry. BlenderKit serves
+native `.blend` files, which browsers cannot parse, so the feature needs the
+small local bridge:
+
+```sh
+npm install            # express + cors (the only dependencies in the repo)
+npm run bridge         # http://localhost:3001
+```
+
+- **No Blender needed for most assets.** Most BlenderKit models also publish
+  a ready-made glTF; the bridge downloads it directly (cards carry a blue
+  **GLB** badge, amber **blend** = needs Blender). With no Blender installed
+  the palette notices via `/api/health`, turns on the **GLB only** filter,
+  and blend-only cards are disabled instead of failing after a big download.
+- Only blend-only assets need [Blender](https://www.blender.org/) on the
+  machine (or set `BLENDER_PATH`) for the `blender -b` → glTF conversion;
+  the palette opens without the bridge but will say so.
+- Downloaded/converted `.glb` files are cached in `cache/` — once per asset.
+- Models land at the cursor's ground point (origin if the cursor never
+  entered the viewport), are normalized to ≤ 5 m, cast/receive shadows, and
+  live beside the B-Rep model as foreign Three.js groups (registered in
+  `BlenderKitBrowser.assets`; not part of undo/autosave).
+- Env knobs: `PORT`, `BLENDER_PATH`, `BLENDER_TIMEOUT_MS`.
+
 ## Implemented tools (the SketchUp core 10 + extras)
 
 | Tool | Shortcut | Notes |

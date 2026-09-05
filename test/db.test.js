@@ -154,6 +154,28 @@ module.exports = async h => {
     ok(q.elements.some(e => e.id === el.id), 'dynamic type joins into its category');
   });
 
+  await t('column design families stay OUT of the default catalog (user adds them)', async () => {
+    const db = await fresh();
+    const cat = await db.getCatalog();
+    // only the plain rectangular column is seeded
+    const colFams = cat.families.filter(f => f.categoryId === 'cat_column');
+    eq(colFams.length, 1);
+    eq(colFams[0].id, 'fam_col_rect');
+    eq(cat.types.filter(t2 => t2.familyId === 'fam_col_rect').length, 1, 'just the 300 x 300 default');
+    // ...and a design joins on demand via ensureFamily + ensureType (the
+    // Families panel "Save Type" flow)
+    const fam = await db.ensureFamily('fam_col_roman_doric', 'cat_column', 'Roman Doric Column');
+    eq(fam.id, 'fam_col_roman_doric');
+    const again = await db.ensureFamily('fam_col_roman_doric', 'cat_column', 'Roman Doric Column');
+    eq(again.id, fam.id, 'ensureFamily dedupes by id');
+    const typ = await db.ensureType('fam_col_roman_doric', 'Roman Doric 400 x 400',
+      { family: 'roman_doric', width: 0.4, depth: 0.4, defaultHeight: 3, material: 'Concrete' });
+    ok(typ.id, 'type created under the on-demand family');
+    const cat2 = await db.getCatalog();
+    eq(cat2.families.filter(f => f.id === 'fam_col_roman_doric').length, 1);
+    eq(cat2.types.filter(t2 => t2.familyId === 'fam_col_roman_doric').length, 1);
+  });
+
   await t('replaceAllElements swaps the whole element set', async () => {
     const db = await fresh();
     await db.createElement({ id: 'old1', typeId: 'typ_wall_200' });

@@ -4,6 +4,11 @@
   "version": "1.0.0",
   "description": "WebSketch 3D — a SketchUp-style drawing app. Static site; tests run on Node.",
   "scripts": {
-    "test": "node test/run.js"
+    "test": "node test/run.js",
+    "bridge": "node server/blenderkitBridge.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
   }
 }

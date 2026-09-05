@@ -25,7 +25,13 @@ class Model {
     ];
     this.grids = [];           // GridLine instances (GridLine.js) — the GridSystem;
                                // deep-copied through snapshots like levels
-    this.bimEntities = [];     // [{id, type, params, faces, edges}] — parametric registry
+    this.bimEntities = [];     // [{id, type, params, faces, edges, layerId?}] — parametric registry
+    // AutoCAD-style layers: every BIM entity belongs to exactly one; layer '0'
+    // is the undeletable default. Entities carry `layerId` (unknown → '0');
+    // new entities land on `currentLayerId`. Deep-copied through snapshots
+    // like levels, so layers survive undo/autosave/file round-trips.
+    this.layers = [{ id: '0', name: '0', color: null, visible: true, locked: false }];
+    this.currentLayerId = '0';
     // transient: entity ids whose B-Rep was structurally edited (split,
     // punched, trimmed, pushed) since the last drain — the app layer detaches
     // them (plain B-Rep survives, parametric definition goes away)
@@ -1212,11 +1218,27 @@ class Model {
           if (((P2[i].y > C2.y) !== (P2[j].y > C2.y)) &&
             (C2.x < (P2[j].x - P2[i].x) * (C2.y - P2[i].y) / (P2[j].y - P2[i].y) + P2[i].x)) inside = !inside;
         }
-        if (inside) return { color: f.color, alpha: f.alpha };
+        if (inside) return { color: f.color, alpha: f.alpha, src: f };
       }
-      return { color: face.color, alpha: face.alpha };
+      return { color: face.color, alpha: face.alpha, src: face };
     };
 
+    // OWNERSHIP CARRY-OVER: the parents being partitioned may be stamped BIM
+    // faces (joined walls' bottom caps tile one plane — closing the loop
+    // re-partitions the neighbors' caps too). Cells covered by a parent
+    // inherit its B-Rep stamp, and the owning entity's face/edge lists swap
+    // the dead parent ids for the live cell ids — otherwise the wall's
+    // underside becomes an anonymous orphan and the element loses its bottom.
+    const deadIds = new Set([face.id, ...parents.map(p => p.id)]);
+    const carry = new Map(); // entityId -> { cellIds: [], edgeStamps: [] }
+    const carryCell = (src, cellId) => {
+      const ud = src && src.userData;
+      if (!ud || !ud.bimEntityId) return null;
+      let c = carry.get(ud.bimEntityId);
+      if (!c) { c = { cellIds: [], edgeStamps: [] }; carry.set(ud.bimEntityId, c); }
+      c.cellIds.push(cellId);
+      return ud;
+    };
     for (const p of parents) this.faces.delete(p.id);
     this.faces.delete(face.id);
     for (const c of cells) {
@@ -1225,10 +1247,30 @@ class Model {
       if (G.dot(G.loopNormal(this.pts(loop)), n) < 0) loop.reverse();
       this.edgesForRing(loop, true);
       const id = nid();
+      const ud = carryCell(style.src, id);
       this.faces.set(id, {
         id, loop, holes: [], color: style.color, alpha: style.alpha,
         hidden: false, extrude: null, gid: face.gid || 0,
+        userData: ud ? { ...ud } : null,
       });
+      if (ud) {
+        // the cell's (possibly re-created) boundary edges follow the entity
+        // too, so hide/select keeps seeing the whole outline
+        for (let i = 0; i < loop.length; i++) {
+          const e = this.findEdge(loop[i], loop[(i + 1) % loop.length]);
+          if (e && !e.userData) carry.get(ud.bimEntityId).edgeStamps.push([e.id, { ...ud, role: 'profile' }]);
+        }
+      }
+    }
+    for (const [entId, c] of carry) {
+      const ent = (this.bimEntities || []).find(x => x.id === entId);
+      if (!ent) continue;
+      ent.faces = ent.faces.filter(id2 => !deadIds.has(id2)).concat(c.cellIds);
+      ent.edges = ent.edges.filter(id2 => this.edges.has(id2));
+      for (const [eid, stamp] of c.edgeStamps) {
+        const e = this.edges.get(eid);
+        if (e && !e.userData) { e.userData = stamp; ent.edges.push(eid); }
+      }
     }
     this.gc();
     return true;
@@ -1691,7 +1733,7 @@ class Model {
   }
 
   // ---------------------------------------------------------------- push/pull
-  pushPull(face, dist) {
+  pushPull(face, dist, forceBaseCap = false) {
     this._bimTouch(face); // direct edits break the parametric definition (tools may sync instead)
     if (!this.faces.has(face.id)) return false;
     // Push/Pull operates only on closed, valid 2D faces: a defined normal AND
@@ -1755,6 +1797,49 @@ class Model {
       // connect it now so the push pockets or punches through the wall
       // instead of capping a disconnected floating tube inside it
       ({ externals, holeHost } = scanNeighborhood());
+    }
+    // SOLID-CREATING TOOLS (slabs, floors) pass forceBaseCap=true: the sweep
+    // is meant to close into a solid, so the base cap is suppressed only by a
+    // genuine host (a hole the ring was punched from, or a coplanar face
+    // overlapping the footprint's area) — never by an edge-adjacent NEIGHBOR
+    // tiling the plane (a slab drawn beside a slab must not lose its top).
+    // Free-mode pushes keep the raw SketchUp inference below.
+    if (forceBaseCap && externals.size) {
+      const d0 = G.dot(n, this.vp(anchorOuter[0]));
+      const { u: pu, v: pv } = G.basisForNormal(n);
+      const o2 = this.vp(anchorOuter[0]);
+      const to2 = p => G.to2D(p, o2, pu, pv);
+      const probes = [this.faceCentroid(face), ...this.pts(anchorOuter)].map(to2);
+      const p3 = q => G.v(q.x, q.y, 0);
+      for (const fid of [...externals]) {
+        const f2 = this.faces.get(fid);
+        if (!f2) { externals.delete(fid); continue; }
+        if (f2.holes.some(h => this.sameRing(h, anchorOuter))) continue; // hole host: pocket/through
+        const fp = this.pts(f2.loop);
+        const n2 = G.loopNormal(fp);
+        if (G.isZero(n2)) { externals.delete(fid); continue; }
+        const para = G.dot(n2, n);
+        if (Math.abs(para) < 1 - 1e-6) { externals.delete(fid); continue; } // other plane: never covers the base
+        const d2 = G.dot(n2, fp[0]);
+        const samePlane = para > 0 ? Math.abs(d2 - d0) <= 1e-6 : Math.abs(d2 + d0) <= 1e-6;
+        if (!samePlane) { externals.delete(fid); continue; } // parallel, offset plane: a blocker, not a cover
+        // coplanar: a host only where it overlaps the footprint's area —
+        // edge-adjacent tiles don't cover anything. Probes ON the ring
+        // (shared vertices) are ambiguous under even-odd and don't count
+        const P2 = fp.map(to2);
+        const covers = pt => {
+          for (let i = 0, j = P2.length - 1; i < P2.length; j = i++) {
+            if (G.distToSeg(p3(pt), p3(P2[i]), p3(P2[j])) < 1e-9) return false;
+          }
+          let hit = false;
+          for (let i = 0, j = P2.length - 1; i < P2.length; j = i++) {
+            if (((P2[i].y > pt.y) !== (P2[j].y > pt.y)) &&
+              (pt.x < (P2[j].x - P2[i].x) * (pt.y - P2[i].y) / (P2[j].y - P2[i].y) + P2[i].x)) hit = !hit;
+          }
+          return hit;
+        };
+        if (!probes.some(covers)) externals.delete(fid);
+      }
     }
     let capId = null;
     let through = null;
@@ -2707,6 +2792,12 @@ class Model {
       g: [...this.groups.entries()].map(([id, g]) => [id, g]),
       lvl: (this.levels || []).map(l => ({ ...l })),
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
+      lyr: (this.layers || []).map(l => ({ ...l })),
+      cur: this.currentLayerId || '0',
+      // downloaded-asset instances (BlenderKit): the app registers a live
+      // provider; without one (pure model contexts, tests) the last restored
+      // list round-trips untouched so save→load never loses them
+      assets: this.assetListProvider ? this.assetListProvider() : (this.assetListData || []),
       // params MUST be deep-copied: they are mutated in place by type changes
       // and parametric edits — sharing them would retroactively mutate every
       // live undo snapshot (the wall-thickness-after-undo bug)
@@ -2747,6 +2838,23 @@ class Model {
       ...x, params: x.params ? JSON.parse(JSON.stringify(x.params)) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],
     }));
+    // downloaded-asset instance list — the app diffs its THREE groups
+    // against this after every load (boot, open, undo/redo)
+    this.assetListData = Array.isArray(data.assets) ? data.assets.map(x => ({ ...x })) : null;
+    // Layers hydrate with AutoCAD's safety rails: layer '0' always exists,
+    // the current layer must resolve, and entities on unknown (deleted)
+    // layers fall back to '0' — legacy files without `lyr` keep working
+    this.layers = (data.lyr || []).map(l => ({
+      id: String(l.id), name: String(l.name != null ? l.name : l.id),
+      color: l.color || null, visible: l.visible !== false, locked: !!l.locked,
+    }));
+    if (!this.layers.some(l => l.id === '0'))
+      this.layers.unshift({ id: '0', name: '0', color: null, visible: true, locked: false });
+    const cur = data.cur || '0';
+    this.currentLayerId = this.layers.some(l => l.id === cur) ? cur : '0';
+    const known = new Set(this.layers.map(l => l.id));
+    for (const ent of this.bimEntities)
+      if (!known.has(ent.layerId)) ent.layerId = '0';
     __eid = mx + 1;
     this.currentGid = 0;
     this.invalidateVertexHash();

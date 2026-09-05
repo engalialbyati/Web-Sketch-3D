@@ -299,10 +299,11 @@ class Viewport {
     const elementFaceIds = (this.app.elements && this.app.elements.rebuild) ? this.app.elements.rebuild() : new Set();
     // display-only view filters (Level View plan isolation) — never model state
     const ff = this.faceFilter || null, ef = this.edgeFilter || null, elf = this.elementFilter || null;
-    // hidden elements leave the render (and with it, picking) entirely
+    // hidden elements leave the render (and with it, picking) entirely —
+    // isEntityHidden includes the entity's layer being OFF
     if (this.app.elements)
       for (const el of this.app.elements.list())
-        el.group.visible = !el.entity.hidden && (elf ? !!elf(el.entity) : true);
+        el.group.visible = !this.app.isEntityHidden(el.entity.id) && (elf ? !!elf(el.entity) : true);
     const pos = [], col = [], nor = [];
     this.triangleFace = [];
     const sel = this.app.sel;
@@ -474,6 +475,9 @@ class Viewport {
       this.gridsGroup.visible = false;
       this.scene.add(this.gridsGroup);
     }
+    // selGridId is a single id OR a Set of ids (box / shift multi-selection)
+    const selOf = id => selGridId == null ? false
+      : (selGridId instanceof Set ? selGridId.has(id) : selGridId === id);
     while (this.gridsGroup.children.length) {
       const c = this.gridsGroup.children[0];
       this.gridsGroup.remove(c);
@@ -491,7 +495,7 @@ class Viewport {
       const zs = visible.map(l => l.elevation);
       const zGrip = zs[0];
       const poly = g.polyline();
-      const selGrid = g.id === selGridId; // selected grid reads in amber
+      const selGrid = selOf(g.id); // selected grids read in amber
       // amber only the copy on the LEVEL it was selected from (a level-2
       // selection highlights the level-2 line, not every copy) — but if the
       // recorded z matches none of the rendered copies, fall back to ALL of
@@ -1032,6 +1036,50 @@ class Viewport {
       if (area < bestArea) { bestArea = area; best = fid; }
     }
     return best;
+  }
+  // Downloaded-asset instances (BlenderKit): the groups under the
+  // blenderkit-assets root are real meshes, so a plain raycast finds them.
+  // Returns the nearest instance id (their userData.blenderkit.id) or null.
+  pickAssetAt(s) {
+    const root = this.assetsRoot;
+    if (!root || !root.visible || !root.children.length) return null;
+    this.applyCamera();
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const hits = this.raycaster.intersectObjects(root.children, true);
+    for (const h of hits) {
+      let o = h.object;
+      while (o && o !== this.scene) {
+        const bk = o.userData && o.userData.blenderkit;
+        if (bk && bk.id) return bk.id;
+        o = o.parent;
+      }
+    }
+    return null;
+  }
+  // Selected instances get a bounding-box outline — the same affordance the
+  // grid-line selection uses (foreign groups have no face/edge overlays).
+  updateAssetSelection(selIds, assets) {
+    if (!this._assetSelGroup) {
+      this._assetSelGroup = new THREE.Group();
+      this._assetSelGroup.name = 'asset-selection';
+      this.scene.add(this._assetSelGroup);
+    }
+    for (const ch of [...this._assetSelGroup.children]) {
+      this._assetSelGroup.remove(ch);
+      if (ch.geometry) ch.geometry.dispose();
+      if (ch.material) ch.material.dispose();
+    }
+    if (!selIds || !selIds.size) return;
+    for (const id of selIds) {
+      const rec = assets.get(id);
+      if (!rec || !rec.object.parent) continue;
+      const box = new THREE.Box3().setFromObject(rec.object);
+      if (box.isEmpty()) continue;
+      const helper = new THREE.Box3Helper(box, 0x1d4f9c);
+      helper.material.depthTest = false;
+      helper.renderOrder = 30;
+      this._assetSelGroup.add(helper);
+    }
   }
   groundAt(s) {
     const { ro, rd } = this.rayFrom(s);

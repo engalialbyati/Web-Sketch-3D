@@ -18,5 +18,10 @@ const TOOLS = {
   convert: BimTools.ConvertTool,
   door: BimTools.DoorTool, window: BimTools.WindowTool, opening: BimTools.WallOpeningTool,
   measurearea: BimTools.MeasureAreaTool,
+  // downloaded BlenderKit element types (armed from the Element Browser)
+  assetplace: AssetTools.AssetPlaceTool, assetdoor: AssetTools.AssetDoorTool,
+  assetwindow: AssetTools.AssetWindowTool,
+  // user/AI-coded parametric element types (Scripted Elements)
+  scriptplace: ScriptTools.ScriptPlaceTool,
 };
 window.TOOLS = TOOLS;

@@ -42,51 +42,89 @@
     get hint() {
       const s = this.state || {};
       const app = this.app;
+      const fam = (window.ColumnFamilies && ColumnFamilies.get(s.family)) || null;
       const lvl = app.levelManager.getLevel(app.bimOptions.baseLevel);
       const top = app.bimOptions.topConstraint !== 'unconnected'
         ? (app.levelManager.getLevel(app.bimOptions.topConstraint) || {}).name
-        : `+${(s.height || 3).toFixed(1)} m (unconnected)`;
-      return `Column: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere to place it freely. Size it on the Options Bar.`;
+        : `+${(app.bimOptions.unconnectedHeight || s.height || 3).toFixed(1)} m (unconnected)`;
+      return `Column${fam ? ' (' + fam.name + ')' : ''}: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere to place it freely. Family + size on the Options Bar, more designs in the Families panel.`;
     }
-    _boundsAt(p) {
+    /** Family params (normalized) carried in feature state; the Options Bar
+     *  edits width/depth/height, the Families panel fills the extras. */
+    _familyParams(s) {
+      if (!window.ColumnFamilies) return {};
+      return ColumnFamilies.normalize((s || this.state || {}).family || 'rect', s || this.state) || {};
+    }
+    _boundsAt(p, kind) {
       const app = this.app, s = this.state || {};
       const baseLevel = app.bimOptions.baseLevel;
       const baseZ = app.levelManager.getElevation(baseLevel);
+      const fp = this._familyParams(s);
+      // the picked plane becomes a baseOffset ONLY when the cursor hit real
+      // geometry (a slab top at +0.2 m over the level). A GROUND/FREE pick
+      // is just x/y — clicking empty space with Base Level 2 is not a
+      // request for a −3 m offset, it bases the column ON the level plane
+      const onGeometry = kind === 'endpoint' || kind === 'midpoint' || kind === 'center'
+        || kind === 'edge' || kind === 'face';
       const params = {
         base: [p.x, p.y, baseZ],
-        width: Math.max(0.05, s.width || 0.3),
-        depth: Math.max(0.05, s.depth || 0.3),
+        family: s.family || 'rect',
+        ...fp,
         baseLevelId: baseLevel,
         topLevelId: app.bimOptions.topConstraint !== 'unconnected' ? app.bimOptions.topConstraint : null,
-        baseOffset: (p.z != null ? p.z : baseZ) - baseZ, // picked plane relative to the level
+        baseOffset: onGeometry && p.z != null ? p.z - baseZ : 0,
         topOffset: 0,
-        height: Math.max(0.1, s.height || 3), // unconnected fallback
+        // the options strip's Unconnected Height owns the height (walls,
+        // grid columns, beams all read it) — the feature's legacy state is
+        // only a fallback
+        height: Math.max(0.1, (app.bimOptions && app.bimOptions.unconnectedHeight) || s.height || 3),
       };
-      return { params, bounds: app.structural.columnBounds(params) };
+      const bounds = app.structural.columnBounds(params);
+      // solid top: a drop-panel head hangs UNDER a covering slab's soffit
+      bounds.solidTop = app.structural.columnSolidTop(app.model, params);
+      return { params, bounds };
     }
     onMove(ev) {
       const view = this.app.view;
       this._lastEv = ev;
       view.clearPreview();
-      const p = this.app.inferPoint(ev, null).p;
-      const { params, bounds } = this._boundsAt(p);
-      const z0 = bounds.zStart, z1 = bounds.zEnd;
-      const ring = [
-        G.v(p.x - params.width / 2, p.y - params.depth / 2, z1), G.v(p.x + params.width / 2, p.y - params.depth / 2, z1),
-        G.v(p.x + params.width / 2, p.y + params.depth / 2, z1), G.v(p.x - params.width / 2, p.y + params.depth / 2, z1),
-      ];
-      const bottom = ring.map(q => G.v(q.x, q.y, z0));
-      view.previewLoop(ring, 0x0e8385);
-      view.previewLoop(bottom, 0x0e8385);
-      view.previewQuadsBetween(ring, bottom);
-      view.stickyLabel(G.v(p.x, p.y, z1), `${params.width.toFixed(2)} x ${params.depth.toFixed(2)} x ${bounds.height.toFixed(1)} m (Z ${z0.toFixed(2)}…${z1.toFixed(2)})`, '#0a5f61', 0, 0);
+      const inf = this.app.inferPoint(ev, null);
+      const p = inf.p;
+      const { params, bounds } = this._boundsAt(p, inf.kind);
+      const z0 = bounds.zStart, z1 = bounds.solidTop != null ? bounds.solidTop : bounds.zEnd;
+      const CF = window.ColumnFamilies;
+      const spec = CF && CF.get(params.family) ? CF.parts(params.family, params, z1 - z0) : null;
+      if (spec && spec.segments.length) {
+        // family ghost: every tier's plan ring at its true height, walls on
+        // matching rings (taper slices and prisms line up point-for-point)
+        for (const s of spec.segments) {
+          const up = s.ring.map(q => G.v(p.x + q.x, p.y + q.y, z0 + s.z1));
+          const dn = s.ring.map(q => G.v(p.x + q.x, p.y + q.y, z0 + s.z0));
+          view.previewLoop(up, 0x0e8385);
+          view.previewLoop(dn, 0x0e8385);
+          if (s.z1 - s.z0 > 0.05) view.previewQuadsBetween(up, dn);
+        }
+      } else {
+        const ring = [
+          G.v(p.x - params.width / 2, p.y - params.depth / 2, z1), G.v(p.x + params.width / 2, p.y - params.depth / 2, z1),
+          G.v(p.x + params.width / 2, p.y + params.depth / 2, z1), G.v(p.x - params.width / 2, p.y + params.depth / 2, z1),
+        ];
+        const bottom = ring.map(q => G.v(q.x, q.y, z0));
+        view.previewLoop(ring, 0x0e8385);
+        view.previewLoop(bottom, 0x0e8385);
+        view.previewQuadsBetween(ring, bottom);
+      }
+      const fam = CF && CF.get(params.family);
+      const under = bounds.solidTop != null && bounds.solidTop < bounds.zEnd - 1e-3;
+      view.stickyLabel(G.v(p.x, p.y, z1),
+        `${fam ? fam.name + ' ' : ''}${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${(z1 - z0).toFixed(1)} m (Z ${z0.toFixed(2)}…${z1.toFixed(2)})${under ? ' — head under slab' : ''}`, '#0a5f61', 0, 0);
     }
     onDown(ev) {
       if (ev.button !== 0) return;
       const app = this.app;
       const inf = app.inferPoint(ev, null);
       const p = inf.p;
-      const { params } = this._boundsAt(p);
+      const { params } = this._boundsAt(p, inf.kind);
       const facesBefore = new Set(app.model.faces.keys());
       const edgesBefore = new Set(app.model.edges.keys());
       let ok = false;
@@ -105,12 +143,20 @@
       // stamp and stay with that entity — the column never steals geometry.
       const newFaces = [...m.faces.keys()].filter(id => !facesBefore.has(id))
         .map(id => m.faces.get(id)).filter(f => f && !f.userData);
+      // roles from the built solid's own z extents — a drop-panel head that
+      // hangs under a slab never reaches the level plane, so columnBounds
+      // alone would mislabel its top face
+      let zMax = -Infinity, zMin = Infinity;
+      for (const f of newFaces) {
+        const c = m.faceCentroid(f);
+        zMax = Math.max(zMax, c.z); zMin = Math.min(zMin, c.z);
+      }
       const b = app.structural.columnBounds(params);
       const roles = {};
       for (const f of newFaces) {
         const c = m.faceCentroid(f);
-        roles[f.id] = Math.abs(c.z - b.zEnd) < 1e-6 ? 'top'
-          : Math.abs(c.z - b.zStart) < 1e-6 ? 'bottom' : 'side';
+        roles[f.id] = Math.abs(c.z - zMax) < 1e-6 ? 'top'
+          : Math.abs(c.z - zMin) < 1e-6 ? 'bottom' : 'side';
       }
       const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id))
         .filter(id => !(m.edges.get(id) || {}).userData);
@@ -126,7 +172,11 @@
         height: b.height,
       }, roles, newEdges);
       app.view.clearPreview();
-      app.toast(`Column ${params.width.toFixed(2)} x ${params.depth.toFixed(2)} x ${b.height.toFixed(1)} m placed (Z ${b.zStart.toFixed(2)}…${b.zEnd.toFixed(2)})`
+      const fam = window.ColumnFamilies && ColumnFamilies.get(params.family);
+      const solidTop = app.structural.columnSolidTop(m, params);
+      const under = solidTop < b.zEnd - 1e-3;
+      app.toast(`${fam ? fam.name : 'Column'} ${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${b.height.toFixed(1)} m placed (Z ${b.zStart.toFixed(2)}…${b.zEnd.toFixed(2)})`
+        + (under ? ' — head hangs under the slab' : '')
         + (params.gridRef ? ` at grid ${inf.a.name}-${inf.b.name} — moves with the grids` : ''));
     }
     onVCB() { return false; }
@@ -142,14 +192,29 @@
       mode: 'bim',
       commands: ['col', 'column'],
       options: [
+        { key: 'family', type: 'select', label: 'Family',
+          choices: (window.ColumnFamilies ? ColumnFamilies.selectChoices() : [{ value: 'rect', label: 'Rectangular RC' }]) },
         { key: 'width', type: 'number', label: 'Width', step: 0.05, default: 0.3 },
         { key: 'depth', type: 'number', label: 'Depth', step: 0.05, default: 0.3 },
-        { key: 'height', type: 'number', label: 'Height', step: 0.1, default: 3.0 },
+        // height comes from the options strip's Unconnected Height (shared
+        // with walls / grid columns) — one field, one truth
       ],
       tool: ColumnTool,
-      state: { width: 0.3, depth: 0.3, height: 3.0 },
-      onOption(d) {
-        // live preview follows the typed size
+      state: { family: 'rect', width: 0.3, depth: 0.3, height: 3.0 },
+      onOption(d, key) {
+        // switching family re-bases the sizes on that family's defaults
+        // (extras like drop-panel dims ride along in the state)
+        if (key === 'family' && window.ColumnFamilies) {
+          const fresh = ColumnFamilies.defaults(d.state.family);
+          if (fresh) {
+            for (const k of Object.keys(d.state)) {
+              if (k === 'family' || k === 'height' || !(k in fresh)) continue;
+              delete d.state[k];
+            }
+            Object.assign(d.state, fresh);
+          }
+        }
+        // live preview follows the typed size / family
         const t = window.app && window.app.tool;
         if (t && t.id === 'column' && t._lastEv) t.onMove(t._lastEv);
       },

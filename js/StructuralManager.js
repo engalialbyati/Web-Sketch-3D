@@ -487,6 +487,8 @@
      *  and drop the partitions so the union is one clean closed shell
      *  (Column > Slab precedence: no duplicate volume, no internal faces). */
     buildColumn(G, model, p) {
+      const fam = root.ColumnFamilies && root.ColumnFamilies.get(p.family);
+      if (fam) return this._buildFamilyColumn(G, model, p);
       const b = this.columnBounds(p);
       if (b.height < 0.02) throw new Error('column height below minimum');
       const c = p.base || p.center;
@@ -520,6 +522,66 @@
       }
       return created;
     }
+    /** Family column (columnFamilies.js): the silhouette is a stack of plan
+     *  rings over z bands. Segments build TOP-DOWN — each is a ring at its
+     *  top plane pushed to its floor — so the topmost tier runs the same
+     *  slab pass-through / lining cleanup as the plain prism (Column > Slab
+     *  precedence), and lower tiers weld onto the ones above like the
+     *  footing pedestal does. The stack spans [zStart, columnSolidTop]:
+     *  drop-panel heads stop under a covering slab soffit instead of
+     *  punching through it. */
+    _buildFamilyColumn(G, model, p) {
+      const b = this.columnBounds(p);
+      const zTop = this.columnSolidTop(model, p);
+      if (zTop - b.zStart < 0.02) throw new Error('column height below minimum');
+      const spec = root.ColumnFamilies.parts(p.family, p, zTop - b.zStart);
+      if (!spec || !spec.segments.length) throw new Error('column family produced no segments');
+      const c = p.base || p.center;
+      const ringAt = (seg, z) => seg.ring.map(q => G.v(c[0] + q.x, c[1] + q.y, b.zStart + z));
+      const before = new Set(model.faces.keys());
+      const segs = [...spec.segments].sort((s, t) => t.z1 - s.z1); // top-down
+      const top = segs[0];
+      const topRing = ringAt(top, top.z1);
+      let anchorIds = [], topFaceId = null;
+      for (const s of segs) {
+        const f = model.addFaceFromRings(ringAt(s, s.z1).map(q => G.clone(q)));
+        if (!f) throw new Error('column segment is degenerate');
+        if (s === top) { anchorIds = [...f.loop]; topFaceId = f.id; }
+        if (!model.pushPull(f, -(s.z1 - s.z0))) throw new Error('column sweep failed');
+      }
+      let created = [...model.faces.keys()].filter(id => !before.has(id)).map(id => model.faces.get(id));
+      // slab pass-through: same contract as the plain prism, on the top tier
+      const hostHoled = [...model.faces.values()].some(g =>
+        !created.includes(g) && (g.holes || []).some(h =>
+          h.length === anchorIds.length && anchorIds.every(v => h.includes(v))));
+      if (hostHoled) {
+        for (const g of created) {
+          if (g.id === topFaceId) continue;
+          const n = G.loopNormal(model.pts(g.loop));
+          if (Math.abs(n.z) > 0.9) continue; // horizontal faces are caps, not lining
+          if (!g.loop.some(v => anchorIds.includes(v))) continue; // only the pass-through segment
+          model.faces.delete(g.id);
+        }
+        model.gc();
+        const cap = model.addFaceFromRings(topRing.map(q => G.clone(q)));
+        created = [...model.faces.keys()].filter(id => !before.has(id)).map(id => model.faces.get(id));
+        if (cap && !created.includes(cap)) created.push(cap);
+      }
+      return created;
+    }
+    /** Plan ring a host slab is punched by. Plain columns: the footprint.
+     *  Family columns: the family's punch ring (default the topmost tier;
+     *  drop-panel columns punch with the SHAFT so the drop head embeds in
+     *  the slab like real flat-slab construction). */
+    columnPunch(p) {
+      const CF = root.ColumnFamilies;
+      if (!(CF && CF.get(p && p.family))) return this.columnFootprint(p);
+      const b = this.columnBounds(p);
+      const spec = CF.parts(p.family, p, b.height);
+      if (!spec || !spec.punch) return this.columnFootprint(p);
+      const c = p.base || p.center || [0, 0, 0];
+      return spec.punch.map(q => ({ x: c[0] + q.x, y: c[1] + q.y }));
+    }
     /** Isolated footing pad (plus optional pedestal) hanging below a level. */
     buildFooting(G, model, p) {
       const b = this.foundationBounds(p);
@@ -550,6 +612,55 @@
       return faces;
     }
 
+    /** Is this entity's family the flat-slab drop panel? */
+    isDropPanel(p) {
+      return !!(root.ColumnFamilies && root.ColumnFamilies.get(p && p.family)
+        && p.family === 'drop_panel');
+    }
+    /** Lowest slab/floor soffit covering a drop-panel column's head. Flat-slab
+     *  construction: the drop head hangs UNDER the slab, so its top follows
+     *  the soffit (zTop − thickness) of any slab at the column's top level
+     *  whose plan region covers the shaft. Returns the soffit z, or null when
+     *  nothing covers the column (the head then reaches the level plane).
+     *  `structure` may carry pending entities not yet in the registry. */
+    dropPanelSoffit(model, p, structure = null) {
+      if (!this.isDropPanel(p)) return null;
+      const b = this.columnBounds(p);
+      const c = p.base || p.center || [0, 0, 0];
+      const pt = { x: c[0], y: c[1] };
+      const ents = structure || this.entities;
+      let z = null;
+      for (const ent of ents) {
+        if (ent.type !== 'slab' && ent.type !== 'floor' || !ent.params) continue;
+        const sb = this.slabBounds(ent.params);
+        if (Math.abs(sb.zTop - b.zEnd) > 1e-3) continue;    // not at the column's top level
+        if (sb.zBottom >= b.zEnd - 1e-3) continue;          // zero-thickness — nothing to hang under
+        const covers = this.slabRegions(model, ent).some(r =>
+          Geo2D.pointIn(pt, r.outer) && !(r.holes || []).some(h => Geo2D.pointIn(pt, h)));
+        if (!covers) continue;
+        z = z == null ? sb.zBottom : Math.min(z, sb.zBottom); // lowest soffit wins
+      }
+      return z;
+    }
+    /** Effective top of a column's SOLID (world z). Drop-panel heads hang
+     *  0.5 mm under a covering slab soffit (the stagger keeps panel-top and
+     *  slab-bottom from coinciding — no z-fighting, mirrors the beam drop);
+     *  `p.panelTopZ` overrides discovery (the re-fit path passes the target
+     *  directly). Everything else spans to its level top. */
+    columnSolidTop(model, p, structure = null) {
+      const b = this.columnBounds(p);
+      if (this.isDropPanel(p)) {
+        let top = null;
+        if (isFinite(+p.panelTopZ)) top = +p.panelTopZ;
+        else {
+          const s = this.dropPanelSoffit(model, p, structure);
+          if (s != null) top = s - 5e-4;
+        }
+        if (top != null && top > b.zStart + 0.12) return top;
+      }
+      return b.zEnd;
+    }
+
     // ------------------------------------------------ slab/column precedence
     /** Columns passing through a slab about to be built at [zTop-th, zTop]:
      *  footprints to punch as openings so slab geometry never duplicates the
@@ -564,9 +675,12 @@
       const out = [];
       for (const ent of this.entities) {
         if (ent.type !== 'column' || !ent.params) continue;
+        // drop-panel columns never punch: their head re-fits UNDER the new
+        // slab's soffit (syncDropPanels), so slab and head never overlap
+        if (this.isDropPanel(ent.params)) continue;
         const cb = this.columnBounds(ent.params);
         if (cb.zEnd <= b.zBottom + 1e-3 || cb.zStart >= b.zTop - 1e-3) continue; // no pass-through
-        const fp = this.columnFootprint(ent.params);
+        const fp = this.columnPunch(ent.params);
         const strictlyInside = fp.every(q => Geo2D.pointIn(q, outer)) &&
           !holes2.some(h => fp.some(q => Geo2D.pointIn(q, h)));
         if (!strictlyInside) continue;
@@ -596,7 +710,19 @@
       switch (ent.type) {
         case 'column': {
           const b = this.columnBounds(p);
-          pushPoly(this.columnFootprint(p), [], b.zStart, b.zEnd);
+          // family columns decompose per segment (tier rings × z bands) so the
+          // takeoff stays exact for tapers, drop panels and shaped plans; the
+          // stack spans [zStart, columnSolidTop] — drop heads under slabs
+          const spec = root.ColumnFamilies && root.ColumnFamilies.get(p.family)
+            ? root.ColumnFamilies.parts(p.family, p, this.columnSolidTop(model, p) - b.zStart) : null;
+          if (spec) {
+            const c = p.base || p.center || [0, 0, 0];
+            for (const s of spec.segments)
+              pushPoly(s.ring.map(q => ({ x: c[0] + q.x, y: c[1] + q.y })),
+                [], b.zStart + s.z0, b.zStart + s.z1);
+          } else {
+            pushPoly(this.columnFootprint(p), [], b.zStart, b.zEnd);
+          }
           break;
         }
         case 'foundation': {

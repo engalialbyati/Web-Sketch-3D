@@ -30,15 +30,18 @@
     /**
      * (Re)build the unified Group from the entity's B-Rep faces. The mesh
      * shares the viewport's face material and carries a triangle -> faceId
-     * map so picking resolves back to model faces. Returns the Group.
+     * map so picking resolves back to model faces. A layerColor (the
+     * entity's layer color, "ByLayer") overrides the per-face paint.
+     * Returns the Group.
      */
-    build(model, faceMaterial) {
+    build(model, faceMaterial, layerColor) {
       this.dispose();
       const group = new THREE.Group();
       group.name = 'bim-element:' + this.entity.id;
       group.userData.elementId = this.entity.id;
 
       const pos = [], nor = [], col = [], triFace = [];
+      const lc = layerColor ? hexToRgb(layerColor) : null; // ByLayer tint
       for (const fid of this.entity.faces) {
         const f = model.faces.get(fid);
         if (!f || f.hidden) continue;
@@ -51,7 +54,7 @@
         let tris = [];
         try { tris = THREE.ShapeUtils.triangulateShape(outer.map(t2), f.holes.map(h => model.pts(h).map(t2))); } catch (e) { tris = []; }
         const all = outer.concat(f.holes.flatMap(h => model.pts(h)));
-        const c = f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 };
+        const c = lc || (f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 });
         const a = f.alpha == null ? 1 : f.alpha;
         for (const t of tris) {
           for (const idx of t) {
@@ -122,11 +125,16 @@
       this._byId.clear();
       if (!view || !view.elementsRoot) return new Set();
       const faceIds = new Set();
+      // ByLayer color: the entity's layer color tints its whole Group
+      const layerColor = ent => {
+        const ly = (model.layers || []).find(l => l.id === ent.layerId);
+        return (ly && ly.color) || null;
+      };
       for (const ent of app.bim.entities) {
         ent.faces = ent.faces.filter(id => model.faces.has(id));
         if (!ent.faces.length) continue;
         const el = new BimElement(ent);
-        view.elementsRoot.add(el.build(model, view.faceMat));
+        view.elementsRoot.add(el.build(model, view.faceMat, layerColor(ent)));
         this._byId.set(ent.id, el);
         for (const id of ent.faces) faceIds.add(id);
       }
@@ -196,10 +204,29 @@
         case 'opening':
           sel = pick(null, 'fam_wall_opening', 'Rectangular Cut', { width: p.width || 1, height: p.height || 2.1, sill: p.sillHeight || 0 });
           break;
-        case 'column':
-          sel = pick(null, 'fam_col_rect', `Column ${Math.round((p.width || 0.3) * 1000)} x ${Math.round((p.depth || 0.3) * 1000)}`,
-            { width: p.width || 0.3, depth: p.depth || 0.3, defaultHeight: p.height || 3, material: 'Concrete' });
+        case 'column': {
+          // design family (Tuscan, Drop Panel…): resolve to the family's own
+          // catalog node; the beam branch below shows the dynamic create
+          const fam = window.ColumnFamilies ? ColumnFamilies.get(p.family) : null;
+          if (fam) {
+            const famId = 'fam_col_' + fam.id;
+            if (!this._catalog.families.some(f => f.id === famId)) {
+              // a placed family column grows the catalog (Revit-style), even
+              // if the user never saved a type for it
+              await db.ensureFamily(famId, 'cat_column', fam.name + ' Column');
+              this._catalog.families.push({ id: famId, categoryId: 'cat_column', name: fam.name + ' Column' });
+            }
+            const w = p.width || 0.3, d = p.depth || 0.3;
+            const defaults = Object.assign(
+              { family: fam.id, defaultHeight: p.height || 3, material: 'Concrete' },
+              window.ColumnFamilies ? ColumnFamilies.normalize(fam.id, p) : { width: w, depth: d });
+            sel = pick(null, famId, `${fam.name} ${Math.round(w * 1000)} x ${Math.round(d * 1000)}`, defaults);
+          } else {
+            sel = pick(null, 'fam_col_rect', `Column ${Math.round((p.width || 0.3) * 1000)} x ${Math.round((p.depth || 0.3) * 1000)}`,
+              { width: p.width || 0.3, depth: p.depth || 0.3, defaultHeight: p.height || 3, material: 'Concrete' });
+          }
           break;
+        }
         case 'beam': {
           // structural framing family grows dynamically (Revit-style)
           const famId = 'fam_beam_framing', catId = 'cat_framing';
@@ -214,6 +241,17 @@
           const prof = { rectangular: 'Rectangular', t: 'T-Beam', l: 'L-Beam' }[p.profile || 'rectangular'] || 'Rectangular';
           sel = pick(null, famId, `${prof} — ${Math.round((p.height || 0.5) * 1000)} mm`,
             { profile: p.profile || 'rectangular', height: p.height || 0.5, webWidth: p.webWidth || 0.25, flangeWidth: p.flangeWidth || 0.6, flangeThickness: p.flangeThickness || 0.15, material: 'Concrete' });
+          break;
+        }
+        case 'script': {
+          // Scripted Elements map to the type their script created on save
+          // (js/script-elements.js ensureCatalogType); a missing script still
+          // resolves so the Elements table keeps its row
+          const famId = 'fam_scripted_' + (p.scriptId || 'missing');
+          const known = this._catalog.types.find(x => x.familyId === famId);
+          sel = known
+            ? pick(null, famId, known.name, known.defaultParameters)
+            : pick(null, famId, p.scriptName || 'Scripted', { scriptId: p.scriptId, scriptName: p.scriptName });
           break;
         }
         default:

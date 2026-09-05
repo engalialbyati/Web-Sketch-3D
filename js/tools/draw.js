@@ -125,7 +125,10 @@ class DrawGeom {
       const nx = -dy / L * off, ny = dx / L * off;
       shifted.push([G.v(a.x + nx, a.y + ny, a.z), G.v(b.x + nx, b.y + ny, b.z)]);
     }
-    if (!closed && shifted.length === 1) return [shifted[0][0], shifted[0][1]];
+    // a single zero-length segment shifts to null — the preview of a wall
+    // whose cursor sits exactly on its start point (endpoint snap) must
+    // degrade, not crash
+    if (!closed && shifted.length === 1) return shifted[0] ? [shifted[0][0], shifted[0][1]] : pts.map(p => G.clone(p));
     const isect = (s1, s2) => {
       if (!s1 || !s2) return null;
       const p = s1[0], r = G.sub(s1[1], s1[0]), q = s2[0], s = G.sub(s2[1], s2[0]);

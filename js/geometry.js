@@ -80,6 +80,36 @@ const G = {
   loopNormal(pts) { return G.norm(G.newell(pts)); },
   loopArea(pts) { return G.len(G.newell(pts)) / 2; },
 
+  // True when a closed point ring cannot bound a valid face: consecutive
+  // duplicate points, or a proper crossing between non-adjacent edges — e.g.
+  // the offset band of a wall shorter than its thickness doubling back on
+  // itself at a mitered/butt join. addFaceFromRings welds such rings into
+  // self-loop edges and broken faces (validate(): "self-loop", "ring visits
+  // a vertex twice"), so callers must refuse them BEFORE any geometry exists.
+  ringDegenerate(ring, eps = 1e-6) {
+    const n = ring.length;
+    if (n < 3) return true;
+    const d2 = (a, b) => {
+      const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      return dx * dx + dy * dy + dz * dz;
+    };
+    for (let i = 0; i < n; i++) if (d2(ring[i], ring[(i + 1) % n]) < eps * eps) return true;
+    // proper segment crossing, projected on xy (wall footprints are planar);
+    // adjacent edges share a vertex and are skipped
+    const segX = (a, b, c, d) => {
+      const den = (b.x - a.x) * (d.y - c.y) - (b.y - a.y) * (d.x - c.x);
+      if (Math.abs(den) < 1e-12) return false;
+      const t = ((c.x - a.x) * (d.y - c.y) - (c.y - a.y) * (d.x - c.x)) / den;
+      const u = ((c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)) / den;
+      return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
+    };
+    for (let i = 0; i < n; i++) for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue; // first and last edges touch at the closure
+      if (segX(ring[i], ring[(i + 1) % n], ring[j], ring[(j + 1) % n])) return true;
+    }
+    return false;
+  },
+
   closestOnSeg(p, a, b) {
     const ab = G.sub(b, a);
     const denom = G.dot(ab, ab) || 1;

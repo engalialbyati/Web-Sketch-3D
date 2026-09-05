@@ -24,11 +24,16 @@ function loadModel() {
   // Buffer: export-gltf's base64 fallback needs it in Node's vm sandbox
   const sandbox = { window: {}, console, Buffer };
   const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js', 'js/export-gltf.js']) {
+  for (const f of ['js/geometry.js', 'js/columnFamilies.js', 'js/model.js', 'js/StructuralManager.js', 'js/export-gltf.js']) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
   }
   if (!sandbox.window.G || !sandbox.window.Model) throw new Error('sandbox did not export G/Model');
-  return { G: sandbox.window.G, Model: sandbox.window.Model, StructuralManager: sandbox.window.StructuralManager, BeamProfiles: sandbox.window.BeamProfiles, GltfExporter: sandbox.window.GltfExporter };
+  return {
+    G: sandbox.window.G, Model: sandbox.window.Model,
+    StructuralManager: sandbox.window.StructuralManager,
+    BeamProfiles: sandbox.window.BeamProfiles, ColumnFamilies: sandbox.window.ColumnFamilies,
+    GltfExporter: sandbox.window.GltfExporter,
+  };
 }
 
 // ------------------------------- assertions

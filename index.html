@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebSketch 3D — a SketchUp-style modeler</title>
-<link rel="stylesheet" href="css/style.css?v=10">
+<link rel="stylesheet" href="css/style.css?v=14">
 </head>
 <body>
 <div id="app">
@@ -103,34 +103,45 @@
 <div id="toasts"></div>
 <div id="dialog-backdrop" class="hidden"><div id="dialog"></div></div>
 <input type="file" id="fileinput" accept=".json" style="display:none">
+<input type="file" id="blendinput" accept=".blend" style="display:none">
 
 <script src="js/lib/three.min.js"></script>
-<script src="js/geometry.js?v=24"></script>
+<script src="js/lib/GLTFLoader.js?v=1"></script>
+<script src="js/lib/DRACOLoader.js?v=2"></script>
+<script src="js/geometry.js?v=25"></script>
+<script src="js/columnFamilies.js?v=3"></script>
 <script src="js/GridLine.js?v=11"></script>
 <script src="js/GridManager.js?v=9"></script>
 <script src="js/SnapSystem.js?v=2"></script>
-<script src="js/model.js?v=wb-fix"></script>
-<script src="js/db.js?v=2"></script>
-<script src="js/BimElement.js?v=4"></script>
-<script src="js/render.js?v=35"></script>
+<script src="js/model.js?v=wb-fix-assets"></script>
+<script src="js/db.js?v=5"></script>
+<script src="js/BimElement.js?v=6"></script>
+<script src="js/render.js?v=37"></script>
+<script src="js/assets.js?v=2"></script>
 <script src="js/tools/base.js?v=23"></script>
-<script src="js/tools/free.js?v=51"></script>
-<script src="js/tools/bim.js?v=wb-fix"></script>
-<script src="js/tools/draw.js?v=13"></script>
-    <script src="js/tools/registry.js?v=29"></script>
+<script src="js/tools/free.js?v=55"></script>
+<script src="js/tools/bim.js?v=wb-fix7b"></script>
+<script src="js/tools/assets.js?v=1"></script>
+<script src="js/tools/script.js?v=2"></script>
+<script src="js/tools/draw.js?v=14"></script>
+    <script src="js/tools/registry.js?v=31"></script>
 <script src="js/engine/api.js?v=1"></script>
-<script src="js/features/column.js?v=2"></script>
+<script src="js/script-elements.js?v=2"></script>
+<script src="js/features/column.js?v=5"></script>
 <script src="js/features/beam.js?v=3"></script>
 <script src="js/features/cleanup.js?v=1"></script>
-<script src="js/features/gridplace.js?v=wb-fix"></script>
+<script src="js/features/gridplace.js?v=wb-fix6"></script>
 <script src="js/export-gltf.js?v=1"></script>
 <script src="js/features/measure-area.js?v=2"></script>
 <script src="js/edit-inplace.js?v=1"></script>
-<script src="js/StructuralManager.js?v=3"></script>
-<script src="js/app.js?v=wb-fix"></script>
+<script src="js/StructuralManager.js?v=5"></script>
+<script src="js/app.js?v=wb-fix9-scripts5"></script>
     <script src="js/families.js?v=2"></script>
     <script src="js/families-loader.js?v=1"></script>
     <script src="js/ui-cad.js?v=15"></script>
-    <script src="js/ui-browser.js?v=12"></script>
+    <script src="js/ui-browser.js?v=17"></script>
+    <script src="js/ui-layers.js?v=3"></script>
+<script src="js/ui-families.js?v=4"></script>
+    <script src="js/BlenderKitBrowser.js?v=7"></script>
 </body>
 </html>

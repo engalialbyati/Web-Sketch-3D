@@ -135,6 +135,9 @@ const ICONS = {
   levels: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h13"/><path d="M3 12h13" stroke-dasharray="3 2.4"/><path d="M3 19h13"/><path d="M20.5 5v14"/><path d="M18.3 7.2l2.2-2.2 2.2 2.2"/><path d="M18.3 16.8l2.2 2.2 2.2-2.2"/></svg>',
   grids: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v18"/><path d="M16 3v18"/><path d="M3 8h18"/><path d="M3 16h18"/><circle cx="8" cy="3" r="1.6"/><circle cx="16" cy="21" r="1.6"/><circle cx="3" cy="16" r="1.6"/><circle cx="21" cy="8" r="1.6"/></svg>',
   browser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16"/><path d="M9 9.5h12M9 14.5h12M13 4v16" opacity=".65"/></svg>',
+  families: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3h10M8 5h8M8.8 5l-.8 14M15.2 5l.8 14M7.5 21h9M6 5h12"/><path d="M12 5v16" opacity=".5"/></svg>',
+  layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z"/><path d="M3.5 12.5L12 17l8.5-4.5" opacity=".65"/><path d="M3.5 16.5L12 21l8.5-4.5" opacity=".35"/></svg>',
+  blenderkit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/><path d="M17.5 3.5v4M15.5 5.5h4" stroke-width="1.5"/></svg>',
   measurearea: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V9l5-5h10v10l-5 5z"/><path d="M4 9l5 5 6-6 5 5" opacity=".6"/><path d="M9 4v5h5" opacity=".6"/></svg>',
 };
 
@@ -218,6 +221,9 @@ class Transaction {
     this.label = label;
     this.snapshot = app.model.serialize();
     this.finished = false;
+    this.rolledBack = false; // visible to callers: the tx-guard rollback in
+                             // commit() restores geometry silently — entity
+                             // registrations made for the edit must be undone
   }
   commit() {
     if (this.finished) return;
@@ -265,6 +271,7 @@ class Transaction {
   rollback() {
     if (this.finished) return;
     this.finished = true;
+    this.rolledBack = true;
     this.app.model.load(this.snapshot);
     this.app.opDone();
   }
@@ -387,7 +394,9 @@ class BimEntityManager {
   // roles: map faceId -> 'top'|'exterior'|'interior'|'start_cap'|'end_cap'|'bottom'
   create(type, params, faceRoles, edgeIds = []) {
     const id = this._nextId(type);
-    const ent = { id, type, params, faces: Object.keys(faceRoles).map(Number), edges: [...edgeIds] };
+    // new elements land on the CURRENT layer (AutoCAD behavior); legacy
+    // entities without a layer resolve back to '0' on load
+    const ent = { id, type, params, faces: Object.keys(faceRoles).map(Number), edges: [...edgeIds], layerId: this.model.currentLayerId || '0' };
     this.entities.push(ent);
     for (const [fid, role] of Object.entries(faceRoles)) {
       const f = this.model.faces.get(+fid);
@@ -439,6 +448,11 @@ class BimEntityManager {
   ensureWallBottom(ent) {
     const m = this.model;
     if (!ent || ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end) return false;
+    // liveness: a later commit's planar arrangement can REPLACE faces this
+    // wall claimed (splits get new ids) — the registry must never point at
+    // geometry that no longer exists
+    if (ent.faces.some(id => !m.faces.has(id))) ent.faces = ent.faces.filter(id => m.faces.has(id));
+    if (ent.edges && ent.edges.some(id => !m.edges.has(id))) ent.edges = ent.edges.filter(id => m.edges.has(id));
     const p = ent.params;
     const hasBottom = ent.faces.some(id => {
       const f = m.faces.get(id);
@@ -471,7 +485,27 @@ class BimEntityManager {
     if (claimed) return true;
     let ring;
     try { ring = this.wallRing(p); } catch (e) { return false; }
-    if (!ring || ring.length < 3) return false;
+    if (!ring || ring.length < 3 || G.ringDegenerate(ring)) return false;
+    // rescue path: at ACUTE miter corners a join rebuild runs twice — by the
+    // second pass the plane is already punched into cells (some claimed by
+    // the neighbor), so the full-footprint cap can't be created and the
+    // strict in-band claim finds nothing whole. Claim the unstamped cells
+    // under this band by CENTROID so the wall keeps an underside at all
+    // (attribution beats disappearance; quantities read params, not faces)
+    const rescueByCentroid = () => {
+      let n2 = 0;
+      for (const f of [...m.faces.values()]) {
+        if (f.userData || f.hidden) continue;
+        const pts2 = m.pts(f.loop);
+        if (!pts2.length || !pts2.every(q => Math.abs(q.z - p.base[2]) < 1e-6)) continue;
+        if (!inBand0(m.faceCentroid(f))) continue;
+        if (G.loopArea(pts2) < 1e-6) continue;
+        f.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'bottom' };
+        ent.faces.push(f.id);
+        n2++;
+      }
+      return n2;
+    };
     const before = new Set(m.faces.keys());
     m.bimHold = true;
     let cap = null;
@@ -479,7 +513,7 @@ class BimEntityManager {
       cap = m.addFaceFromRings(ring.map(q => G.clone(q)));
       if (cap) m.punchOrSplit(cap);
     } finally { m.bimHold = false; }
-    if (!cap) return false;
+    if (!cap) return rescueByCentroid() > 0;
     // survivors of the punch/trim (cells of the uncovered regions) —
     // claim only faces that genuinely lie inside this wall's band, never
     // unrelated neighbors on the same plane
@@ -510,7 +544,9 @@ class BimEntityManager {
       }
       added++;
     }
-    return added > 0;
+    // strict claim came up empty (acute-corner rebuilds): fall back to the
+    // centroid rescue rather than leaving the wall without an underside
+    return added > 0 || rescueByCentroid() > 0;
   }
   // Structural clearance re-fit: the height param follows the cleared top
   // plane (Z under the lowest slab soffit / drop-beam underside above the
@@ -657,6 +693,7 @@ class BimEntityManager {
     m.bimHold = true;
     const p = ent.params;
     const ring = this.wallRing(p);
+    if (!ring || G.ringDegenerate(ring)) { m.bimHold = false; return false; }
     const facesBefore = new Set(m.faces.keys());
     const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
     if (!f) { m.bimHold = false; return false; }
@@ -690,6 +727,9 @@ class BimEntityManager {
         face.userData = { bimEntityId: h.id, bimType: h.type, role: faces.some(x => x.id === fid) ? (isLeaf ? 'leaf' : 'frame') : 'lining' };
       }
     }
+    // hosted asset instances (downloaded doors/windows) re-cut and reposition
+    // too — they own no kernel faces, so this is their only bookkeeping
+    if (this.assets) this.assets.recutHosted(id, m);
     m.bimHold = false;
     return true;
   }
@@ -697,6 +737,12 @@ class BimEntityManager {
     const ent = this.getEntityById(id);
     if (!ent || ent.type !== 'wall') return false;
     const m = this.model;
+    // refuse BEFORE deleting anything: a degenerate prospective ring means
+    // the re-extrude can never succeed, and _deleteWallGeometry has already
+    // swept the wall away by then — the wall would silently vanish
+    let pre;
+    try { pre = this.wallRing(ent.params); } catch (e) { pre = null; }
+    if (!pre || G.ringDegenerate(pre)) return false;
     // Construction-wire sweep brackets the WHOLE multi-phase rebuild (the
     // hold releases between delete and re-extrude): join residue like a
     // miter-cap diagonal born attached in one phase and orphaned in the
@@ -764,6 +810,60 @@ class BimEntityManager {
     let ok = true;
     for (const wid of ids) ok = this._rebuildWallCore(wid, hostedBy.get(wid) || []) && ok;
     return ok;
+  }
+  // Re-fit one drop-panel column to a new solid top (its head hangs under a
+  // slab soffit — see StructuralManager.dropPanelSoffit). Deletes the old
+  // solids, re-extrudes the family stack down from `panelTopZ`, and re-stamps
+  // faces/edges in place: the entity keeps its id, layer and grid binding.
+  // Mirrors the wall rebuild phases (delete → build inside one edge sweep,
+  // bimHold across both so neighbors never claim the swept geometry).
+  refitDropPanelColumn(id, panelTopZ) {
+    const ent = this.getEntityById(id);
+    if (!ent || ent.type !== 'column') return false;
+    const structural = window.app && window.app.structural;
+    if (!structural) return false;
+    const m = this.model;
+    const p = { ...ent.params, panelTopZ };
+    const ring = structural.columnFootprint(p).map(q => G.v(q.x, q.y, panelTopZ));
+    if (!ring || G.ringDegenerate(ring)) return false; // refuse BEFORE deleting
+    m.beginEdgeSweep();
+    try {
+      m.bimHold = true;
+      for (const fid of [...ent.faces]) m.faces.delete(fid);
+      for (const eid of [...ent.edges]) m.edges.delete(eid);
+      m.gc();
+      // deleting recorded edges can take edges shared with touching geometry —
+      // recreate any ring edge a surviving face still needs
+      for (const f2 of m.faces.values()) {
+        m.edgesForRing(f2.loop, true);
+        for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+      }
+      const st = structural.buildColumn(G, m, p);
+      if (!st.length) { m.bimHold = false; return false; }
+      let zMax = -Infinity, zMin = Infinity;
+      for (const f of st) {
+        const c = m.faceCentroid(f);
+        zMax = Math.max(zMax, c.z); zMin = Math.min(zMin, c.z);
+      }
+      ent.faces = st.map(f => f.id);
+      ent.edges = [];
+      for (const fid of ent.faces) {
+        const face = m.faces.get(fid);
+        const c = m.faceCentroid(face);
+        const role = Math.abs(c.z - zMax) < 1e-6 ? 'top'
+          : Math.abs(c.z - zMin) < 1e-6 ? 'bottom' : 'side';
+        face.userData = { bimEntityId: id, bimType: 'column', role };
+        for (const r of m.rings(face)) for (let i = 0; i < r.length; i++) {
+          const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+          if (e) ent.edges.push(e.id);
+        }
+      }
+      ent.edges = [...new Set(ent.edges)];
+      m.bimHold = false;
+      return true;
+    } finally {
+      m.endEdgeSweep();
+    }
   }
 
   // The wall's footprint ring, with joined end caps recomputed DYNAMICALLY
@@ -893,6 +993,7 @@ class App {
     this.model = new Model();
     this.sel = { edges: new Set(), faces: new Set() };
     this.selGridId = null;   // selected grid line (selectable through hosted walls)
+    this.selGridIds = new Set(); // box / shift-selected grid lines (amber together)
     this.clipboard = null;
     this.undoStack = [];
     this.redoStack = [];
@@ -905,6 +1006,13 @@ class App {
     this.gridManager = (typeof GridManager === 'function') ? new GridManager(this.model) : null; // GridSystem (GridLine.js)
     this.levelView = 'all'; // Level View plan filter: 'all' | level id (standard views only)
     this.bim = new BimEntityManager(this.model);      // parametric entity registry
+    // Downloaded-asset instances (BlenderKit) — foreign THREE groups beside
+    // the B-Rep; selAssets selects them the way selGridIds selects grids
+    this.assets = new AssetManager(this);
+    this.selAssets = new Set();
+    this.model.assetListProvider = () => this.assets.serialize();
+    // User/AI-coded parametric element types (js/script-elements.js)
+    this.scriptElements = new ScriptElements.Manager(this);
     // Structural elements (columns/beams/slabs/foundations): elevation
     // datums, parametric beam sections, infill-wall clearance, quantities
     this.structural = window.StructuralManager ? StructuralManager.attach(this) : null;
@@ -973,11 +1081,27 @@ class App {
     this.refreshGroups();
     this._restoreAutosave();
     window.addEventListener('error', (e) => {
-      // keep the stack reachable — the toast alone can't say WHERE it broke
+      // keep the stack reachable — the toast alone can't say WHERE it broke.
+      // Persisted to localStorage so a crash survives the reload the user
+      // does right after (read back on next boot: app.lastCrash)
       this._lastError = { message: e.message, stack: e.error && e.error.stack, at: new Date() };
+      try { localStorage.setItem('websketch3d.crash', JSON.stringify(this._lastError)); } catch (e2) { }
       console.error('[uncaught]', e.message, e.error || '');
       this.toast('Error: ' + (e.message || 'unknown'), true);
     });
+    window.addEventListener('unhandledrejection', (e) => {
+      const r = e.reason;
+      try { localStorage.setItem('websketch3d.crash', JSON.stringify({ message: r && r.message || String(r), stack: r && r.stack, at: new Date(), kind: 'promise' })); } catch (e2) { }
+      console.error('[unhandled rejection]', r);
+    });
+    try {
+      const saved = localStorage.getItem('websketch3d.crash');
+      if (saved) {
+        this.lastCrash = JSON.parse(saved);
+        localStorage.removeItem('websketch3d.crash'); // read once
+        console.warn('[previous crash]', this.lastCrash.message, this.lastCrash.stack || '');
+      }
+    } catch (e) { }
   }
 
   // ------------------------------------------------------------------ tools
@@ -1151,7 +1275,7 @@ class App {
     this.gridManager._hydrate();
     // grid edits re-derive the level plane rectangles (they track the grid AABB)
     this.view.setLevels(this.levelManager.levels, this.gridManager.grids);
-    this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null, this.selGridZ);
+    this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridIds.size ? this.selGridIds : (this.selGridId || null), this.selGridZ);
     this.view.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
     this._syncGridsToDb();
     const bd = document.getElementById('dialog-backdrop');
@@ -1492,16 +1616,51 @@ class App {
   // delete their rows, and the catalog grows dynamic types as needed.
   async _initDb() {
     try {
-      this.db = await BimDatabase.open();
+      // A version upgrade can sit pending forever while an older WebSketch3D
+      // tab (old cached code) still holds the previous schema open — IndexedDB
+      // fires no error in that state, so race the open and degrade gracefully
+      // instead of leaving the browser panels dead for the whole session.
+      const opened = BimDatabase.open();
+      this._dbOpenTimer = setTimeout(() => {
+        const err = new Error('another WebSketch3D tab or window still holds the old database');
+        err.busy = true;
+        // reject the race below
+        if (this._dbOpenReject) this._dbOpenReject(err);
+      }, 6000);
+      this.db = await Promise.race([
+        opened,
+        new Promise((resolve, reject) => { this._dbOpenReject = reject; })
+      ]);
+      clearTimeout(this._dbOpenTimer);
       await this.db.seedDefaults();
       if (this.elements) await this.elements.refreshCatalog();
       this._dbSyncDebounced();
+      // user-coded element types recompile from their stored source text
+      if (this.scriptElements) this.scriptElements.loadAll();
       if (window.Engine) Engine.events.emit('db:ready', { persistent: this.db.persistent });
       if (!this.db.persistent)
         console.warn('[db] using an in-memory store — project data will not survive a reload');
       this.updateInfo();
     } catch (e) {
       console.warn('[db] init failed:', e);
+      clearTimeout(this._dbOpenTimer);
+      // Locked-or-broken IndexedDB should not cost the user the whole app:
+      // fall back to the in-memory store (this session only) and say so.
+      if (BimDatabase.withMemory) {
+        try {
+          this.db = await BimDatabase.withMemory();
+          await this.db.seedDefaults();
+          if (this.elements) await this.elements.refreshCatalog();
+          if (this.scriptElements) this.scriptElements.loadAll();
+          if (window.Engine) Engine.events.emit('db:ready', { persistent: false });
+          this.updateInfo();
+          this.toast(e.busy
+            ? 'Database busy — another WebSketch3D tab holds an old version. Working in a temporary store; close other tabs and reload to save permanently.'
+            : 'Database unavailable (' + e.message + ') — working in a temporary store for this session.', true);
+          return;
+        } catch (e2) { console.warn('[db] memory fallback failed:', e2); }
+      }
+      this.toast('Database unavailable: ' + e.message, true);
     }
   }
   _dbSyncDebounced() {
@@ -1594,7 +1753,12 @@ class App {
   selectElement(entId, mode = 'replace') {
     const ent = this.bim.getEntityById(entId);
     if (!ent) return;
-    if (ent.locked) { this.toast(`${ent.type} ${ent.id} is locked — unlock it in the Element Browser`, true); return; }
+    if (this.isEntityLocked(entId)) {
+      const ly = this.layerOf(ent);
+      const why = ly && ly.locked && !ent.locked ? ` — layer "${ly.name}" is locked` : '';
+      this.toast(`${ent.type} ${ent.id} is locked${why} — unlock it in the Layers panel or Element Browser`, true);
+      return;
+    }
     const sel = this.selectionForElement(ent);
     if (mode === 'toggle') this.toggleEntities(sel);
     else { this.sel = sel; this.onSelectionChanged(); }
@@ -1626,7 +1790,17 @@ class App {
   // with the model), so they survive undo, autosave and file round-trips.
   // Locked items refuse selection, deletion and direct edits; hidden items
   // leave the render and every pick path entirely.
-  isEntityLocked(id) { const e = this.bim.getEntityById(id); return !!(e && e.locked); }
+  /** The entity's layer record ('0' when unknown — model.load sanitizes). */
+  layerOf(ent) {
+    const ls = this.model.layers || [];
+    return (ent && ls.find(l => l.id === ent.layerId)) || ls.find(l => l.id === '0') || ls[0];
+  }
+  isEntityLocked(id) {
+    const e = this.bim.getEntityById(id);
+    if (!e) return false;
+    const ly = this.layerOf(e);
+    return !!(e.locked || (ly && ly.locked));
+  }
   isFaceLocked(f) {
     const uid = f && f.userData && f.userData.bimEntityId;
     return uid ? this.isEntityLocked(uid) : false;
@@ -1635,7 +1809,12 @@ class App {
     const uid = e && e.userData && e.userData.bimEntityId;
     return uid ? this.isEntityLocked(uid) : false;
   }
-  isEntityHidden(id) { const e = this.bim.getEntityById(id); return !!(e && e.hidden); }
+  isEntityHidden(id) {
+    const e = this.bim.getEntityById(id);
+    if (!e) return false;
+    const ly = this.layerOf(e);
+    return !!(e.hidden || (ly && ly.visible === false));
+  }
   // Edge ownership drives hide: a wall's outlines must vanish with its faces.
   // Rebuild paths (joins, resizes, grid moves, hosted re-cuts) restamp FACES
   // but can leave regenerated edges anonymous — restamp from ent.edges before
@@ -1668,6 +1847,15 @@ class App {
           for (const fid of ent.faces) this.sel.faces.delete(fid);
           for (const eid of ent.edges) this.sel.edges.delete(eid);
         }
+      }
+      // elements on OFF layers stay invisible despite the master SHOW — hint
+      if (eff.hidden === false) {
+        const off = new Set();
+        for (const ent of live) {
+          const ly = this.layerOf(ent);
+          if (ly && ly.visible === false) off.add(ly.name);
+        }
+        if (off.size) this.toast(`Layer${off.size === 1 ? ' "' + [...off][0] + '" is' : 's ' + [...off].join(', ') + ' are'} OFF — the Layers panel controls them`, true);
       }
       this.onSelectionChanged();
       this.refreshEdgeStamps();
@@ -1741,6 +1929,16 @@ class App {
     if (kind === 'element') {
       const ent = this.bim.getEntityById(id);
       if (!ent) return;
+      // showing a single element can't beat a layer that is OFF — say so
+      // instead of silently leaving it invisible
+      if (patch.hidden === false) {
+        const ly = this.layerOf(ent);
+        if (ly && ly.visible === false && !ent.hidden) {
+          this.toast(`Layer "${ly.name}" is OFF — turn it on in the Layers panel to see ${ent.id}`, true);
+          if (window.ElementBrowser) ElementBrowser.refresh();
+          return;
+        }
+      }
       Object.assign(ent, patch);
       if (patch.locked || patch.hidden) { // locked/hidden things can't stay selected
         for (const fid of ent.faces) this.sel.faces.delete(fid);
@@ -1762,6 +1960,246 @@ class App {
       this.onLevelsChanged();
     }
     if (window.ElementBrowser) ElementBrowser.refresh();
+  }
+
+  // ------------------------------------------------------------------ layers
+  // AutoCAD-style layers: every BIM entity sits on exactly one layer
+  // (entity.layerId; '0' is the undeletable default). Layer OFF hides its
+  // elements from the render AND every pick path; layer LOCK refuses
+  // selection and edits; layer COLOR tints its elements ("ByLayer").
+  // New elements land on the current layer. Structural layer ops are
+  // transaction-wrapped (undoable); flag toggles follow the hide/lock
+  // convention of setItemFlags (direct + autosave).
+  get layers() { return this.model.layers; }
+  getLayer(id) { return this.model.layers.find(l => l.id === id) || null; }
+  get currentLayerId() { return this.model.currentLayerId; }
+  _uniqueLayerName(base, exceptId) {
+    const names = new Set(this.model.layers
+      .filter(l => l.id !== exceptId).map(l => l.name.toLowerCase()));
+    if (!names.has(base.toLowerCase())) return base;
+    let n = 2;
+    while (names.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
+  }
+  addLayer(name) {
+    name = this._uniqueLayerName((String(name || '').trim() || 'Layer'));
+    let n = 2;
+    while (this.model.layers.some(l => l.id === 'lyr_' + n)) n++;
+    const ly = { id: 'lyr_' + n, name, color: null, visible: true, locked: false };
+    this.run('add layer', () => this.model.layers.push(ly));
+    this.onLayersChanged();
+    this.toast(`Layer "${name}" created — new elements land on the current layer`);
+    return ly;
+  }
+  renameLayer(id, name) {
+    if (id === '0') { this.toast('Layer 0 cannot be renamed', true); return; }
+    const ly = this.getLayer(id);
+    if (!ly) return;
+    name = String(name || '').trim();
+    if (!name || name === ly.name) return;
+    const final = this._uniqueLayerName(name, id);
+    this.run('rename layer', () => { ly.name = final; });
+    this.onLayersChanged();
+    this.toast(final === name ? `Layer renamed to "${final}"` : `Name taken — renamed to "${final}"`);
+  }
+  /** Direct layer state: { visible?, locked?, color? } — one rebuild, one
+   *  notification, selection purged of newly hidden/locked elements. */
+  setLayerFlags(id, patch) {
+    const ly = this.getLayer(id);
+    if (!ly) return;
+    Object.assign(ly, patch);
+    if (patch.visible === false || patch.locked === true) {
+      for (const ent of this.bim.entities) {
+        if (ent.layerId !== id) continue;
+        for (const fid of ent.faces) this.sel.faces.delete(fid);
+        for (const eid of ent.edges) this.sel.edges.delete(eid);
+      }
+      this.onSelectionChanged();
+    }
+    this.onLayersChanged();
+  }
+  /** New elements are created on this layer (AutoCAD "current layer"). */
+  setCurrentLayer(id) {
+    if (!this.getLayer(id)) return;
+    if (this.model.currentLayerId === id) return;
+    this.model.currentLayerId = id;
+    this._saveAutosave(); // survives reload with the drawing
+    if (window.LayerPanel) LayerPanel.refresh();
+    this.toast(`Current layer: "${this.getLayer(id).name}" — new elements go there`);
+  }
+  /** Move every element touched by the selection onto a layer (undoable). */
+  assignSelectionToLayer(layerId) {
+    const ly = this.getLayer(layerId);
+    if (!ly) return;
+    const ents = new Set();
+    const byId = uid => { const e = uid && this.bim.getEntityById(uid); if (e) ents.add(e); };
+    for (const fid of this.sel.faces) {
+      const f = this.model.faces.get(fid);
+      byId(f && f.userData && f.userData.bimEntityId);
+    }
+    for (const eid of this.sel.edges) {
+      const e = this.model.edges.get(eid);
+      byId(e && e.userData && e.userData.bimEntityId);
+    }
+    if (!ents.size) { this.toast('Select elements first — free-drawn geometry has no layer', true); return; }
+    const n = ents.size;
+    this.run('assign layer', () => { for (const ent of ents) ent.layerId = layerId; });
+    this.onLayersChanged();
+    this.toast(`${n} element${n === 1 ? '' : 's'} moved to layer "${ly.name}"`);
+  }
+  /** Layer isolation (AutoCAD LAYISO): show only this layer's elements. */
+  isolateLayer(id) {
+    const ly = this.getLayer(id);
+    if (!ly) return;
+    for (const l of this.model.layers) l.visible = l.id === id;
+    // elements on other layers just went hidden — purge them from selection
+    for (const ent of this.bim.entities) {
+      if (ent.layerId === id) continue;
+      for (const fid of ent.faces) this.sel.faces.delete(fid);
+      for (const eid of ent.edges) this.sel.edges.delete(eid);
+    }
+    this.onSelectionChanged();
+    this.onLayersChanged();
+    this.toast(`Isolated layer "${ly.name}" — Show All restores the rest`);
+  }
+  showAllLayers() {
+    for (const ly of this.model.layers) ly.visible = true;
+    this.onLayersChanged();
+    this.toast('All layers shown');
+  }
+  /** Select every element on a layer (locked layers refuse, like picks). */
+  selectLayerElements(id) {
+    const ly = this.getLayer(id);
+    if (!ly) return;
+    const ents = this.bim.entities.filter(e => e.layerId === id);
+    if (!ents.length) { this.toast(`Layer "${ly.name}" has no elements`); return; }
+    if (ents.some(e => this.isEntityLocked(e.id))) {
+      this.toast(`A layer "${ly.name}" element is locked — unlock it first`, true); return;
+    }
+    const faces = new Set(), edges = new Set();
+    for (const ent of ents) {
+      const s = this.selectionForElement(ent);
+      for (const f of s.faces) faces.add(f);
+      for (const e of s.edges) edges.add(e);
+    }
+    this.selGridId = null;
+    this.sel = { faces, edges };
+    this.onSelectionChanged();
+    this.toast(`${ents.length} element${ents.length === 1 ? '' : 's'} on "${ly.name}" selected`);
+  }
+  /** Delete a layer. Empty layers go directly; a loaded one asks first:
+   *  move its elements to layer 0 (keep) or erase them with the layer. */
+  deleteLayer(id) {
+    if (id === '0') { this.toast('Layer 0 cannot be deleted — it is the default', true); return; }
+    const ly = this.getLayer(id);
+    if (!ly) return;
+    const ents = this.bim.entities.filter(e => e.layerId === id);
+    if (!ents.length) { this._deleteLayerNow(id, 'move'); this.toast(`Layer "${ly.name}" deleted`); return; }
+    const n = ents.length;
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    this.dialog(`Delete layer "${ly.name}"?`, `
+      <p>Layer <b>${esc(ly.name)}</b> still holds <b>${n}</b> element${n === 1 ? '' : 's'}.</p>
+      <p style="opacity:.75;font-size:12px">Move them to layer 0 (nothing is erased), or delete the elements together with the layer.</p>`,
+      [
+        ['Cancel', null],
+        [`Move ${n} to layer 0`, () => { this._deleteLayerNow(id, 'move'); this.toast(`Layer "${ly.name}" deleted — ${n} element${n === 1 ? '' : 's'} moved to layer 0`); }],
+        [`Delete layer + ${n} element${n === 1 ? '' : 's'}`, () => { this._deleteLayerNow(id, 'delete'); this.toast(`Layer "${ly.name}" and its ${n} element${n === 1 ? '' : 's'} deleted`); }],
+      ]);
+  }
+  _deleteLayerNow(id, mode) {
+    const ents = this.bim.entities.filter(e => e.layerId === id);
+    this.run('delete layer', m => {
+      if (mode === 'delete') {
+        // erase the elements' B-Rep: opDone reaps the entities + db rows
+        const edgeIds = [];
+        for (const ent of ents) {
+          for (const fid of ent.faces) m.deleteFace(fid);
+          for (const eid of ent.edges) if (!edgeIds.includes(eid)) edgeIds.push(eid);
+        }
+        if (edgeIds.length) m.deleteEdgeIds(edgeIds);
+        for (const ent of ents) { // purge selection immediately
+          for (const fid of ent.faces) this.sel.faces.delete(fid);
+          for (const eid of ent.edges) this.sel.edges.delete(eid);
+        }
+      } else {
+        for (const ent of ents) ent.layerId = '0';
+      }
+      this.model.layers = this.model.layers.filter(l => l.id !== id);
+      if (this.model.currentLayerId === id) this.model.currentLayerId = '0';
+    });
+    this.onLayersChanged();
+  }
+  /** Post-layer-change sync: one rebuild + autosave + panel refreshes. */
+  onLayersChanged() {
+    this.refreshEdgeStamps();
+    this.view.rebuild();
+    this._saveAutosave();
+    if (window.LayerPanel) LayerPanel.refresh();
+    if (window.ElementBrowser) ElementBrowser.refresh();
+  }
+  /** Context-menu "Move to Layer…": lists layers; a click assigns the
+   *  elements (picked entity + selection) and closes. */
+  moveSelectionToLayerDialog() {
+    const ents = new Set();
+    const byId = uid => { const e = uid && this.bim.getEntityById(uid); if (e) ents.add(e); };
+    for (const fid of this.sel.faces) {
+      const f = this.model.faces.get(fid);
+      byId(f && f.userData && f.userData.bimEntityId);
+    }
+    for (const eid of this.sel.edges) {
+      const e = this.model.edges.get(eid);
+      byId(e && e.userData && e.userData.bimEntityId);
+    }
+    if (!ents.size) { this.toast('Select elements first — free-drawn geometry has no layer', true); return; }
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const n = ents.size;
+    const rows = this.model.layers.map(ly => {
+      const cnt = this.bim.entities.filter(e => e.layerId === ly.id).length;
+      const cur = [...ents].every(e => e.layerId === ly.id);
+      return `<div class="mlay-row${cur ? ' cur' : ''}" data-lid="${esc(ly.id)}"
+        title="${cur ? 'Already on this layer' : `Move ${n} element${n === 1 ? '' : 's'} here`}"
+        style="display:flex;align-items:center;gap:8px;padding:5px 8px;margin:3px 0;border:1px solid var(--line,#ccc);border-radius:6px;cursor:pointer">
+        <span style="width:10px;height:10px;border-radius:3px;flex:none;background:${ly.color || '#c3c9cf'}"></span>
+        <b>${esc(ly.name)}</b>${cur ? ' <span style="opacity:.6;font-size:11px">· current</span>' : ''}
+        <span style="margin-left:auto;opacity:.6;font-size:11px">${cnt} element${cnt === 1 ? '' : 's'}</span>
+      </div>`;
+    }).join('');
+    this.dialog(`Move ${n} element${n === 1 ? '' : 's'} to layer`, `
+      <p style="opacity:.75;margin:2px 0 8px;font-size:12px">Pick the destination layer — the move is undoable (Ctrl+Z).</p>
+      <div id="mlay-list">${rows}
+        <div class="mlay-row" data-lid="__new"
+          style="display:flex;align-items:center;gap:8px;padding:5px 8px;margin:3px 0;border:1px dashed var(--line,#ccc);border-radius:6px;cursor:pointer;color:#3e66c4">
+          <span style="width:10px;height:10px;border-radius:3px;flex:none;background:#3e66c4"></span>
+          <b>New layer…</b>
+        </div>
+      </div>`,
+      [['Cancel', null]]);
+    const list = document.getElementById('mlay-list');
+    if (!list) return;
+    list.addEventListener('click', ev => {
+      const row = ev.target.closest('.mlay-row');
+      if (!row) return;
+      this.closeDialog();
+      if (row.dataset.lid === '__new') {
+        const ly = this.addLayer(`Layer ${this.model.layers.length}`);
+        if (ly) this.assignEntitiesToLayer([...ents].map(e => e.id), ly.id);
+        return;
+      }
+      this.assignEntitiesToLayer([...ents].map(e => e.id), row.dataset.lid);
+    });
+  }
+  /** Assign a fixed set of entities (undoable) — the panel and the context
+   *  menu share it; assignSelectionToLayer resolves the set from a live
+   *  selection instead. */
+  assignEntitiesToLayer(entIds, layerId) {
+    const ly = this.getLayer(layerId);
+    if (!ly || !entIds.length) return;
+    const live = entIds.map(id => this.bim.getEntityById(id)).filter(Boolean);
+    if (!live.length) return;
+    const n = live.length;
+    this.run('assign layer', () => { for (const ent of live) ent.layerId = layerId; });
+    this.onLayersChanged();
+    this.toast(`${n} element${n === 1 ? '' : 's'} moved to layer "${ly.name}"`);
   }
   /** Quantities for the properties panel and the database record. */
   elementQuantities(ent) {
@@ -2109,6 +2547,9 @@ class App {
     this.btnWire = mk(ICONS.wire, 'Face Style: Shaded / Monochrome / Wireframe', 'toggle', '{}', () => this.action('cycleFaceStyle'));
     bar.appendChild(Object.assign(document.createElement('div'), { className: 'tsep' }));
     this.btnBrowser = mk(ICONS.browser || ICONS.levels, 'Element Browser — Category ➔ Family ➔ Type palette (drag a type into the viewport to place it)', 'toggle', '{}', () => this.toggleElementBrowser());
+    this.btnLayers = mk(ICONS.layers || ICONS.browser, 'Layers — AutoCAD-style layer manager (assign elements, on/off, lock, color, current layer)', 'toggle', '{}', () => this.toggleLayersPanel());
+    this.btnFamilies = mk(ICONS.families || ICONS.browser, 'Families — parametric design catalog (column styles: classical, regional, modern, structural); size one and place it', 'toggle', '{}', () => this.toggleFamiliesPanel());
+    this.btnKit = mk(ICONS.blenderkit, 'BlenderKit Assets — search free models and drop them into the scene (needs the local bridge: npm run bridge; GLB-badged models import without Blender)', 'toggle', '{}', () => this.toggleBlenderKit());
     this._syncLevelViewControl(); // populate/show the Level View select if a standard view is locked
     this.refreshToolbar();
   }
@@ -2120,10 +2561,31 @@ class App {
     this.btnWire.title = `Face Style: ${fs} (click to cycle)`;
     if (this.btnBrowser && window.ElementBrowser)
       this.btnBrowser.classList.toggle('on', ElementBrowser.visible);
+    if (this.btnLayers && window.LayerPanel)
+      this.btnLayers.classList.toggle('on', LayerPanel.visible);
+    if (this.btnFamilies && window.FamiliesPanel)
+      this.btnFamilies.classList.toggle('on', FamiliesPanel.visible);
+    if (this.btnKit && window.BlenderKitBrowser)
+      this.btnKit.classList.toggle('on', BlenderKitBrowser.visible);
   }
   // Element Browser palette (ui-browser.js) — toolbar toggle
   toggleElementBrowser(force) {
     if (window.ElementBrowser) ElementBrowser.toggle(force);
+    this.refreshToolbar();
+  }
+  // Layers palette (ui-layers.js) — toolbar toggle
+  toggleLayersPanel(force) {
+    if (window.LayerPanel) LayerPanel.toggle(force);
+    this.refreshToolbar();
+  }
+  // Families palette (ui-families.js) — toolbar toggle
+  toggleFamiliesPanel(force) {
+    if (window.FamiliesPanel) FamiliesPanel.toggle(force);
+    this.refreshToolbar();
+  }
+  // BlenderKit Assets palette (BlenderKitBrowser.js) — toolbar toggle
+  toggleBlenderKit(force) {
+    if (window.BlenderKitBrowser) BlenderKitBrowser.toggle(force);
     this.refreshToolbar();
   }
 
@@ -2132,7 +2594,7 @@ class App {
     const bar = document.getElementById('menubar');
     const defs = [
       ['File', [
-        ['New', 'new', ''], ['Open…', 'open', ''], ['Save As…', 'save', ''],
+        ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
       ]],
       ['Edit', [
@@ -2177,6 +2639,7 @@ class App {
         ['Paint Bucket', 'toolPaint', 'B'], ['Move', 'toolMove', 'M'],
         ['Rotate', 'toolRotate', 'Q'], ['Scale', 'toolScale', 'S'],
         ['Push/Pull', 'toolPushpull', 'P'], ['Offset', 'toolOffset', 'F'],
+        ['Scripted Element…', 'openScript', ''],
         ['Resize Wall', 'toolResize', 'W'],
         ['Tape Measure', 'toolTape', 'T'], ['Orbit', 'toolOrbit', 'O'], ['Pan', 'toolPan', 'H'],
       ]],
@@ -2240,6 +2703,8 @@ class App {
         if (A.db) A.db.replaceAllElements([]).catch(() => { }); // empty model = empty Elements table
       }),
       open: () => document.getElementById('fileinput').click(),
+      openBlend: () => document.getElementById('blendinput').click(),
+      openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       save: () => A.saveFile(),
       exportPng: () => A.view.exportPNG(),
       undo: () => A.undo(), redo: () => A.redo(),
@@ -2417,6 +2882,7 @@ class App {
           this.clearSelection();
           if (this.view.clearPins) this.view.clearPins();
           this.view.rebuild();
+          if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
           this.onLevelsChanged(); // datum view layers follow the loaded model
           this.onGridsChanged();
           this.view.zoomExtents();
@@ -2428,6 +2894,46 @@ class App {
       r.readAsText(f);
       fi.value = '';
     });
+    const bi = document.getElementById('blendinput');
+    if (bi) bi.addEventListener('change', () => {
+      const f = bi.files[0];
+      if (!f) return;
+      bi.value = '';
+      this.openBlendFile(f);
+    });
+  }
+
+  // File ▸ Open .blend… — the bridge converts the upload via headless
+  // Blender (needs Blender on this machine), the GLB lands as a regular
+  // asset instance: selectable, movable, definable as door/window, cached
+  // in IndexedDB so it survives reloads. See server/blenderkitBridge.js.
+  async openBlendFile(file) {
+    const bridge = (window.BLENDERKIT_BRIDGE_URL || 'http://localhost:3001').replace(/\/$/, '');
+    const t0 = performance.now();
+    this.setStatus(`Converting “${file.name}” via Blender… (first run can take a minute)`);
+    try {
+      const res = await fetch(`${bridge}/api/convert-upload?name=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: await file.arrayBuffer(),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => null);
+        throw new Error((j && j.error) || `bridge HTTP ${res.status}`);
+      }
+      const rec = await this.assets.placeGlbBuffer(await res.arrayBuffer(), file.name.replace(/\.blend$/i, ''));
+      this.view.zoomExtents();
+      this.selectAsset(rec.id);
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      this.setStatus(`Opened “${rec.name}” in ${secs} s — click it to select, M to move, ⚙ to define as a door/window`);
+      this.toast(`Opened “${rec.name}” in ${secs} s`);
+    } catch (e) {
+      const msg = (e instanceof TypeError)
+        ? `bridge offline at ${bridge} — start it with "npm run bridge"`
+        : (e.message || String(e));
+      this.toast(`Could not open “${file.name}”: ${msg}`, true);
+      this.setStatus(`Could not open “${file.name}”: ${msg}`, true);
+    }
   }
 
   // ------------------------------------------------------------------ keys
@@ -2664,9 +3170,37 @@ class App {
       if (this.sel.faces.size && !wholeGroup) items.push(['Reverse Faces', () => this.action('reverseFaces')]);
       items.push(['Hide', () => this.action('hideSelected')]);
     }
+    // Layers: assignment rides the context menu — the picked element plus
+    // every element touched by the selection (AutoCAD's "Move to layer")
+    {
+      const layerEnts = new Set();
+      if (pick.face != null) {
+        const pf = this.model.faces.get(pick.face);
+        const pe = pf && this.bim.getEntityForFace(pf);
+        if (pe) layerEnts.add(pe);
+      }
+      for (const fid of this.sel.faces) {
+        const f = this.model.faces.get(fid);
+        const e = f && this.bim.getEntityForFace(f);
+        if (e) layerEnts.add(e);
+      }
+      for (const eid of this.sel.edges) {
+        const e = this.model.edges.get(eid);
+        const ent = e && e.userData && this.bim.getEntityById(e.userData.bimEntityId);
+        if (ent) layerEnts.add(ent);
+      }
+      if (layerEnts.size) {
+        const ly = this.layerOf([...layerEnts][0]);
+        const same = [...layerEnts].every(e => e.layerId === ([...layerEnts][0]).layerId);
+        const scope = layerEnts.size === 1 ? '' : ` ${layerEnts.size} elements`;
+        items.push([`Move${scope} to Layer…${same && ly ? ` (on: ${ly.name})` : ''}`,
+          () => this.moveSelectionToLayerDialog()]);
+      }
+    }
     items.push(null);
     items.push(['Select All (Ctrl+A)', () => this.action('selectAll')]);
     items.push(['Deselect', () => this.clearSelection()]);
+    items.push(['Layers…', () => this.toggleLayersPanel(true)]);
     items.push(['Undo', () => this.undo()]);
 
     menu.innerHTML = '';
@@ -2982,27 +3516,15 @@ class App {
   // geometry drawn on them (a hosted wall covers its grid line) — hitting a
   // hairline within tol px is intentional, so the grid wins over the faces
   // and edges beneath it. Returns { grid, z } or null.
-  _gridLineAt(ev, tol = 10) {
-    if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
+  _gridLineAt(ev, tol = 12) {
+    if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) {
+      return null;
+    }
     const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
-    // every COVERED LEVEL's copy is its own target: the level-2 line selects
-    // from level 2 (the drag plane follows the clicked level)
-    const zsAll = (this.levelManager.levels || [])
-      .map(l => l.elevation).filter(z => z != null).sort((a, b) => a - b);
     let best = null, bd = tol;
-    const lvls = this.levelManager.levels || [];
     for (const g of this.gridManager.grids) {
-      if (g.hidden || g.locked) continue;
-      // only copies that actually RENDER are selectable: a grid hidden at
-      // Level 1 (per-level eye) selects from its Level-2 line, not the ghost
-      const covered = zsAll.filter(z => {
-        if (!g.covers(z)) return false;
-        const l = lvls.find(x => Math.abs(x.elevation - z) < 1e-6);
-        return !l || !g.hiddenAt(l.id);
-      });
-      const zList = covered.length ? covered : [];
-      const poly = g.polyline();
-      for (const z of zList) {
+      for (const z of this._gridSelectableZs(g)) {
+        const poly = g.polyline();
         for (let i = 0; i < poly.length - 1; i++) {
           const sa = this.view.worldToScreenPixels({ x: poly[i][0], y: poly[i][1], z });
           const sb = this.view.worldToScreenPixels({ x: poly[i + 1][0], y: poly[i + 1][1], z });
@@ -3020,14 +3542,110 @@ class App {
     }
     return best;
   }
-  selectGrid(id, z = null) {
-    this.selGridId = id;
-    this.selGridZ = z;
+  // the level Zs at which this grid renders (and therefore selects): every
+  // COVERED level's copy is its own target — a grid hidden at Level 1 keeps
+  // its Level-2 line selectable, the ghost is not
+  _gridSelectableZs(g) {
+    if (g.hidden || g.locked) return [];
+    const lvls = this.levelManager.levels || [];
+    const zsAll = lvls.map(l => l.elevation).filter(z => z != null);
+    return zsAll.filter(z => {
+      if (!g.covers(z)) return false;
+      const l = lvls.find(x => Math.abs(x.elevation - z) < 1e-6);
+      return !l || !g.hiddenAt(l.id);
+    });
+  }
+  // Grid lines caught by a drag window (canvas-pixel box): window mode
+  // (left-to-right) takes lines FULLY inside; crossing mode (right-to-left)
+  // takes lines the box touches. Same visibility rules as clicking.
+  _gridLinesInBox(x0, y0, x1, y1, crossing = false) {
+    if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return [];
+    const inBox = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    // segment vs axis-aligned rect: any endpoint inside, or the segment
+    // crosses one of the four rect edges
+    const segHits = (sa, sb) => {
+      if (inBox(sa.x, sa.y) || inBox(sb.x, sb.y)) return true;
+      const dx = sb.x - sa.x, dy = sb.y - sa.y;
+      for (const t of [0, 1]) {
+        const ex = t === 0 ? x0 : x1, ey = t === 0 ? y0 : y1;
+        // vertical rect edge x = ex: does the segment cross y0..y1 there?
+        if (Math.abs(dx) > 1e-9) {
+          const u = (ex - sa.x) / dx;
+          if (u > 0 && u < 1) { const y = sa.y + dy * u; if (y >= y0 && y <= y1) return true; }
+        }
+        // horizontal rect edge y = ey
+        if (Math.abs(dy) > 1e-9) {
+          const u = (ey - sa.y) / dy;
+          if (u > 0 && u < 1) { const x = sa.x + dx * u; if (x >= x0 && x <= x1) return true; }
+        }
+      }
+      return false;
+    };
+    const out = [];
+    for (const g of this.gridManager.grids) {
+      const zs = this._gridSelectableZs(g);
+      if (!zs.length) continue;
+      const poly = g.polyline();
+      let done = false;
+      for (const z of zs) {
+        if (done) break;
+        const scr = poly.map(p => this.view.worldToScreenPixels({ x: p[0], y: p[1], z }));
+        if (crossing) {
+          for (let i = 0; i < scr.length - 1; i++) {
+            if ((scr[i].visible || scr[i + 1].visible) && segHits(scr[i], scr[i + 1])) {
+              out.push({ grid: g, z }); done = true; break;
+            }
+          }
+        } else if (scr.every(s => s.visible && inBox(s.x, s.y))) {
+          out.push({ grid: g, z }); done = true;
+        }
+      }
+    }
+    return out;
+  }
+  selectGrid(id, z = null, opts = {}) {
+    if (opts.toggle) {
+      if (this.selGridIds.has(id)) this.selGridIds.delete(id);
+      else { this.selGridIds.add(id); this.selGridZ = z; }
+      this.selGridId = this.selGridIds.size
+        ? (this.selGridIds.has(id) ? id : [...this.selGridIds][0]) : null;
+      if (!this.selGridIds.size) this.selGridZ = null;
+    } else {
+      this.selGridIds = new Set([id]);
+      this.selGridId = id; this.selGridZ = z;
+    }
     this.sel.faces.clear(); this.sel.edges.clear();
     this.onSelectionChanged();
-    const g = this.gridManager.getGrid(id);
-    const lvl = z != null && this.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-6);
-    if (g) this.setStatus(`Grid ${g.name} selected${lvl ? ' on ' + lvl.name : ''} — drag the line to move it, Del to delete, endpoint grips to stretch`);
+    const n = this.selGridIds.size;
+    if (!n) { this.setStatus('Grid deselected.'); return; }
+    if (n === 1) {
+      const g = this.gridManager.getGrid(id);
+      const lvl = z != null && this.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-6);
+      if (g) this.setStatus(`Grid ${g.name} selected${lvl ? ' on ' + lvl.name : ''} — drag the line to move it, Del to delete, endpoint grips to stretch`);
+      return;
+    }
+    this.setStatus(`${n} grid lines selected — Del deletes all, Shift+click removes one`);
+  }
+  // box selection: replace or extend the selected-grid set with the lines
+  // caught by a drag window (list of { grid, z } from _gridLinesInBox)
+  selectGrids(list, opts = {}) {
+    if (!list || !list.length) return;
+    if (!opts.add) this.selGridIds = new Set();
+    for (const it of list) this.selGridIds.add(it.grid.id);
+    this.selGridId = [...this.selGridIds][0];
+    this.selGridZ = list[0] && list[0].z != null ? list[0].z : null;
+    // a window that caught ELEMENTS too keeps them selected alongside
+    if (!opts.keep) { this.sel.faces.clear(); this.sel.edges.clear(); }
+    this.onSelectionChanged();
+    const n = this.selGridIds.size;
+    if (n === 1) {
+      const g = this.gridManager.getGrid(this.selGridId);
+      const z = this.selGridZ;
+      const lvl = z != null && this.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-6);
+      if (g) this.setStatus(`Grid ${g.name} selected${lvl ? ' on ' + lvl.name : ''} — drag the line to move it, Del to delete, endpoint grips to stretch`);
+      return;
+    }
+    this.setStatus(`${n} grid lines selected — Del deletes all, Shift+click removes one`);
   }
   _gridGripAt(ev) {
     if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
@@ -3097,6 +3715,13 @@ class App {
   }
   pickEntity(ev) {
     const q = this.view.eventPt(ev);
+    // downloaded-asset instances are physical objects in front of the model:
+    // a hit on them wins over the geometry behind (their own raycast keeps
+    // distances, so this returns the nearest instance under the cursor)
+    if (this.view.pickAssetAt && this.assets) {
+      const aid = this.view.pickAssetAt(q);
+      if (aid != null) return { face: null, edge: null, edges: [], group: null, asset: aid };
+    }
     const fid = this.view.pickFaceAt(q);
     if (fid != null) {
       const f = this.model.faces.get(fid);
@@ -3349,27 +3974,124 @@ class App {
     }
     this.onSelectionChanged();
   }
+  // ------------------------------------------------------------- asset select
+  selectAsset(id, mode = 'replace') {
+    const rec = this.assets && this.assets.get(id);
+    if (!rec) return;
+    if (mode === 'toggle') {
+      if (this.selAssets.has(id)) this.selAssets.delete(id); else this.selAssets.add(id);
+    } else {
+      this.sel = { edges: new Set(), faces: new Set() };
+      this.selAssets = new Set([id]);
+    }
+    this.onSelectionChanged();
+  }
+  // Asset-only mutations (place/move/define) never touch the kernel, so they
+  // skip the transaction layer — but they must still reach autosave.
+  assetsChanged() {
+    if (this._eip) return;
+    this._saveAutosave();
+  }
+  // Register a downloaded model as a catalog type in the Element Browser.
+  // Doors/windows land in the existing Door/Window categories under a
+  // "BlenderKit" family (so they sit beside the built-in types); objects get
+  // their own category. Dimensions default to the instance's own bounding
+  // box — the opening matches the model until sized otherwise with the VCB.
+  async defineAssetKind(id, kind) {
+    const rec = this.assets && this.assets.get(id);
+    if (!rec) { this.toast('That asset is no longer in the scene', true); return; }
+    if (!this.db) { this.toast('Element Browser database unavailable', true); return; }
+    kind = (kind === 'door' || kind === 'window') ? kind : 'object';
+    try {
+      const cats = await this.db.getCatalog();
+      let cat, famId;
+      if (kind === 'object') {
+        cat = cats.categories.find(c => c.id === 'cat_bk_objects');
+        if (!cat) { cat = { id: 'cat_bk_objects', name: 'Objects (Downloaded)' }; await this.db.putCategory(cat); }
+        famId = 'fam_bk_objects';
+        if (!cats.families.some(f => f.id === famId)) await this.db.putFamily({ id: famId, categoryId: cat.id, name: 'BlenderKit' });
+      } else {
+        const catName = kind === 'door' ? 'Door' : 'Window';
+        cat = cats.categories.find(c => c.name === catName);
+        if (!cat) { cat = { id: 'cat_bk_' + kind, name: catName }; await this.db.putCategory(cat); }
+        famId = 'fam_bk_' + kind;
+        if (!cats.families.some(f => f.id === famId)) await this.db.putFamily({ id: famId, categoryId: cat.id, name: 'BlenderKit' });
+      }
+      const thumb = (window.BlenderKitBrowser && BlenderKitBrowser.thumbFor && BlenderKitBrowser.thumbFor(rec.assetId)) || '';
+      const params = {
+        assetId: rec.assetId, assetName: rec.name, kind, thumbUrl: thumb,
+        width: +Math.max(0.1, rec.size.x).toFixed(3),
+        height: +Math.max(0.1, rec.size.z).toFixed(3),
+        depth: +Math.max(0.02, rec.size.y).toFixed(3),
+        sill: kind === 'window' ? 0.9 : 0,
+      };
+      await this.db.ensureType(famId, rec.name, params);
+      rec.kind = kind;
+      this.assets.changed('defined', rec);
+      this.onSelectionChanged(); // kind chip in Entity Info refreshes
+      this.toast(`“${rec.name}” defined as ${kind === 'object' ? 'an object' : 'a ' + kind} — it is in the Element Browser${kind !== 'object' ? ' (drag it onto a wall)' : ''}`);
+    } catch (e) {
+      this.toast('Could not define the asset: ' + (e.message || e), true);
+    }
+  }
   clearSelection() {
     this.sel = { edges: new Set(), faces: new Set() };
     this.selGridId = null;
     this.selGridZ = null;
+    this.selGridIds.clear();
+    this.selAssets.clear();
     this.onSelectionChanged();
   }
   pruneSelection() {
     for (const id of [...this.sel.faces]) if (!this.model.faces.has(id)) this.sel.faces.delete(id);
     for (const id of [...this.sel.edges]) if (!this.model.edges.has(id)) this.sel.edges.delete(id);
+    if (this.assets) for (const id of [...this.selAssets]) if (!this.assets.get(id)) this.selAssets.delete(id);
   }
   onSelectionChanged() {
     this.view.updateSelectionVisuals();
+    if (this.view.updateAssetSelection && this.assets)
+      this.view.updateAssetSelection(this.selAssets, this.assets);
     this.updateInfo();
     // the selected grid highlights in its own overlay (setGrids rebuild)
     if (this.gridManager && this.gridManager.grids.length && this.view.setGrids)
-      this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null, this.selGridZ);
+      this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridIds.size ? this.selGridIds : (this.selGridId || null), this.selGridZ);
     if (this.tool && this.tool.id === 'scale') { this.tool.activate(); this.tool.status(); }
   }
   updateInfo() {
     const el = document.getElementById('entityinfo');
     const model = this.model;
+
+    // ----- downloaded-asset instance(s) selected: asset inspector -----
+    if (this.selAssets.size && !this.sel.faces.size && !this.sel.edges.size && this.assets) {
+      const recs = [...this.selAssets].map(id => this.assets.get(id)).filter(Boolean);
+      if (recs.length === 1) {
+        const r = recs[0];
+        const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const dims = `${r.size.x.toFixed(2)} × ${r.size.y.toFixed(2)} × ${r.size.z.toFixed(2)} m`;
+        el.innerHTML = `
+          <div class="solid-badge" style="margin-top:2px">Downloaded Asset — ${esc(r.kind)}${r.host ? ' · hosted on ' + esc(r.host.wallId) : ''}</div>
+          <div style="margin-top:6px;font-weight:600">${esc(r.name)}</div>
+          <div style="color:#6a7178;font-size:12px;margin-top:2px">${dims} · ${r.host ? `opening ${fmtLen(r.host.width)} × ${fmtLen(r.host.height)} at ${fmtLen(r.host.sill)} sill` : 'free object'}</div>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+            <button class="mini-btn" data-ak="door">Define as Door</button>
+            <button class="mini-btn" data-ak="window">Define as Window</button>
+            <button class="mini-btn" data-ak="object">Define as Object</button>
+          </div>
+          <div style="margin-top:6px;display:flex;gap:6px">
+            <button class="mini-btn" data-am>Move (M)</button>
+            <button class="mini-btn" data-arm>Remove</button>
+          </div>`;
+        el.querySelectorAll('[data-ak]').forEach(b =>
+          b.addEventListener('click', () => this.defineAssetKind(r.id, b.dataset.ak)));
+        el.querySelector('[data-am]').addEventListener('click', () => this.setTool('move'));
+        el.querySelector('[data-arm]').addEventListener('click', () => { this.selectAsset(r.id); this.deleteSelection(); });
+        return;
+      }
+      el.innerHTML = `<div class="solid-badge">${recs.length} downloaded assets selected</div>
+        <div style="margin-top:6px"><button class="mini-btn" id="ai-arm">Remove all</button></div>`;
+      el.querySelector('#ai-arm').addEventListener('click', () => this.deleteSelection());
+      return;
+    }
 
     // ----- one whole group selected: group inspector -----
     const gid = this.singleGroupSelection();
@@ -3416,6 +4138,52 @@ class App {
     // ----- one whole BIM element selected: element inspector -----
     const ent = this.singleElementSelection();
     if (ent) {
+      // scripted element: editable input per declared param — the script's
+      // OWN parameter list IS the properties section, whatever it declares
+      const script = ent.type === 'script' && this.scriptElements
+        ? this.scriptElements.get(ent.params.scriptId) : null;
+      if (ent.type === 'script') {
+        const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        if (!script) {
+          el.innerHTML = `<div class="gi-name"><span class="gi-cat">Scripted</span> <span class="gi-eid">${ent.id}</span></div>
+            <div class="warn-badge">Script missing: ${esc(ent.params.scriptName || ent.params.scriptId)}</div>
+            <div class="stats dim" style="margin-top:4px">Re-save it via the “script” command, then pick this element's type again.</div>`;
+          return;
+        }
+        const fields = script.params.map(pd => {
+          const v = ent.params.values[pd.id];
+          if (pd.type === 'checkbox')
+            return `<div class="gi-prow"><span>${esc(pd.label)}</span><input type="checkbox" data-sp="${pd.id}"${v ? ' checked' : ''}></div>`;
+          if (pd.type === 'select')
+            return `<div class="gi-prow"><span>${esc(pd.label)}</span><select data-sp="${pd.id}">${pd.options.map(o =>
+              `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select></div>`;
+          return `<div class="gi-prow"><span>${esc(pd.label)}</span><input data-sp="${pd.id}" value="${v != null ? v : pd.def}"></div>`;
+        }).join('');
+        el.innerHTML = `
+          <div class="gi-name"><span class="gi-cat">Scripted</span> <span class="gi-eid">${ent.id}</span></div>
+          <div class="stats">${esc(script.name)} — edit a value and the geometry regenerates</div>
+          <div class="gi-params">${fields}</div>
+          <button class="mini-btn" id="gi-scr-edit">✎ Edit Script</button>
+          <button class="mini-btn" id="gi-del">Delete</button>`;
+        el.querySelectorAll('[data-sp]').forEach(inp => {
+          inp.addEventListener('change', () => {
+            const pd = script.params.find(x => x.id === inp.dataset.sp);
+            const raw = pd.type === 'checkbox' ? inp.checked : inp.value;
+            this.run('edit scripted element', () => {
+              try { this.scriptElements.rebuildEntity(ent.id, { values: { [pd.id]: raw } }); }
+              catch (e) { throw e; }
+            });
+            this.selectElement(ent.id); // keep it selected across the rebuild
+            this.updateInfo();
+          });
+        });
+        el.querySelector('#gi-scr-edit').addEventListener('click', () => this.scriptElements.openEditor(script.id));
+        el.querySelector('#gi-del').addEventListener('click', () => {
+          this.selectElement(ent.id);
+          this.action('deleteSelection');
+        });
+        return;
+      }
       const info = this.elements ? this.elements.catalogInfoFor(ent) : null;
       const q = this.elementQuantities(ent);
       const fam = (info && info.familyName) || '—';
@@ -3499,7 +4267,8 @@ class App {
     if (!gp || !this.db || !this.elements) return false;
     const hasIx = gp.selIx && gp.selIx.size > 0;
     const hasLines = gp.selLine && gp.selLine.size > 0;
-    if (!hasIx && !hasLines) return false; // no grid selection -> arm the tool
+    const hasCells = gp.selCell && gp.selCell.size > 0;
+    if (!hasIx && !hasLines && !hasCells) return false; // no grid selection -> arm the tool
     const cat2 = this.elements._catalog || {};
     const type = (cat2.types || []).find(t => t.id === typeId);
     if (!type) return false;
@@ -3569,9 +4338,53 @@ class App {
       if (window.ElementBrowser && ElementBrowser.refresh) ElementBrowser.refresh();
       return true;
     }
+    // Structural Framing (beams) with grid LINES selected: place spans
+    if ((catName.indexOf('framing') >= 0 || catName.indexOf('beam') >= 0) && hasLines) {
+      const prev = {
+        profile: gp.state.beamProfile, height: gp.state.beamHeight, width: gp.state.beamWidth,
+        flw: gp.state.flangeWidth, flt: gp.state.flangeThickness,
+        what: gp.state.placeWhat, sel: gp.state.selectWhat,
+      };
+      const BP = window.BeamProfiles;
+      const norm = BP ? BP.normalize({
+        profile: dp.profile || 'rectangular', height: dp.height, webWidth: dp.webWidth || dp.width,
+        flangeWidth: dp.flangeWidth, flangeThickness: dp.flangeThickness,
+      }) : null;
+      gp.state.beamProfile = norm ? norm.profile : (dp.profile || 'rectangular');
+      if (norm) {
+        gp.state.beamHeight = norm.height; gp.state.beamWidth = norm.webWidth;
+        gp.state.flangeWidth = norm.flangeWidth; gp.state.flangeThickness = norm.flangeThickness;
+      }
+      gp.state.placeWhat = 'beams'; gp.state.selectWhat = 'lines';
+      try { gp._place(); } finally {
+        gp.state.beamProfile = prev.profile; gp.state.beamHeight = prev.height; gp.state.beamWidth = prev.width;
+        gp.state.flangeWidth = prev.flw; gp.state.flangeThickness = prev.flt;
+        gp.state.placeWhat = prev.what; gp.state.selectWhat = prev.sel;
+      }
+      if (window.ElementBrowser && ElementBrowser.refresh) ElementBrowser.refresh();
+      return true;
+    }
+    // Floor / Slab with grid CELLS selected: fill every selected bay
+    if ((catName === 'floor' || catName === 'slab') && hasCells) {
+      const prevT = gp.state.slabThickness, prevK = gp.state.slabKind;
+      const prevWhat = gp.state.placeWhat, prevSel = gp.state.selectWhat;
+      gp.state.slabThickness = Math.max(0.05, +dp.thickness || 0.2);
+      gp.state.slabKind = catName === 'floor' ? 'floor' : 'slab';
+      gp.state.placeWhat = 'floors'; gp.state.selectWhat = 'cells';
+      try { gp._place(); } finally {
+        gp.state.slabThickness = prevT; gp.state.slabKind = prevK;
+        gp.state.placeWhat = prevWhat; gp.state.selectWhat = prevSel;
+      }
+      if (window.ElementBrowser && ElementBrowser.refresh) ElementBrowser.refresh();
+      return true;
+    }
     this.toast(catName.indexOf('wall') >= 0
       ? 'Walls need Grid LINES selected (Grid Place: Select → Grid Lines)'
-      : `${(fam || {}).categoryId ? (catName || 'this category') : 'This type'} places by drawing — doors/windows need a wall host`);
+      : (catName.indexOf('framing') >= 0 || catName.indexOf('beam') >= 0)
+        ? 'Beams need Grid LINES selected (Grid Place: Select → Grid Lines)'
+        : (catName === 'floor' || catName === 'slab')
+          ? 'Floors need Grid CELLS selected (Grid Place: Select → Grid Cells)'
+          : `${(fam || {}).categoryId ? (catName || 'this category') : 'This type'} places by drawing — doors/windows need a wall host`);
     return true;
   }
   // Clean Up: purge every wire edge (attached to no face) in one undoable
@@ -3610,18 +4423,44 @@ class App {
     this.toast(`Exported model.gltf — ${tris} triangles, ${mesh.primitives.length} material${mesh.primitives.length === 1 ? '' : 's'}`);
   }
   deleteSelection() {
-    // a selected grid line goes first (its hosted elements re-project)
-    if (this.selGridId) {
-      const g = this.gridManager && this.gridManager.getGrid(this.selGridId);
-      const id = this.selGridId;
-      this.selGridId = null;
+    // selected asset instances go first — hosted ones heal their wall inside
+    // one transaction (the rebuild re-cuts every OTHER hosted element)
+    if (this.selAssets.size && this.assets) {
+      const ids = [...this.selAssets];
+      const names = [];
+      this.run('delete assets', () => {
+        const walls = new Set();
+        for (const id of ids) {
+          const rec = this.assets.get(id);
+          if (!rec) continue;
+          if (rec.host && rec.host.wallId) walls.add(rec.host.wallId);
+          this.assets.remove(id, { heal: false });
+          names.push(rec.name);
+        }
+        for (const wid of walls) this.bim.rebuildWallWithHosts(wid);
+      });
+      this.selAssets.clear();
+      this.onSelectionChanged();
+      if (names.length) this.toast(`Removed “${names[0]}”${names.length > 1 ? ` + ${names.length - 1} more` : ''}`);
+      return;
+    }
+    // selected grid lines go first (their hosted elements re-project)
+    if (this.selGridIds.size) {
+      const ids = [...this.selGridIds];
+      const names = [], refused = [];
+      this.run('delete grid', () => {
+        for (const id of ids) {
+          const g = this.gridManager.getGrid(id);
+          const err = this.gridManager.removeGrid(id);
+          if (typeof err === 'string') refused.push({ id, err }); // locked or elements attached
+          else if (g) names.push(g.name);
+        }
+      });
+      this.selGridIds = new Set(refused.map(r => r.id));
+      this.selGridId = this.selGridIds.size ? [...this.selGridIds][0] : null;
       this.selGridZ = null;
-      let err = null;
-      this.run('delete grid', () => { err = this.gridManager.removeGrid(id); });
-      if (typeof err === 'string') { // locked or elements attached: refused
-        this.selGridId = id; // stays selected so the user can act
-        this.toast(err, true);
-      } else if (g) this.toast(`Grid ${g.name} deleted`);
+      if (names.length) this.toast(`Grid ${names.join(', ')} deleted`);
+      if (refused.length) this.toast(refused[0].err, true); // stays selected so the user can act
       this.onSelectionChanged();
       return;
     }
@@ -3734,12 +4573,45 @@ class App {
     if (!this.structural) return 0;
     return this.syncStructuralWalls([pendingEnt]);
   }
+  // Drop-panel columns re-fit when slabs appear, move or vanish above them:
+  // the head must hang UNDER the covering slab (flat-slab construction) and
+  // grows back to the level plane when the slab is deleted. Mirrors the wall
+  // clearance sync — the parametric registry drives everything. `pool` may
+  // append not-yet-registered pending slabs (pre-fit before a sweep).
+  // Returns the number of columns whose head moved.
+  syncDropPanels(pool = null) {
+    if (!this.structural) return 0;
+    const structure = pool ? [...this.bim.entities, ...pool] : null;
+    let n = 0;
+    for (const ent of this.bim.entities) {
+      if (ent.type !== 'column' || !ent.params || !ent.faces.length) continue;
+      if (!this.structural.isDropPanel(ent.params)) continue;
+      const desired = this.structural.columnSolidTop(this.model, ent.params, structure);
+      // current solid top straight from the built geometry (source of truth —
+      // survives undo/redo and file loads without extra bookkeeping)
+      let cur = -Infinity;
+      for (const fid of ent.faces) {
+        const f = this.model.faces.get(fid);
+        if (!f) continue;
+        const c = this.model.faceCentroid(f);
+        if (c) cur = Math.max(cur, c.z);
+      }
+      if (cur === -Infinity) continue;
+      if (Math.abs(cur - desired) < 1e-4) continue; // already fits
+      const changed = this.transaction.run('drop panel fit', () =>
+        this.bim.refitDropPanelColumn(ent.id, desired));
+      if (changed === true) n++;
+    }
+    if (n) this.view.rebuild();
+    return n;
+  }
 
   // ------------------------------------------------------------------ undo
   undo() {
     if (!this.undoStack.length) { this.toast('Nothing to undo'); return; }
     this.redoStack.push(this.model.serialize());
     this.model.load(this.undoStack.pop());
+    if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
     // restored params can disagree with cached catalog types — re-resolve
     if (this.elements && this.elements.invalidateAllTypes) { this.elements.invalidateAllTypes(); this.syncElementsToDb(); }
     if (this.view.clearPins) this.view.clearPins(); // pinned areas belong to the overwritten state
@@ -3750,6 +4622,7 @@ class App {
     this.view.rebuild();
     this.onLevelsChanged(); // level edits are transactional too — resync planes/dropdowns
     this.onGridsChanged();  // grids ride the same snapshots
+    if (window.LayerPanel) LayerPanel.refresh(); // layer ops are transactional too
     this.updateInfo();
     this.refreshGroups();
     this._updateEditBox();
@@ -3759,6 +4632,7 @@ class App {
     if (!this.redoStack.length) { this.toast('Nothing to redo'); return; }
     this.undoStack.push(this.model.serialize());
     this.model.load(this.redoStack.pop());
+    if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
     if (this.elements && this.elements.invalidateAllTypes) { this.elements.invalidateAllTypes(); this.syncElementsToDb(); }
     if (this.view.clearPins) this.view.clearPins();
     if (this.activeGroup != null && !this.model.groups.has(this.activeGroup)) this.exitGroup();
@@ -3768,6 +4642,7 @@ class App {
     this.view.rebuild();
     this.onLevelsChanged();
     this.onGridsChanged();
+    if (window.LayerPanel) LayerPanel.refresh();
     this.updateInfo();
     this.refreshGroups();
     this._updateEditBox();
@@ -3795,6 +4670,11 @@ class App {
     }
     this.pruneSelection();
     this.model.pruneGroups();
+    // hosted asset instances die with their wall (like hosted doors)
+    if (this.assets) {
+      const gone = this.assets.checkOrphans();
+      if (gone) this.toast(`${gone} hosted asset${gone === 1 ? '' : 's'} removed with its wall`);
+    }
     if (this.activeGroup != null && !this.model.groups.has(this.activeGroup)) this.exitGroup();
     // dynamic infill walls follow structure changes — DEFERRED: opDone also
     // fires mid-tool (geometry committed, entity not yet registered); syncing
@@ -3804,6 +4684,7 @@ class App {
       queueMicrotask(() => {
         this._wallSyncQueued = false;
         this.syncStructuralWalls(); // deletions/edits re-fit walls (grow back)
+        this.syncDropPanels(); // drop heads re-hang under slabs (or grow back)
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates
@@ -3898,5 +4779,13 @@ function vpCursor(toolId) {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  window.app = new App();
+  try { window.app = new App(); }
+  catch (e) { // surface boot crashes into the DOM — headless runs have no console
+    const d = document.createElement('div');
+    d.id = 'booterr';
+    d.textContent = 'BOOT FAILED: ' + (e && (e.stack || e.message) || e);
+    d.style.cssText = 'position:fixed;left:8px;top:60px;z-index:99999;background:#fff;color:#c5221f;font:11px monospace;max-width:640px;white-space:pre-wrap;padding:6px;border:1px solid #c5221f';
+    document.body.appendChild(d);
+    throw e;
+  }
 });

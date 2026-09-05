@@ -26,9 +26,9 @@
   class GridPlaceTool extends Tool {
     static id = 'gridplace';
     activate() {
-      this._selByLevel = {};   // baseLevelId -> { ix:Set, line:Set } — each
+      this._selByLevel = {};   // baseLevelId -> { ix:Set, line:Set, cell:Set } — each
                                // working level keeps its OWN selection
-      this.hover = null;       // {ix} | {line}
+      this.hover = null;       // {ix} | {line} | {cell}
       this._down = null;       // rubber-band start {x,y} screen
       this._cur = null;        // current screen pt while dragging
       this._lastEv = null;
@@ -37,11 +37,12 @@
     _levelSel() {
       const k = (this.app.bimOptions && this.app.bimOptions.baseLevel) || 'lvl';
       if (!this._selByLevel) this._selByLevel = {};
-      if (!this._selByLevel[k]) this._selByLevel[k] = { ix: new Set(), line: new Set() };
+      if (!this._selByLevel[k]) this._selByLevel[k] = { ix: new Set(), line: new Set(), cell: new Set() };
       return this._selByLevel[k];
     }
     get selIx() { return this._levelSel().ix; }      // "x|y" keys, this level
     get selLine() { return this._levelSel().line; }  // grid ids, this level
+    get selCell() { return this._levelSel().cell; }  // composite grid-pair keys
     // level switches refresh the tool hint — repaint markers too, so the
     // viewport immediately shows the new working level's selection
     status() {
@@ -51,9 +52,9 @@
     deactivate() { this.app.view.clearPreview(); super.deactivate(); }
     get hint() {
       const s = this.state || {};
-      const what = s.selectWhat === 'lines' ? 'grid LINES' : 'grid INTERSECTIONS';
-      const withWhat = s.placeWhat === 'walls' ? 'WALLS' : 'COLUMNS';
-      const n = s.selectWhat === 'lines' ? this.selLine.size : this.selIx.size;
+      const what = { lines: 'grid LINES', cells: 'grid CELLS', intersections: 'grid INTERSECTIONS' }[s.selectWhat] || 'grid INTERSECTIONS';
+      const withWhat = { walls: 'WALLS', beams: 'BEAMS', floors: 'FLOORS/SLABS', columns: 'COLUMNS' }[s.placeWhat] || 'COLUMNS';
+      const n = s.selectWhat === 'lines' ? this.selLine.size : s.selectWhat === 'cells' ? this.selCell.size : this.selIx.size;
       const lvl = (this.app.levelManager.getLevel(this.app.bimOptions.baseLevel) || {}).name || this.app.bimOptions.baseLevel;
       return `Grid Select & Place (${what} -> ${withWhat}) — working level: ${lvl}. Click or drag a window to select (${n} selected on ${lvl}). Enter = place on ${lvl}, Esc = clear this level. Switch Base Level for an independent selection per level.`;
     }
@@ -80,6 +81,132 @@
       const at = t => [g.start[0] + d[0] * t, g.start[1] + d[1] * t];
       return { a: at(Math.max(0, ts[0])), b: at(Math.min(L, ts[ts.length - 1])) };
     }
+    // Grid CELLS: the rectangle between two adjacent X-running grids and two
+    // adjacent Y-running grids of one system — the enclosed bay a floor or
+    // slab fills. Corners are true grid intersections, so skewed systems
+    // still close cleanly; curved grids are skipped (arcs want a sketch).
+    _cells() {
+      const gm = this.app.gridManager;
+      if (!gm) return [];
+      const straight = gm.grids.filter(g => !g.isCurved && !g.hidden);
+      if (!straight.length) return [];
+      const systems = [...new Set(straight.map(g => g.system || 'Main'))];
+      const dirOf = g => Math.abs(g.end[0] - g.start[0]) >= Math.abs(g.end[1] - g.start[1]) ? 'x' : 'y';
+      const mid = g => [(g.start[0] + g.end[0]) / 2, (g.start[1] + g.end[1]) / 2];
+      const out = [];
+      for (const sys of systems) {
+        const sg = straight.filter(g => (g.system || 'Main') === sys);
+        const xs = sg.filter(g => dirOf(g) === 'x').sort((a, b) => mid(a)[1] - mid(b)[1]); // stack along Y
+        const ys = sg.filter(g => dirOf(g) === 'y').sort((a, b) => mid(a)[0] - mid(b)[0]); // stack along X
+        for (let i = 0; i + 1 < xs.length; i++) {
+          for (let j = 0; j + 1 < ys.length; j++) {
+            const x1 = xs[i], x2 = xs[i + 1], y1 = ys[j], y2 = ys[j + 1];
+            const c1 = GridLine.intersect(x1, y1), c2 = GridLine.intersect(x1, y2);
+            const c3 = GridLine.intersect(x2, y2), c4 = GridLine.intersect(x2, y1);
+            if (!c1 || !c2 || !c3 || !c4) continue;
+            const ring = [c1, c2, c3, c4]; // CCW by the sort order
+            const area2 = Math.abs(
+              (ring[1][0] - ring[0][0]) * (ring[2][1] - ring[0][1]) -
+              (ring[1][1] - ring[0][1]) * (ring[2][0] - ring[0][0]));
+            if (area2 < 1e-6) continue; // degenerate bay
+            // edge i (ring[i] -> ring[i+1]) lies ON one boundary grid —
+            // recorded so the location-line offsets know which line moves
+            const sides = [
+              { grid: x1, a: c1, b: c2 },
+              { grid: y2, a: c2, b: c3 },
+              { grid: x2, a: c3, b: c4 },
+              { grid: y1, a: c4, b: c1 },
+            ];
+            out.push({ key: `${x1.id}|${x2.id}|${y1.id}|${y2.id}`, ring, sides });
+          }
+        }
+      }
+      return out;
+    }
+    // the column (if any) standing at grid intersection p
+    _columnAt(p) {
+      for (const ent of (this.app.bim ? this.app.bim.entities : [])) {
+        if (ent.type !== 'column' || !ent.params || !ent.params.base) continue;
+        const b = ent.params.base;
+        if (Math.hypot(b[0] - p[0], b[1] - p[1]) < 0.3) return ent;
+      }
+      return null;
+    }
+    // axis-aligned footprint corners of one column
+    _columnFootprint(ent) {
+      const b = ent.params.base, w = (+ent.params.width || 0.3) / 2, d = (+ent.params.depth || 0.3) / 2;
+      return [
+        { x: b[0] - w, y: b[1] - d }, { x: b[0] + w, y: b[1] - d },
+        { x: b[0] + w, y: b[1] + d }, { x: b[0] - w, y: b[1] + d },
+      ];
+    }
+    // Location line: shift one cell side off its grid to the nearby columns'
+    // faces — 'exterior' covers the columns, 'interior' stops at their near
+    // faces, centered columns make both 0.2 m for a 0.4 column. Returns the
+    // shifted infinite line as { p0, dir }.
+    _sideLine(side, center, mode) {
+      const g = side.grid;
+      const dx = g.end[0] - g.start[0], dy = g.end[1] - g.start[1];
+      const L = Math.hypot(dx, dy) || 1;
+      const ux = dx / L, uy = dy / L;         // along the grid
+      const nx = -uy, ny = ux;                 // unit normal
+      const sC = (center[0] - g.start[0]) * nx + (center[1] - g.start[1]) * ny;
+      const sgn = sC >= 0 ? 1 : -1;            // interior side of the line
+      let fIn = 0, fOut = 0;                   // column faces toward/away from the cell
+      for (const p of [side.a, side.b]) {
+        const col = this._columnAt(p);
+        if (!col) continue;
+        for (const q of this._columnFootprint(col)) {
+          const sd = sgn * ((q.x - g.start[0]) * nx + (q.y - g.start[1]) * ny);
+          if (sd > fIn) fIn = sd;
+          if (-sd > fOut) fOut = -sd;
+        }
+      }
+      // exterior moves OUT past the columns — 1 mm beyond the face so the
+      // punch pass sees the footprint STRICTLY inside (pointIn counts
+      // boundary as outside; exactly-on-face would skip the punch and the
+      // slab would swallow the column's skin into its own entity)
+      const shift = mode === 'interior' ? fIn : (fOut > 0 ? -(fOut + 1e-3) : 0);
+      return { p0: [g.start[0] + nx * sgn * shift, g.start[1] + ny * sgn * shift], dir: [ux, uy] };
+    }
+    // the cell's footprint ring after the location-line mode is applied
+    // (centerline = the grid ring unchanged)
+    _cellRing(cell, mode) {
+      if (mode !== 'exterior' && mode !== 'interior') return cell.ring;
+      const c = [
+        (cell.ring[0][0] + cell.ring[2][0]) / 2, (cell.ring[0][1] + cell.ring[2][1]) / 2,
+      ];
+      const lines = cell.sides.map(s => this._sideLine(s, c, mode));
+      const lineX2 = (l1, l2) => {
+        const den = l1.dir[0] * l2.dir[1] - l1.dir[1] * l2.dir[0];
+        if (Math.abs(den) < 1e-9) return null;
+        const t = ((l2.p0[0] - l1.p0[0]) * l2.dir[1] - (l2.p0[1] - l1.p0[1]) * l2.dir[0]) / den;
+        return [l1.p0[0] + l1.dir[0] * t, l1.p0[1] + l1.dir[1] * t];
+      };
+      const ring = [];
+      for (let i = 0; i < 4; i++) {
+        const q = lineX2(lines[(i + 3) % 4], lines[i]); // corner before side i
+        if (!q) return cell.ring;                       // degenerate offset — keep centerline
+        ring.push(q);
+      }
+      const a2 = Math.abs((ring[1][0] - ring[0][0]) * (ring[2][1] - ring[0][1]) -
+        (ring[1][1] - ring[0][1]) * (ring[2][0] - ring[0][0]));
+      if (a2 < 1e-6) return cell.ring;                  // collapsed — keep centerline
+      return ring;
+    }
+    // convex-quad containment (two grid families always cross into convex bays)
+    _inCell(w, cell) {
+      const r = cell.ring;
+      let sign = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = r[i], b = r[(i + 1) % 4];
+        const cr = (b[0] - a[0]) * (w[1] - a[1]) - (b[1] - a[1]) * (w[0] - a[0]);
+        if (Math.abs(cr) < 1e-12) continue;
+        if (sign === 0) sign = Math.sign(cr);
+        else if (Math.sign(cr) !== sign) return false;
+      }
+      return true;
+    }
     // toScreen() returns CANVAS-LOCAL pixels; tool events carry CLIENT
     // coordinates — convert before comparing.
     _clientPt(sp) {
@@ -89,6 +216,12 @@
     _hoverAt(ev) {
       const view = this.app.view;
       const s = this.state || {};
+      if (s.selectWhat === 'cells') {
+        const w = this._screenToWorld({ x: ev.clientX, y: ev.clientY });
+        if (!w) return null;
+        for (const cell of this._cells()) if (this._inCell(w, cell)) return { cell };
+        return null;
+      }
       if (s.selectWhat === 'lines') {
         const gm = this.app.gridManager;
         if (!gm) return null;
@@ -147,8 +280,15 @@
         else view.previewLoop(ring, color);
       };
       const linesMode = s.selectWhat === 'lines';
+      const cellsMode = s.selectWhat === 'cells';
       // faint pass: all selectable targets
-      if (linesMode) {
+      if (cellsMode) {
+        for (const cell of this._cells()) {
+          const ring = cell.ring.map(p => G.v(p[0], p[1], z));
+          if (this.selCell.has(cell.key)) view.previewFill([{ outer: ring }], 0xf59e0b, 0.4);
+          else view.previewLoop(ring, 0x94a3b8);
+        }
+      } else if (linesMode) {
         const gm = this.app.gridManager;
         if (gm) for (const g of gm.grids) {
           const e = this._lineExtent(g);
@@ -158,6 +298,17 @@
         for (const ix of this._ixs()) marker(ix.p, this.selIx.has(IX_KEY(ix.p)) ? 0xf59e0b : 0x94a3b8, this.selIx.has(IX_KEY(ix.p)));
       }
       // hover
+      if (this.hover && this.hover.cell) {
+        const ring = this.hover.cell.ring.map(p => G.v(p[0], p[1], z));
+        view.previewFill([{ outer: ring }], 0x0ea5e9, 0.25);
+        // location line != centerline: show the real footprint the slab
+        // will get (offset to the nearby columns' faces)
+        const loc = (this.state || {}).slabLoc;
+        if (s.placeWhat === 'floors' && (loc === 'exterior' || loc === 'interior')) {
+          const off = this._cellRing(this.hover.cell, loc).map(p => G.v(p[0], p[1], z));
+          view.previewLoop(off, 0x0ea5e9);
+        }
+      }
       if (this.hover && this.hover.ix) marker(this.hover.ix.p, 0x0ea5e9, true);
       if (this.hover && this.hover.line) {
         const e = this._lineExtent(this.hover.line);
@@ -207,7 +358,9 @@
       if (drag < 6) {
         const h = this._hoverAt(ev);
         if (!h) return;
-        if (h.ix) {
+        if (h.cell) {
+          this.selCell.has(h.cell.key) ? this.selCell.delete(h.cell.key) : this.selCell.add(h.cell.key);
+        } else if (h.ix) {
           const k = IX_KEY(h.ix.p);
           this.selIx.has(k) ? this.selIx.delete(k) : this.selIx.add(k);
         } else if (h.line) {
@@ -220,7 +373,9 @@
         const lo = [Math.min(wa[0], wb[0]), Math.min(wa[1], wb[1])];
         const hi = [Math.max(wa[0], wb[0]), Math.max(wa[1], wb[1])];
         const inside = p => p[0] >= lo[0] && p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1];
-        if (s.selectWhat === 'lines') {
+        if (s.selectWhat === 'cells') {
+          for (const cell of this._cells()) if (cell.ring.every(p => inside(p))) this.selCell.add(cell.key);
+        } else if (s.selectWhat === 'lines') {
           const gm = this.app.gridManager;
           for (const g of (gm ? gm.grids : [])) {
             const has = this._ixs().some(ix => (ix.a === g || ix.b === g) && inside(ix.p));
@@ -237,8 +392,8 @@
     onKey(ev) {
       if (ev.key === 'Enter') { this._place(); return true; }
       if (ev.key === 'Escape') {
-        if (this.selIx.size || this.selLine.size) {
-          this.selIx.clear(); this.selLine.clear();
+        if (this.selIx.size || this.selLine.size || this.selCell.size) {
+          this.selIx.clear(); this.selLine.clear(); this.selCell.clear();
           this.app.view.clearPreview(); this._draw(); this.status();
           return true;
         }
@@ -270,6 +425,177 @@
       const app = this.app, m = app.model;
       const s = this.state || {};
       const zBase = this._z();
+      // ------------------------------------------------------------- beams
+      // mirror of the walls path: spans run between consecutive
+      // Beams run INTERSECTION TO INTERSECTION — centerline to centerline,
+      // exactly like the Beam tool: the solid passes through the columns and
+      // welds monolithically (cast-in-place behavior; the takeoff credits
+      // the embedded overlap to the Column, so nothing is double-counted).
+      // Sections come from the options bar and hang from the working level.
+      if (s.placeWhat === 'beams') {
+        if (s.selectWhat !== 'lines') { app.toast('Beams need Grid LINES selected (option: Select -> Grid Lines)'); return; }
+        const lines = [...this.selLine].map(id => app.gridManager.getGrid(id)).filter(Boolean);
+        if (!lines.length) { app.toast('Nothing selected'); return; }
+        const segs = [];
+        for (const g of lines) {
+          const pts2 = this._ixs().filter(ix => ix.a === g || ix.b === g).map(ix => ix.p);
+          const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
+          const L = Math.hypot(d[0], d[1]) || 1;
+          pts2.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
+          for (let i = 0; i + 1 < pts2.length; i++) {
+            const a = pts2[i], b = pts2[i + 1];
+            if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.05) continue;
+            segs.push([a[0], a[1], b[0], b[1]]);
+          }
+        }
+        if (!segs.length) { app.toast('No beam spans (no consecutive intersections)'); return; }
+        const BP = window.BeamProfiles;
+        const prof = BP ? BP.normalize({
+          profile: s.beamProfile, height: s.beamHeight, webWidth: s.beamWidth,
+          flangeWidth: s.flangeWidth, flangeThickness: s.flangeThickness,
+        }) : { profile: 'rectangular', height: 0.4, webWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, flangeSide: 'Right' };
+        const pend = segs.map(([ax, ay, bx, by], i) => ({
+          id: '__pend_beam_' + i, type: 'beam',
+          params: {
+            referenceLevelId: app.bimOptions.baseLevel, baseLevel: app.bimOptions.baseLevel,
+            zJustification: 'Top', ...prof,
+            baseline: [[ax, ay, zBase], [bx, by, zBase]],
+          },
+        }));
+        // infill walls shrink below the pending beams first, so the sweeps
+        // never land on untrimmed wall tops
+        if (app.preTrimWallsFor) for (const p of pend) app.preTrimWallsFor(p);
+        let n = 0;
+        app.transaction.run('grid beams', mm => {
+          mm.bimHold = true;
+          try {
+            for (const p of pend) {
+              try {
+                const faces = app.structural.buildBeam(G, mm, p.params).filter(f => !f.userData);
+                const roles = app.structural.classifyBeamRoles(G, mm, faces, p.params);
+                const edges = [];
+                for (const f of faces) {
+                  for (const r of mm.rings(f)) for (let i = 0; i < r.length; i++) {
+                    const e = mm.findEdge(r[i], r[(i + 1) % r.length]);
+                    if (e && !e.userData) edges.push(e.id);
+                  }
+                }
+                app.bim.create('beam', p.params, roles, edges);
+                n++;
+              } catch (e) { /* one degenerate span never kills the batch */ }
+            }
+          } finally { mm.bimHold = false; }
+        });
+        app.cleanupWires();
+        this.selLine.clear(); app.view.clearPreview(); this.status();
+        const trimmed = app.syncStructuralWalls ? app.syncStructuralWalls() : 0;
+        app.toast(n
+          ? `Placed ${n} beam${n === 1 ? '' : 's'} on grid lines${trimmed ? ` — ${trimmed} wall${trimmed === 1 ? '' : 's'} trimmed under` : ''}`
+          : 'No beams placed');
+        return;
+      }
+      // -------------------------------------------------- floors / slabs
+      // the closed-area fill: every selected grid CELL becomes a slab region
+      // extruded DOWN from the working level — same precedence pipeline as a
+      // sketched floor (columns punch through, infill walls trim below)
+      if (s.placeWhat === 'floors') {
+        if (s.selectWhat !== 'cells') { app.toast('Floors need CELLS selected (option: Select -> Grid Cells)'); return; }
+        const cells = this._cells().filter(c => this.selCell.has(c.key));
+        if (!cells.length) { app.toast('Nothing selected'); return; }
+        const th = Math.max(0.05, +s.slabThickness || 0.2);
+        const kind = s.slabKind === 'floor' ? 'floor' : 'slab';
+        // the bay plane is where wall UNDERSIDES live: a slab sketched flush
+        // on it fuses with the wall bottoms and the extrusion welds away to
+        // nothing. The same 0.5 mm reveal buildBeam uses keeps every face
+        // off the shared plane — no z-fighting, no zero-area ghosts
+        const z = zBase + 5e-4;
+        const lvlId = app.bimOptions.baseLevel;
+        // LOCATION LINE — centerline keeps the bay grid-to-grid; exterior /
+        // interior shift each side to the nearby columns' faces (a centered
+        // 0.4 column => 0.2 m per side)
+        const rings = cells.map(c => this._cellRing(c, s.slabLoc));
+        const regions = rings.map(r => ({ outer: r.map(p => [p[0], p[1], z]), holes: [] }));
+        if (kind === 'slab') {
+          const pendingSlab = { id: '__pending__', type: 'slab', params: { baseLevel: lvlId, thickness: th, regions } };
+          if (app.preTrimWallsFor) app.preTrimWallsFor(pendingSlab);
+        }
+        // Column ≻ Slab: strictly-inside columns punch their footprints as
+        // openings (at the centerline corner columns straddle the boundary —
+        // the takeoff absorbs them, exactly like a sketched slab)
+        const colHoles = new Map();
+        if (app.structural && kind === 'slab') rings.forEach((r, i) => {
+          const holes = app.structural.columnHolesForSlab(m,
+            { baseLevel: lvlId, thickness: th, _planeZ: z },
+            { outer: r.map(p => [p[0], p[1], z]), holes: [] });
+          if (holes.length) colHoles.set(i, holes);
+        });
+        const facesBefore = new Set(m.faces.keys());
+        const edgesBefore = new Set(m.edges.keys());
+        let ok = false;
+        app.transaction.run('grid slabs', mm => {
+          mm.bimHold = true; // slabs deliberately interpenetrate walls/columns
+          try {
+            rings.forEach((r, i) => {
+              const punches = (colHoles.get(i) || []).map(h2 => h2.ring.map(p => G.clone(p)));
+              const f = mm.addFaceFromRings(r.map(p => G.v(p[0], p[1], z)), punches);
+              if (!f) throw new Error('degenerate cell boundary');
+              // forceBaseCap: adjacent cells (this batch or an earlier slab)
+              // must not swallow each other's tops
+              if (!mm.pushPull(f, -th, true)) throw new Error('slab extrusion failed');
+            });
+            ok = true;
+          } finally { mm.bimHold = false; }
+        });
+        if (!ok) { this.status(); return; }
+        const newFaces = [...m.faces.keys()].filter(id => !facesBefore.has(id)).map(id => m.faces.get(id));
+        // OWNERSHIP: the welder creates split pieces for everything the slab
+        // touches — faces landing inside a COLUMN are that column's skin,
+        // never the slab's (otherwise selecting one selects both)
+        const cols = app.bim.entities.filter(e => e.type === 'column' && e.params && e.params.base);
+        const colAtPt = (x, y, fz) => {
+          for (const col of cols) {
+            const b2 = col.params.base;
+            const w2 = (+col.params.width || 0.3) / 2 + 1e-6, d2 = (+col.params.depth || 0.3) / 2 + 1e-6;
+            if (!(x > b2[0] - w2 && x < b2[0] + w2 && y > b2[1] - d2 && y < b2[1] + d2)) continue;
+            // plan overlap is not enough — the face must sit INSIDE the
+            // column's z band (a slab top under a column stays the slab's)
+            const cb = app.structural && app.structural.columnBounds
+              ? app.structural.columnBounds(col.params)
+              : { zStart: b2[2], zEnd: b2[2] + (+col.params.height || 3) };
+            if (fz > cb.zStart + 1e-3 && fz < cb.zEnd - 1e-3) return col;
+          }
+          return null;
+        };
+        const roles = {};
+        for (const f of newFaces) {
+          const c2 = m.faceCentroid(f);
+          const owner = colAtPt(c2.x, c2.y, c2.z);
+          if (owner) {
+            f.userData = { bimEntityId: owner.id, bimType: 'column', role: 'side' };
+            owner.faces.push(f.id);
+            continue;
+          }
+          roles[f.id] = Math.abs(c2.z - z) < 1e-6 ? 'top'
+            : Math.abs(c2.z - (z - th)) < 1e-6 ? 'bottom' : 'edge';
+        }
+        const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id));
+        app.bim.create(kind, {
+          baseLevel: lvlId, levelId: lvlId, thickness: th, source: 'grid',
+          locationLine: s.slabLoc || 'centerline',
+          regions: rings.map((r, i) => ({
+            outer: r.map(p => [p[0], p[1], z]),
+            holes: (colHoles.get(i) || []).map(h2 => h2.ring.map(p => [p[0], p[1], p[2]])),
+          })),
+        }, roles, newEdges);
+        this.selCell.clear(); app.view.clearPreview(); this.status();
+        const trimmed = app.syncStructuralWalls ? app.syncStructuralWalls() : 0;
+        const areaSum = newFaces.reduce((s2, f) => s2 + (roles[f.id] === 'top' ? m.faceArea(f) : 0), 0);
+        const locTxt = s.slabLoc === 'exterior' ? ' — exterior: covers the columns'
+          : s.slabLoc === 'interior' ? ' — interior: to the column faces' : '';
+        app.toast(`${kind === 'floor' ? 'Floor' : 'Slab'} placed — ${cells.length} cell${cells.length === 1 ? '' : 's'}, ${areaSum.toFixed(2)} m²${locTxt}`
+          + (trimmed ? `, ${trimmed} wall${trimmed === 1 ? '' : 's'} trimmed` : ''));
+        return;
+      }
       if (s.placeWhat === 'walls') {
         if (s.selectWhat !== 'lines') { app.toast('Walls need Grid LINES selected (option: Select -> Grid Lines)'); return; }
         const lines = [...this.selLine].map(id => app.gridManager.getGrid(id)).filter(Boolean);
@@ -385,20 +711,29 @@
       mode: 'bim',
       commands: ['gridplace', 'gp'],
       options: [
-        { key: 'selectWhat', type: 'select', label: 'Select', choices: [{ value: 'intersections', label: 'Intersections' }, { value: 'lines', label: 'Grid Lines' }] },
-        { key: 'placeWhat', type: 'select', label: 'Place', choices: [{ value: 'columns', label: 'Columns' }, { value: 'walls', label: 'Walls' }] },
+        { key: 'selectWhat', type: 'select', label: 'Select', choices: [{ value: 'intersections', label: 'Intersections' }, { value: 'lines', label: 'Grid Lines' }, { value: 'cells', label: 'Grid Cells' }] },
+        { key: 'placeWhat', type: 'select', label: 'Place', choices: [{ value: 'columns', label: 'Columns' }, { value: 'walls', label: 'Walls' }, { value: 'beams', label: 'Beams' }, { value: 'floors', label: 'Floors/Slabs' }] },
         { key: 'width', type: 'number', label: 'Col w', step: 0.05, default: 0.3 },
         { key: 'depth', type: 'number', label: 'Col d', step: 0.05, default: 0.3 },
         { key: 'wallThickness', type: 'number', label: 'Wall t', step: 0.05, default: 0.2 },
+        { key: 'beamProfile', type: 'select', label: 'Beam', choices: [{ value: 'rectangular', label: 'Rect' }, { value: 't', label: 'T-Beam' }] },
+        { key: 'beamHeight', type: 'number', label: 'Beam h', step: 0.05, default: 0.4 },
+        { key: 'beamWidth', type: 'number', label: 'Beam w', step: 0.05, default: 0.2 },
+        { key: 'flangeWidth', type: 'number', label: 'Flg w', step: 0.05, default: 0.4 },
+        { key: 'flangeThickness', type: 'number', label: 'Flg t', step: 0.05, default: 0.08 },
+        { key: 'slabKind', type: 'select', label: 'Kind', choices: [{ value: 'slab', label: 'Slab (structural)' }, { value: 'floor', label: 'Floor (finish)' }] },
+        { key: 'slabLoc', type: 'select', label: 'Location', choices: [{ value: 'centerline', label: 'Grid Centerline' }, { value: 'exterior', label: 'Exterior (covers columns)' }, { value: 'interior', label: 'Interior (at column faces)' }] },
+        { key: 'slabThickness', type: 'number', label: 'Slab t', step: 0.05, default: 0.2 },
       ],
       tool: GridPlaceTool,
-      state: { selectWhat: 'intersections', placeWhat: 'columns', width: 0.3, depth: 0.3, wallThickness: 0.2 },
+      state: { selectWhat: 'intersections', placeWhat: 'columns', width: 0.3, depth: 0.3, wallThickness: 0.2, beamProfile: 'rectangular', beamHeight: 0.4, beamWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, slabKind: 'slab', slabLoc: 'centerline', slabThickness: 0.2 },
       onOption(d) {
         const t = window.app && window.app.tool;
         if (t && t.id === 'gridplace') {
           // switching selection mode clears the other mode's picks
           t.selIx && t.selIx.clear();
           t.selLine && t.selLine.clear();
+          t.selCell && t.selCell.clear();
           t.app.view.clearPreview();
           t.status();
         }

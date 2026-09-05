@@ -220,6 +220,40 @@
     if (app._eip) { app.toast('Finish or cancel Edit In Place first', true); return; }
     if (app.mode !== 'bim') app.setMode('bim');
 
+    // downloaded BlenderKit types carry the asset id — placement is the
+    // asset tools (free drop for objects, wall-hosted with a cut opening
+    // for doors/windows), not the parametric built-ins
+    if (p.assetId) {
+      app.bimOptions.assetId = p.assetId;
+      app.bimOptions.assetName = p.assetName || type.name;
+      if (p.kind === 'door' || p.kind === 'window') {
+        app.bimOptions.hosted = app.bimOptions.hosted || {};
+        if (p.width > 0) app.bimOptions.hosted.width = p.width;
+        if (p.height > 0) app.bimOptions.hosted.height = p.height;
+        if (p.sill != null) app.bimOptions.hosted.sill = p.sill;
+        app.setTool(p.kind === 'door' ? 'assetdoor' : 'assetwindow');
+        app.toast(`${p.kind === 'door' ? 'Door' : 'Window'} (downloaded) — hover a wall, click to pin and slide, click again to cut the opening`);
+      } else {
+        app.setTool('assetplace');
+        app.toast(`Place Asset — ${type.name}: click the ground to drop it`);
+      }
+      return;
+    }
+
+    // Scripted Elements (user/AI-coded): the type carries the script id —
+    // its declared params become the placement defaults and the Properties
+    // inputs afterwards. Type “script” in the command bar to write a new one.
+    if (p.scriptId) {
+      app.bimOptions.scriptId = p.scriptId;
+      const script = app.scriptElements && app.scriptElements.get(p.scriptId);
+      app.bimOptions.scriptValues = {};
+      if (script) for (const pd of script.params)
+        app.bimOptions.scriptValues[pd.id] = (p[pd.id] != null ? p[pd.id] : pd.def);
+      app.setTool('scriptplace');
+      app.toast(`${type.name} (scripted) — ${script && script.placement === 'direction' ? 'click the start, drag the run, click again' : 'click to place'}; parameters are editable in Entity Info`);
+      return;
+    }
+
     if (catName === 'Wall' && fam && fam.id === 'fam_wall_opening') {
       app.bimOptions.hosted = app.bimOptions.hosted || {};
       if (p.width > 0) app.bimOptions.hosted.width = p.width;
@@ -255,6 +289,14 @@
       app.toast(`${catName} tool — ${fam ? fam.name + ': ' : ''}${type.name}`);
     } else if (catName === 'Column' && window.Engine && Engine.features.get('column')) {
       const d = Engine.features.get('column');
+      // design family (Tuscan, Drop Panel…): its params — width/depth plus
+      // family extras like dropWidth — load into the tool state wholesale
+      if (p.family && window.ColumnFamilies && ColumnFamilies.get(p.family)) {
+        d.state.family = p.family;
+        Object.assign(d.state, ColumnFamilies.normalize(p.family, p));
+      } else {
+        d.state.family = 'rect';
+      }
       if (p.width > 0) d.state.width = p.width;
       if (p.depth > 0) d.state.depth = p.depth;
       // level-driven height: the column spans base -> top level elevation;
@@ -375,7 +417,7 @@
       // carries MASTER eye/lock so 100 grids hide with one click
       const gm = app.gridManager;
       const grids = (gm && gm.grids) || [];
-      const grRow = (g, lvlId) => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')}) — hidden state is per level">
+      const grRow = (g, lvlId) => `<div class="elb-node elb-elem elb-datum" data-grid="${esc(g.id)}" data-lvl="${esc(lvlId)}" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')}) — click to select in the viewport; hidden state is per level">
           <span class="elb-tw"></span>
           <span class="elb-lab">${esc(g.name)} <span class="elb-lvl">${esc(g.system || 'Main')}</span></span>
           ${flagBtns('grid-at', g.id, !!g.locked, g.hiddenAt ? !!g.hiddenAt(lvlId) : !!g.hidden, lvlId)}
@@ -428,7 +470,8 @@
               if (app.bim.getEntityById(el.id)) ents.push(app.bim.getEntityById(el.id));
         if (ents.length)
           catFlags = flagBtns('elements', ents.map(e => e.id).join(','),
-            ents.every(e => e.locked), ents.every(e => e.hidden));
+            ents.every(e => app.isEntityLocked ? app.isEntityLocked(e.id) : e.locked),
+            ents.every(e => app.isEntityHidden ? app.isEntityHidden(e.id) : e.hidden));
       }
       html += `<div class="elb-node elb-cat${cOpen ? ' open' : ''}" data-cat="${cat.id}">
         <span class="elb-tw">${cOpen ? '▾' : '▸'}</span>
@@ -454,6 +497,9 @@
           html += `<div class="elb-node elb-type${tOpen ? ' open' : ''}" data-type="${ty.id}" draggable="true"
             title="Drag into the viewport to place · click to arm the tool">
             <span class="elb-tw">${els.length ? (tOpen ? '▾' : '▸') : '·'}</span>
+            ${(ty.defaultParameters && ty.defaultParameters.thumbUrl)
+              ? `<img class="elb-thumb" src="${esc(ty.defaultParameters.thumbUrl)}" alt="" loading="lazy" draggable="false">`
+              : ''}
             <span class="elb-lab">${esc(ty.name)}</span>
             ${els.length ? `<span class="elb-count">${els.length}</span>` : ''}
             <span class="elb-add" data-add-type="${ty.id}" title="Place more of this type">＋</span>
@@ -469,10 +515,18 @@
               const tag = state.level === 'all' && el.levelId
                 ? `<span class="elb-lvl" title="${esc(lvName(el.levelId) || el.levelId)}">${esc(lvName(el.levelId) || el.levelId)}</span>` : '';
               const ent = app && app.bim ? app.bim.getEntityById(el.id) : null;
-              html += `<div class="elb-node elb-elem${ent && ent.hidden ? ' is-hidden' : ''}" data-elem="${esc(el.id)}" title="Click to select in the model">
+              // layer membership: a colored dot rides the row when the
+              // element sits on a named layer (layer 0 is the silent default)
+              const ly = ent && app.layerOf ? app.layerOf(ent) : null;
+              const lyDot = ly && ly.id !== '0'
+                ? `<span class="lay-dot" style="background:${ly.color || '#8a929a'}" title="Layer: ${esc(ly.name)}"></span>` : '';
+              const effHidden = app && app.isEntityHidden ? app.isEntityHidden(el.id) : !!(ent && ent.hidden);
+              const effLocked = app && app.isEntityLocked ? app.isEntityLocked(el.id) : !!(ent && ent.locked);
+              html += `<div class="elb-node elb-elem${effHidden ? ' is-hidden' : ''}" data-elem="${esc(el.id)}"
+                title="Click to select in the model${ly && ly.id !== '0' ? ` · Layer: ${esc(ly.name)}` : ''}">
                 <span class="elb-tw"></span>
-                <span class="elb-lab">${esc(el.name || el.id)}</span>${tag}
-                ${flagBtns('element', el.id, !!(ent && ent.locked), !!(ent && ent.hidden))}
+                <span class="elb-lab">${esc(el.name || el.id)}</span>${tag}${lyDot}
+                ${flagBtns('element', el.id, effLocked, effHidden)}
                 <span class="elb-add" data-add-type="${esc(el.typeId)}" title="Place another one like this">＋</span>
               </div>`;
             }
@@ -483,6 +537,10 @@
     html += `<div class="elb-node elb-newtype" title="Define a new type (e.g. Column 400 × 500 mm) and place it">
       <span class="elb-tw">＋</span>
       <span class="elb-lab">New Type…</span>
+    </div>`;
+    html += `<div class="elb-node elb-newtype" id="elb-newscript" title="Paste code from your AI (Gemini, ChatGPT…) and get a parametric element — type 'script' also opens it">
+      <span class="elb-tw">{"{"}</span>
+      <span class="elb-lab">Scripted Element…</span>
     </div>`;
     treeEl.innerHTML = html || '<div class="elb-empty">No matching types</div>';
   }
@@ -522,6 +580,12 @@
         activateType({ typeId: add.dataset.addType });
         return;
       }
+      if (node.id === 'elb-newscript') {
+        const app = window.app;
+        if (app && app.scriptElements) app.scriptElements.openEditor();
+        else if (window.ScriptElements) { /* pre-boot click: try the command */ }
+        return;
+      }
       if (node.classList.contains('elb-newtype')) { newTypeDialog(); return; }
       if (node.classList.contains('elb-cat')) {
         const k = 'cat:' + node.dataset.cat;
@@ -543,7 +607,18 @@
         }
       } else if (node.classList.contains('elb-elem')) {
         const app = window.app;
-        if (app && app.selectElement) {
+        // a GRID LINE datum row: select the grid in the viewport (amber) —
+        // datum rows carry data-grid instead of an element id
+        if (node.dataset.grid && app) {
+          const gm = app.gridManager;
+          const g = gm && gm.getGrid(node.dataset.grid);
+          if (!g) return;
+          const lvl = (app.levelManager.levels || []).find(l => l.id === node.dataset.lvl);
+          if (app.mode !== 'bim') app.setMode('bim'); // grids only render in Precise
+          app.selectGrid(g.id, lvl ? lvl.elevation : null);
+          return;
+        }
+        if (app && app.selectElement && node.dataset.elem) {
           if (app._eip) { app.toast('Finish Edit In Place first', true); return; }
           app.selectElement(node.dataset.elem);
           app.view.zoomExtents();
@@ -565,7 +640,7 @@
   // from the browser: it lands in the catalog under the right family and the
   // placement tool arms immediately, so "add more elements" is one dialog.
   const NEW_TYPE_CATS = [
-    { id: 'cat_column', fam: 'fam_col_rect', label: 'Column', dims: [['width', 'Width', 300], ['depth', 'Depth', 300]], levelTop: true, fallback: [['defaultHeight', 'Height (unconnected)', 3000]] },
+    { id: 'cat_column', fam: 'fam_col_rect', label: 'Column', dims: [['width', 'Width', 300], ['depth', 'Depth', 300]], levelTop: true, fallback: [['defaultHeight', 'Height (unconnected)', 3000]], families: true },
     { id: 'cat_wall', fam: 'fam_wall_basic', label: 'Wall', dims: [['thickness', 'Thickness', 200]], levelTop: true, fallback: [['defaultHeight', 'Height (unconnected)', 3000]] },
     { id: 'cat_slab', fam: 'fam_slab_structural', label: 'Slab', dims: [['thickness', 'Thickness', 250]] },
     { id: 'cat_floor', fam: 'fam_floor_generic', label: 'Floor', dims: [['thickness', 'Thickness', 200]] },
@@ -587,6 +662,13 @@
       </label>`;
     const groups = NEW_TYPE_CATS.map((c, i) => `
       <div class="nt-group" data-cat="${c.id}" style="${i ? 'display:none' : ''};margin:6px 0 10px">
+        ${c.families && window.ColumnFamilies ? `
+        <label style="display:flex;align-items:center;gap:8px;margin:4px 0">
+          <span style="width:110px;opacity:.8">Design family</span>
+          <select class="nt-fam" style="flex:1;padding:3px 6px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+            ${ColumnFamilies.selectChoices().map(f => `<option value="${esc(f.value)}">${esc(f.label)}</option>`).join('')}
+          </select>
+        </label>` : ''}
         ${c.dims.map(dimRow).join('')}
         ${c.levelTop ? `
         <label style="display:flex;align-items:center;gap:8px;margin:4px 0">
@@ -637,16 +719,32 @@
           }
         }
         if (bad) { app.toast('Dimensions must be positive', true); return; }
+        // the chosen design family rides on the params AND decides which
+        // family node the type is stored under (created on demand)
+        let fam = c.fam;
+        if (c.families) {
+          const sel = grp.querySelector('.nt-fam');
+          if (sel && sel.value) {
+            params.family = sel.value;
+            if (sel.value !== 'rect') fam = 'fam_col_' + sel.value;
+          }
+        }
         const dims = c.dims.map(([k]) => Math.round(params[k] * 1000)).join(' × ');
+        const famName = params.family && window.ColumnFamilies && ColumnFamilies.get(params.family)
+          ? ColumnFamilies.get(params.family).name + ' ' : '';
         const topName = params.topLevel
           ? ' → ' + (levels.find(l => l.id === params.topLevel) || {}).name
           : '';
-        const name = (document.getElementById('nt-name').value || '').trim() || `${c.label} ${dims}${topName}`;
+        const name = (document.getElementById('nt-name').value || '').trim() || `${famName || c.label + ' '}${dims}${topName}`;
         // ensureType's return is the store key or the record depending on the
         // backend — resolve the record by name so the id is always real
-        await app.db.ensureType(c.fam, name, params);
+        if (fam !== c.fam) { // design family: join the catalog on this save
+          const cf = window.ColumnFamilies && ColumnFamilies.get(params.family);
+          await app.db.ensureFamily(fam, 'cat_column', (cf ? cf.name : params.family) + ' Column');
+        }
+        await app.db.ensureType(fam, name, params);
         const cat2 = await app.db.getCatalog();
-        const rec = cat2.types.find(t => t.name === name && t.familyId === c.fam);
+        const rec = cat2.types.find(t => t.name === name && t.familyId === fam);
         // the level rule applies to the placement immediately (and is stored
         // on the type, so arming it later re-applies it)
         if (params.topLevel) app.bimOptions.topConstraint = params.topLevel;
