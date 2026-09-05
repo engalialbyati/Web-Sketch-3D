@@ -466,7 +466,9 @@ class BimEntityManager {
       const dx = q.x - p.base[0], dy = q.y - p.base[1];
       const t = (dx * dir.x + dy * dir.y) / L;
       const s = Math.abs(dx * nx + dy * ny);
-      return t >= -0.01 && t <= L + 0.01 && s <= (p.thickness || 0.2) / 2 + 0.01;
+      // mitered corner rings extend past the endpoints / half-thickness —
+      // 0.3 m slop covers typical miters without claiming neighbors
+      return t >= -0.3 && t <= L + 0.3 && s <= (p.thickness || 0.2) / 2 + 0.3;
     };
     let added = 0;
     for (const id of [...m.faces.keys()]) {
