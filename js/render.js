@@ -468,7 +468,7 @@ class Viewport {
   // covers, with circular bubbles (billboard sprites — text never flips
   // upside down) and drag grips at both ends. `levels` is the sorted list of
   // { elevation } the grids are drawn against.
-  setGrids(grids, levels) {
+  setGrids(grids, levels, selGridId = null) {
     if (!this.gridsGroup) {
       this.gridsGroup = new THREE.Group();
       this.gridsGroup.visible = false;
@@ -488,15 +488,18 @@ class Viewport {
       if (!covered.length) continue;
       const zGrip = covered[0];
       const poly = g.polyline();
+      const sel = g.id === selGridId; // selected grid reads in amber
       for (const z of covered) {
         const pts = poly.map(p => new THREE.Vector3(p[0], p[1], z));
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
-          color: 0x64748b, dashSize: 0.5, gapSize: 0.25,
-          transparent: true, opacity: 0.85, fog: false,
+          color: sel ? 0xf59e0b : 0x64748b, dashSize: 0.5, gapSize: 0.25,
+          transparent: true, opacity: sel ? 1.0 : 0.85, fog: false,
+          depthTest: false, // datums read THROUGH geometry — a wall drawn on
+          // its grid never hides the line (it must stay visible to select)
         }));
         line.computeLineDistances(); // dashed materials need the arc lengths
-        line.renderOrder = 5;
+        line.renderOrder = 6;
         this.gridsGroup.add(line);
       }
       // bubbles at the requested end(s), just past the endpoint, on the
@@ -517,7 +520,7 @@ class Viewport {
       // drag grips (small squares) at both endpoints
       for (const which of ['start', 'end']) {
         const p = which === 'start' ? S : E;
-        const spr = this._gridGrip();
+        const spr = this._gridGrip(sel ? 0xf59e0b : 0x64748b);
         spr.position.set(p[0], p[1], zGrip);
         this.gridsGroup.add(spr);
         this._gridGrips.push({ gridId: g.id, which, p: { x: p[0], y: p[1], z: zGrip } });
@@ -542,11 +545,11 @@ class Viewport {
     spr.renderOrder = 6;
     return spr;
   }
-  _gridGrip() {
+  _gridGrip(color = 0x64748b) {
     const cv = document.createElement('canvas');
     cv.width = 64; cv.height = 64;
     const cx = cv.getContext('2d');
-    cx.fillStyle = '#64748b';
+    cx.fillStyle = '#' + color.toString(16).padStart(6, '0');
     cx.fillRect(14, 14, 36, 36);
     cx.strokeStyle = '#e2e8f0'; cx.lineWidth = 5;
     cx.strokeRect(14, 14, 36, 36);

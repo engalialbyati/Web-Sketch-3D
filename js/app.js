@@ -808,6 +808,7 @@ class App {
   constructor() {
     this.model = new Model();
     this.sel = { edges: new Set(), faces: new Set() };
+    this.selGridId = null;   // selected grid line (selectable through hosted walls)
     this.clipboard = null;
     this.undoStack = [];
     this.redoStack = [];
@@ -1066,7 +1067,7 @@ class App {
     this.gridManager._hydrate();
     // grid edits re-derive the level plane rectangles (they track the grid AABB)
     this.view.setLevels(this.levelManager.levels, this.gridManager.grids);
-    this.view.setGrids(this.gridManager.grids, this.levelManager.levels);
+    this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null);
     this.view.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
     this._syncGridsToDb();
     const bd = document.getElementById('dialog-backdrop');
@@ -2823,6 +2824,43 @@ class App {
   // grid line: left-drag moves live visuals; release commits through
   // GridManager.updateGrid — one undoable transaction that also re-projects
   // attached walls/columns onto the moved grid.
+  // Grid LINE hit test for selection: grids are selectable THROUGH the
+  // geometry drawn on them (a hosted wall covers its grid line) — hitting a
+  // hairline within tol px is intentional, so the grid wins over the faces
+  // and edges beneath it. Returns { grid, z } or null.
+  _gridLineAt(ev, tol = 7) {
+    if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
+    const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
+    const gripZ = new Map();
+    for (const gp of this.view.gridGripPoints()) gripZ.set(gp.gridId, gp.p.z);
+    let best = null, bd = tol;
+    for (const g of this.gridManager.grids) {
+      if (g.hidden || g.locked) continue;
+      const z = gripZ.has(g.id) ? gripZ.get(g.id) : 0;
+      const poly = g.polyline();
+      for (let i = 0; i < poly.length - 1; i++) {
+        const sa = this.view.worldToScreenPixels({ x: poly[i][0], y: poly[i][1], z });
+        const sb = this.view.worldToScreenPixels({ x: poly[i + 1][0], y: poly[i + 1][1], z });
+        if (!sa.visible && !sb.visible) continue;
+        const dx = sb.x - sa.x, dy = sb.y - sa.y, L2 = dx * dx + dy * dy;
+        let d;
+        if (L2 < 1e-6) d = Math.hypot(sa.x - q.x, sa.y - q.y);
+        else {
+          const t = Math.max(0, Math.min(1, ((q.x - sa.x) * dx + (q.y - sa.y) * dy) / L2));
+          d = Math.hypot(sa.x + dx * t - q.x, sa.y + dy * t - q.y);
+        }
+        if (d < bd) { bd = d; best = { grid: g, z }; }
+      }
+    }
+    return best;
+  }
+  selectGrid(id) {
+    this.selGridId = id;
+    this.sel.faces.clear(); this.sel.edges.clear();
+    this.onSelectionChanged();
+    const g = this.gridManager.getGrid(id);
+    if (g) this.setStatus(`Grid ${g.name} selected — drag the line to move it, Del to delete, endpoint grips to stretch`);
+  }
   _gridGripAt(ev) {
     if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
     const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
@@ -3143,7 +3181,11 @@ class App {
     }
     this.onSelectionChanged();
   }
-  clearSelection() { this.sel = { edges: new Set(), faces: new Set() }; this.onSelectionChanged(); }
+  clearSelection() {
+    this.sel = { edges: new Set(), faces: new Set() };
+    this.selGridId = null;
+    this.onSelectionChanged();
+  }
   pruneSelection() {
     for (const id of [...this.sel.faces]) if (!this.model.faces.has(id)) this.sel.faces.delete(id);
     for (const id of [...this.sel.edges]) if (!this.model.edges.has(id)) this.sel.edges.delete(id);
@@ -3151,6 +3193,9 @@ class App {
   onSelectionChanged() {
     this.view.updateSelectionVisuals();
     this.updateInfo();
+    // the selected grid highlights in its own overlay (setGrids rebuild)
+    if (this.gridManager && this.gridManager.grids.length && this.view.setGrids)
+      this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null);
     if (this.tool && this.tool.id === 'scale') { this.tool.activate(); this.tool.status(); }
   }
   updateInfo() {
@@ -3396,6 +3441,20 @@ class App {
     this.toast(`Exported model.gltf — ${tris} triangles, ${mesh.primitives.length} material${mesh.primitives.length === 1 ? '' : 's'}`);
   }
   deleteSelection() {
+    // a selected grid line goes first (its hosted elements re-project)
+    if (this.selGridId) {
+      const g = this.gridManager && this.gridManager.getGrid(this.selGridId);
+      const id = this.selGridId;
+      this.selGridId = null;
+      let err = null;
+      this.run('delete grid', () => { err = this.gridManager.removeGrid(id); });
+      if (typeof err === 'string') { // locked or elements attached: refused
+        this.selGridId = id; // stays selected so the user can act
+        this.toast(err, true);
+      } else if (g) this.toast(`Grid ${g.name} deleted`);
+      this.onSelectionChanged();
+      return;
+    }
     if (!this.sel.faces.size && !this.sel.edges.size) return;
     // locked elements keep their geometry — only the free part of the
     // selection goes, and the user hears why

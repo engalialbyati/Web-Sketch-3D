@@ -5,6 +5,7 @@
 // ---------------------------------------------------------------------------
 class SelectTool extends Tool {
   static id = 'select';
+  cleanup() { this._gdrag = null; super.cleanup(); }
   get hint() {
     if (this._awaitLen) return 'Wall length: type the new length + Enter (Esc cancels).';
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
@@ -133,6 +134,14 @@ class SelectTool extends Tool {
     } else {
       // second click while dragging: commit below via onUp
     }
+    // GRID LINES select through hosted geometry (a wall drawn on the grid
+    // covers its line): hitting the hairline wins over the wall beneath
+    const gl = this.app._gridLineAt && this.app._gridLineAt(ev);
+    if (gl) {
+      this.app.selectGrid(gl.grid.id);
+      this._gdrag = { grid: gl.grid, z: gl.z, last: null, moved: false };
+      return;
+    }
     this._bandStart = this.app.view.eventPt(ev);
     this._band = false;
     this._mod = ev.shiftKey || ev.ctrlKey;
@@ -148,6 +157,27 @@ class SelectTool extends Tool {
     }
   }
   onMove(ev) {
+    if (this._gdrag) {
+      // whole-line grid drag: live-translate the visuals (start/end/mid in
+      // place), the committed updateGrid on release re-projects hosted
+      // walls/columns in one undoable step
+      const app = this.app, view = app.view;
+      const d = this._gdrag;
+      const { ro, rd } = view.clientToWorldRay(ev.clientX, ev.clientY);
+      const t = Math.abs(rd.z) > 1e-9 ? (d.z - ro.z) / rd.z : 0;
+      if (t <= 0) return;
+      const p = [ro.x + rd.x * t, ro.y + rd.y * t];
+      if (!d.last) { d.last = p; return; }
+      const dx = p[0] - d.last[0], dy = p[1] - d.last[1];
+      if (!d.moved && Math.hypot(dx, dy) < 0.005) return;
+      d.moved = true;
+      d.grid.start[0] += dx; d.grid.start[1] += dy;
+      d.grid.end[0] += dx; d.grid.end[1] += dy;
+      if (d.grid.mid) { d.grid.mid[0] += dx; d.grid.mid[1] += dy; }
+      d.last = p;
+      view.setGrids(app.gridManager.grids, app.levelManager.levels, d.grid.id); // live visuals only
+      return;
+    }
     // Ctrl/Tab held: sub-element measurement hover takes over (no drags active)
     if ((ev.ctrlKey || this.app._tabHeld) && !this._hdrag && !this._hostdrag && !this._band) {
       this._subQuery(ev);
@@ -248,6 +278,19 @@ class SelectTool extends Tool {
     }
   }
   onUp(ev) {
+    if (this._gdrag) {
+      const app = this.app;
+      const d = this._gdrag;
+      this._gdrag = null;
+      if (d.moved) {
+        const g = d.grid;
+        const patch = { start: [g.start[0], g.start[1]], end: [g.end[0], g.end[1]] };
+        if (g.isCurved && g.mid) patch.mid = [g.mid[0], g.mid[1]];
+        app.run('move grid', () => app.gridManager.updateGrid(g.id, patch));
+        app.toast(`Grid ${g.name} moved — hosted walls and columns follow`);
+      }
+      return;
+    }
     if (this._hostdrag) {
       const app = this.app;
       const { ent, target } = this._hostdrag;
