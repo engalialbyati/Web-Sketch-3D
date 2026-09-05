@@ -1554,6 +1554,36 @@ class App {
   /** Toggle lock/hidden on a BIM element, grid line, or level.
    * patch: { locked?: bool, hidden?: bool } */
   setItemFlags(kind, id, patch) {
+    // bulk masters from the Element Browser: one click, every grid in the
+    // group flips, ONE notification (a 100-grid level must not rebuild ×100)
+    if (kind === 'grid-level' || kind === 'grids-all') {
+      const gm = this.gridManager;
+      if (!gm) return;
+      const ids = kind === 'grids-all'
+        ? gm.grids.map(g => g.id)
+        : (() => {
+          const lvl = this.levelManager.getLevel(id);
+          if (!lvl) return [];
+          return gm.grids.filter(g => g.covers(lvl.elevation)).map(g => g.id);
+        })();
+      if (!ids.length) return;
+      // toggle targets derive from LIVE state, not the (possibly stale, mid-
+      // refresh) button class — rapid clicks always flip in the right direction
+      const stateOf = key => ids.every(id => { const g = gm.getGrid(id); return g && !!g[key]; });
+      const eff = {};
+      if (patch.hidden != null) eff.hidden = stateOf('hidden') ? false : patch.hidden;
+      if (patch.locked != null) eff.locked = stateOf('locked') ? false : patch.locked;
+      let n = 0;
+      for (const gid of ids) {
+        const g = gm.getGrid(gid);
+        if (!g) continue;
+        Object.assign(g, eff);
+        n++;
+      }
+      if (n) this.onGridsChanged();
+      if (window.ElementBrowser) ElementBrowser.refresh();
+      return;
+    }
     if (kind === 'element') {
       const ent = this.bim.getEntityById(id);
       if (!ent) return;
@@ -3264,8 +3294,12 @@ class App {
     const dp = type.defaultParameters || {};
     if (catName.indexOf('column') >= 0) {
       const pts = gp._selectedPoints();
+      // occupancy is PER LEVEL: a Level-1 column does not block the Level-2
+      // column at the same grid point (each story carries its own)
+      const bl = this.bimOptions.baseLevel;
       const occupied = p => this.bim.entities.some(e =>
         e.type === 'column' && e.params && e.params.base &&
+        (e.params.baseLevelId || e.params.baseLevel) === bl &&
         Math.hypot(e.params.base[0] - p[0], e.params.base[1] - p[1]) < 0.26);
       const free = pts.filter(p => !occupied(p));
       const skipped = pts.length - free.length;

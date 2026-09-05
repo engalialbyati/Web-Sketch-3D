@@ -872,3 +872,4 @@ body.mode-bim #hint { color: #1f4e79; }
 .elb-flag.f-eye.off { opacity: 1; filter: grayscale(1); }
 .elb-node.is-hidden > .elb-lab { opacity: .45; text-decoration: line-through; }
 .elb-datum .elb-lvl { opacity: .65; font-size: 10.5px; }
+.elb-levelgrp .elb-lvl { opacity: .6; font-size: 10.5px; }

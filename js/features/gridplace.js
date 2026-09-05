@@ -26,13 +26,27 @@
   class GridPlaceTool extends Tool {
     static id = 'gridplace';
     activate() {
-      this.selIx = new Set();   // "x|y" keys
-      this.selLine = new Set(); // grid ids
-      this.hover = null;        // {ix} | {line}
-      this._down = null;        // rubber-band start {x,y} screen
-      this._cur = null;         // current screen pt while dragging
+      this._selByLevel = {};   // baseLevelId -> { ix:Set, line:Set } — each
+                               // working level keeps its OWN selection
+      this.hover = null;       // {ix} | {line}
+      this._down = null;       // rubber-band start {x,y} screen
+      this._cur = null;        // current screen pt while dragging
       this._lastEv = null;
       this.status();
+    }
+    _levelSel() {
+      const k = (this.app.bimOptions && this.app.bimOptions.baseLevel) || 'lvl';
+      if (!this._selByLevel) this._selByLevel = {};
+      if (!this._selByLevel[k]) this._selByLevel[k] = { ix: new Set(), line: new Set() };
+      return this._selByLevel[k];
+    }
+    get selIx() { return this._levelSel().ix; }      // "x|y" keys, this level
+    get selLine() { return this._levelSel().line; }  // grid ids, this level
+    // level switches refresh the tool hint — repaint markers too, so the
+    // viewport immediately shows the new working level's selection
+    status() {
+      if (super.status) super.status();
+      try { this.app.view.clearPreview(); this._draw(); } catch (e) { /* no ev yet */ }
     }
     deactivate() { this.app.view.clearPreview(); super.deactivate(); }
     get hint() {
@@ -40,7 +54,8 @@
       const what = s.selectWhat === 'lines' ? 'grid LINES' : 'grid INTERSECTIONS';
       const withWhat = s.placeWhat === 'walls' ? 'WALLS' : 'COLUMNS';
       const n = s.selectWhat === 'lines' ? this.selLine.size : this.selIx.size;
-      return `Grid Select & Place (${what} -> ${withWhat}): click or drag a window to select grids (${n} selected). Enter = place, Esc = clear. Levels & sizes come from the options bar.`;
+      const lvl = (this.app.levelManager.getLevel(this.app.bimOptions.baseLevel) || {}).name || this.app.bimOptions.baseLevel;
+      return `Grid Select & Place (${what} -> ${withWhat}) — working level: ${lvl}. Click or drag a window to select (${n} selected on ${lvl}). Enter = place on ${lvl}, Esc = clear this level. Switch Base Level for an independent selection per level.`;
     }
 
     // ------------------------------------------------------------- targets

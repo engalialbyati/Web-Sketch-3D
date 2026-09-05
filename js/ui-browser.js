@@ -369,15 +369,46 @@
           ${flagBtns('level', l.id, !!l.locked, !!l.hidden)}
         </div>`);
       html += datumSection('levels', 'Levels', lvRows);
+      // grid lines grouped per level: "Level 1" owns every grid whose
+      // vertical extent shows at that level's elevation — the group header
+      // carries MASTER eye/lock so 100 grids hide with one click
       const gm = app.gridManager;
       const grids = (gm && gm.grids) || [];
-      const grRows = grids.filter(g => !filter || g.name.toLowerCase().includes(filter))
-        .map(g => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')})">
+      const grRow = g => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')})">
           <span class="elb-tw"></span>
           <span class="elb-lab">${esc(g.name)} <span class="elb-lvl">${esc(g.system || 'Main')}</span></span>
           ${flagBtns('grid', g.id, !!g.locked, !!g.hidden)}
-        </div>`);
-      html += datumSection('grids', 'Grid Lines', grRows);
+        </div>`;
+      let grHtml = '';
+      if (grids.length) {
+        // master over ALL grid lines rides on the section header row
+        const allHidden = grids.every(g => g.hidden);
+        const allLocked = grids.every(g => g.locked);
+        const gOpen = exp.has('sec:grids');
+        grHtml += `<div class="elb-node elb-cat${gOpen ? ' open' : ''}" data-sec="grids">
+          <span class="elb-tw">${gOpen ? '\u25BE' : '\u25B8'}</span>
+          <span class="elb-ic" style="background:#64748b"></span>
+          <span class="elb-lab">Grid Lines</span>
+          <span class="elb-count">${grids.length}</span>
+          ${flagBtns('grids-all', 'all', allLocked, allHidden)}
+        </div>`;
+        if (gOpen) for (const lvl of lvls) {
+          const atLevel = grids.filter(g => g.covers(lvl.elevation));
+          if (!atLevel.length) continue;
+          const matches = atLevel.filter(g => !filter || g.name.toLowerCase().includes(filter) || lvl.name.toLowerCase().includes(filter));
+          if (!matches.length) continue;
+          const lgOpen = exp.has('sec:grids:' + lvl.id);
+          const lgHidden = atLevel.every(g => g.hidden);
+          const lgLocked = atLevel.every(g => g.locked);
+          grHtml += `<div class="elb-node elb-fam elb-levelgrp${lgOpen ? ' open' : ''}" data-sec="grids:${esc(lvl.id)}" title="Every grid line shown at ${esc(lvl.name)} (${(+lvl.elevation).toFixed(2)} m)">
+            <span class="elb-tw">${lgOpen ? '\u25BE' : '\u25B8'}</span>
+            <span class="elb-lab">${esc(lvl.name)} <span class="elb-lvl">${atLevel.length} grid${atLevel.length === 1 ? '' : 's'}</span></span>
+            ${flagBtns('grid-level', lvl.id, lgLocked, lgHidden)}
+          </div>`;
+          if (lgOpen) for (const g of matches) grHtml += grRow(g);
+        }
+      }
+      html += grHtml;
     }
     for (const cat of catalog.categories) {
       const fams = catalog.families.filter(f => f.categoryId === cat.id);
