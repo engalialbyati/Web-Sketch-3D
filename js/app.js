@@ -2622,7 +2622,7 @@ class App {
     }
     // grid snap (F9): round the inferred point to the nearest 1 m column —
     // real geometry snaps (endpoints/midpoints/centers) keep priority
-    if (this.gridSnap && inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock'
+    if (this.gridSnap && inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock' && inf.kind !== 'edge'
       && inf.kind !== 'gridX' && inf.kind !== 'gridline') {
       inf.p = G.v(Math.round(inf.p.x), Math.round(inf.p.y), inf.p.z);
       inf.kind = 'grid';
@@ -2672,6 +2672,36 @@ class App {
     if (!locked && this.gridManager && this.gridManager.grids.length) {
       const gs = SnapSystem.snap(this, ev);
       if (gs) return gs;
+    }
+
+    // On-edge tracking: the closest point between the cursor ray and each
+    // straight model edge — sketch along wall faces and column footprints
+    // BETWEEN their corner vertices (endpoints above still own the corners).
+    // Same ray/line math as the axis inference below.
+    if (!locked) {
+      const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
+      let eBest = null, eD = 10;
+      for (const e of model.edges.values()) {
+        if (e.curveId) continue;
+        const a = model.vp(e.a), b = model.vp(e.b);
+        if (!a || !b) continue;
+        const vec = G.sub(b, a);
+        const L = G.len(vec);
+        if (L < 1e-6) continue;
+        vec.x /= L; vec.y /= L; vec.z /= L;
+        const r = G.sub(ro, a);
+        const bDot = G.dot(rd, vec);
+        const den = 1 - bDot * bDot;
+        if (Math.abs(den) < 1e-9) continue; // cursor ray parallel to the edge
+        const s = (G.dot(vec, r) - bDot * G.dot(rd, r)) / den; // meters along the edge
+        if (s <= 0.02 || s >= L - 0.02) continue; // corners own the ends
+        const p = G.add(a, G.mul(vec, s));
+        const sp = this.view.worldToScreenPixels(p);
+        if (!sp.visible) continue;
+        const d = Math.hypot(sp.x - q.x, sp.y - q.y);
+        if (d < eD) { eD = d; eBest = p; }
+      }
+      if (eBest) return { p: eBest, kind: 'edge', label: 'On Edge' };
     }
 
     if (anchor && !locked) {

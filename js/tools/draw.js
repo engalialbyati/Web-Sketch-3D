@@ -581,6 +581,55 @@ class DrawPrimitiveEngine {
     }
     return out;
   }
+  // grid system polylines at the active drawing elevation — a pick target
+  // that draws the wall ALONG the grid and hosts it there. Straight grids
+  // are split at their intersections: each BAY between two crossings (e.g.
+  // "A (1–2)") is its own pick target, so a picked wall runs intersection-
+  // to-intersection — face-to-face with the columns there via gridTrimFor.
+  _gridSegments() {
+    const app = this.app;
+    if (!app.gridManager || typeof SnapSystem === 'undefined') return [];
+    const gm = app.gridManager;
+    gm._hydrate();
+    const z = SnapSystem.activeZ(app);
+    const out = [];
+    for (const g of gm.grids) {
+      if (!g.covers(z)) continue;
+      const poly = g.polyline();
+      if (poly.length < 2) continue;
+      if (!g.isCurved && g.start && g.end) {
+        const A = g.start, B = g.end;
+        const dir = [B[0] - A[0], B[1] - A[1]];
+        const L2 = dir[0] * dir[0] + dir[1] * dir[1];
+        if (L2 > 1e-9) {
+          // crossings with other grids, as run parameters t in (0, 1)
+          const ts = [];
+          for (const ix of gm.intersections()) {
+            const other = ix.a === g ? ix.b : (ix.b === g ? ix.a : null);
+            if (!other) continue;
+            const t = ((ix.p[0] - A[0]) * dir[0] + (ix.p[1] - A[1]) * dir[1]) / L2;
+            if (t > 1e-4 && t < 1 - 1e-4) ts.push({ t, name: other.name });
+          }
+          if (ts.length) {
+            ts.sort((x, y) => x.t - y.t);
+            const n = ts.length;
+            const pts = [0, ...ts.map(x => x.t), 1]
+              .map(t => G.v(A[0] + dir[0] * t, A[1] + dir[1] * t, z));
+            const crossAt = k => (k >= 1 && k <= n) ? ts[k - 1].name : null;
+            for (let i = 0; i < pts.length - 1; i++) {
+              const l = crossAt(i), r = crossAt(i + 1);
+              const bay = l && r ? ` (${l}–${r})` : r ? ` (before ${r})` : l ? ` (past ${l})` : '';
+              out.push({ grid: g, name: g.name + bay, pts: [pts[i], pts[i + 1]] });
+            }
+            continue;
+          }
+        }
+      }
+      // curved grids, or straights with no crossings: the whole run
+      out.push({ grid: g, name: g.name, pts: poly.map(p => G.v(p[0], p[1], z)) });
+    }
+    return out;
+  }
   _pickHover(ev) {
     const app = this.app, view = app.view;
     const pe = app.pickEdgeAt(ev, 8);
@@ -591,6 +640,25 @@ class DrawPrimitiveEngine {
     }
     view.setHoverEdges(null);
     const q = view.eventPt(ev);
+    // grid lines come before level datums: picking one runs the wall along it
+    // (multi-segment polylines — curved grids pick as one run)
+    let gbest = null, gbd = 18;
+    for (const seg of this._gridSegments()) {
+      for (let i = 0; i < seg.pts.length - 1; i++) {
+        const sa = view.toScreen(seg.pts[i]), sb = view.toScreen(seg.pts[i + 1]);
+        const dx = sb.x - sa.x, dy = sb.y - sa.y, L2 = dx * dx + dy * dy;
+        if (L2 < 1e-6) continue;
+        const t = Math.max(0, Math.min(1, ((q.x - sa.x) * dx + (q.y - sa.y) * dy) / L2));
+        const d = Math.hypot(sa.x + dx * t - q.x, sa.y + dy * t - q.y);
+        if (d < gbd) { gbd = d; gbest = seg; }
+      }
+    }
+    if (gbest) {
+      this.pickSeg = { kind: 'grid', grid: gbest.grid, name: gbest.name, pts: gbest.pts };
+      view.previewLine(gbest.pts, 0x6d4dbe, true);
+      app.setStatus(`Pick: Grid ${gbest.name} — click to draw along it`);
+      return;
+    }
     let best = null, bd = 18;
     for (const seg of this._levelDatumSegments()) {
       const sa = view.toScreen(seg.pts[0]), sb = view.toScreen(seg.pts[1]);
@@ -608,6 +676,10 @@ class DrawPrimitiveEngine {
     const s = this.pickSeg;
     if (s.kind === 'edge')
       this._emit('pick', [this.app.model.vp(s.edge.a), this.app.model.vp(s.edge.b)], false);
+    else if (s.kind === 'grid') {
+      this.lastPickGrid = s.grid; // consumed by the wall commit: hosts the wall
+      this._emit('pick', s.pts, false);
+    }
     else
       this._emit('pick', s.pts, true);
     this.pickSeg = null;
@@ -717,23 +789,36 @@ class DrawTool extends Tool {
     const anchor = this.engine ? (this.engine.stage === 1 ? this.engine.p1 : this.engine.chainStart) : null;
     const app = this.app;
     const inf = app.inferPoint(ev, anchor);
-    // Revit "draw on face": when the cursor hovers a wall / column / slab
-    // face, the sketch point projects onto that face's plane (plus a small
-    // normal offset so the drawn line paints ON TOP, visible, not buried
-    // inside the surface). No face under the cursor: the level plane as usual.
-    if (inf.kind === 'face') {
+    // Revit "draw on face": the cursor ray is checked against model faces
+    // FIRST — when it hits a wall / column / slab face, the sketch point
+    // projects onto that face's plane (plus an 8 mm normal lift so drawn
+    // lines paint ON TOP, visible, not buried inside the surface). This
+    // check runs regardless of what inference reports (axis snaps from an
+    // anchor would otherwise pull the point to z=0 mid-draw, making the
+    // preview line dive diagonally inside the wall where it's invisible).
+    // Endpoint / midpoint snaps (inf.p already at an existing vertex) still
+    // win — they return exact geometry positions, not plane projections.
+    if (inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock') {
       const fid = app.view.pickFaceAt(app.view.eventPt(ev));
       if (fid != null) {
         const f = app.model.faces.get(fid);
         if (f) {
           const n = G.loopNormal(app.model.pts(f.loop));
           if (!G.isZero(n)) {
-            const off = G.mul(G.norm(n), 0.008); // 8 mm lift — reads clearly, no z-fight
-            return G.add(inf.p, off);
+            // project the raw ray onto the face plane (inferPoint may have
+            // gone to ground/axis — the face plane is where we want to be)
+            const { ro, rd } = app.view.clientToWorldRay(ev.clientX, ev.clientY);
+            const plane = app.model.facePlane(f);
+            const hit = G.rayPlane(ro, rd, plane);
+            if (hit) {
+              const off = G.mul(G.norm(n), 0.008); // 8 mm lift — no z-fight
+              return G.add(hit, off);
+            }
           }
         }
       }
     }
+    // no face hit (or a real snap won): use the inference point at the level
     const z = app.levelManager.getElevation(app.bimOptions.baseLevel);
     return G.v(inf.p.x, inf.p.y, z);
   }
@@ -745,27 +830,63 @@ class DrawTool extends Tool {
       return;
     }
     app.transaction.run('draw ' + r.kind, m => {
-      // precise-mode sketch lines deliberately divide faces they cross: the
-      // pieces inherit the stamps (splitFacesAt propagates), so walls and
-      // hosted elements stay parametric instead of detaching wholesale
-      m.bimHold = true;
-      try {
-        if (r.closed && r.pts.length >= 3) {
-          const f = m.addFaceFromRings(r.pts.map(p => G.clone(p)));
-          if (f) m.punchOrSplit(f); // a closed sketch on a face splits its host too
-        } else {
-          // segment-by-segment via addEdge: crossings split BOTH edges and the
-          // faces beneath (SketchUp behavior) — addPolyline would skip all that
-          for (let i = 0; i + 1 < r.pts.length; i++)
-            m.addEdge(G.clone(r.pts[i]), G.clone(r.pts[i + 1]));
-        }
-      } finally { m.bimHold = false; }
+      // NOTE: no bimHold — the model's bimHold setter auto-deletes wire edges
+      // (faceless) on release, which eats every drawn sketch line. Stamp
+      // propagation in splitFacesAt already keeps BIM entities parametric
+      // when their faces are divided, so the hold is unnecessary here.
+      if (r.closed && r.pts.length >= 3) {
+        const f = m.addFaceFromRings(r.pts.map(p => G.clone(p)));
+        if (f) m.punchOrSplit(f); // a closed sketch on a face splits its host too
+      } else {
+        // segment-by-segment via addEdge: crossings split BOTH edges and the
+        // faces beneath (SketchUp behavior) — addPolyline would skip all that
+        for (let i = 0; i + 1 < r.pts.length; i++)
+          m.addEdge(G.clone(r.pts[i]), G.clone(r.pts[i + 1]));
+      }
     });
+    // Auto-clean: when the drawn line(s) closed a loop and a face formed or
+    // healed (e.g. closing an opening in a wall), the helper edge that made
+    // it happen is now an interior boundary between coplanar faces — the
+    // SketchUp leftover line. Dissolve it so the surface reads as one.
+    this._autoDissolveHelpers();
   }
-  onMove(ev) { this.engine.onMove(ev); }
+  // After a sketch commit, dissolve any newly-drawn edge whose two adjacent
+  // faces are coplanar (healing them into one face). Only edges created by
+  // THIS commit are candidates — existing edges the user placed deliberately
+  // are never touched.
+  _autoDissolveHelpers() {
+    const m = this.app.model;
+    // collect edges created in the last transaction (ids above the max from
+    // before the commit — the transaction pushed the undo snapshot, so any
+    // edge id not in the top snapshot's edge set is new)
+    const snap = this.app.undoStack[this.app.undoStack.length - 1];
+    if (!snap) return;
+    const preEdges = new Set((snap.e || []).map(x => x[0]));
+    const newEdges = [...m.edges.values()].filter(e => !preEdges.has(e.id));
+    for (const e of newEdges) {
+      if (!m.edges.has(e.id)) continue; // already dissolved by a prior pass
+      // only dissolve edges that have exactly two coplanar adjacent faces
+      const adj = m.facesAdjacentToEdge ? m.facesAdjacentToEdge(e) : [];
+      if (adj.length === 2) {
+        const res = m.dissolveEdge ? m.dissolveEdge(e) : null;
+        if (res && res.ok) {
+          m.gc();
+        }
+      }
+    }
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    // hover indicator: highlight any existing edge under the cursor so the
+    // user sees exactly which line they're about to draw on top of
+    const pe = app.pickEdgeAt(ev, 8);
+    view.setHoverEdges(pe ? [pe.edge.id] : null);
+    this.engine.onMove(ev);
+  }
   onDown(ev) { this.engine.onDown(ev); }
   onUp(ev) { this.engine.onUp(ev); }
   onKey(ev) { return this.engine.onKey(ev); }
   onVCB(t) { return this.engine.onVCB(t); }
+  deactivate() { this.app.view.setHoverEdges(null); super.deactivate(); }
 }
 window.BimTools = Object.assign(window.BimTools || {}, { DrawTool, DrawPrimitiveEngine, DrawGeom });

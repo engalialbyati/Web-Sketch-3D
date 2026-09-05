@@ -2740,7 +2740,9 @@ class Model {
     this.levels = (data.lvl || this.levels || []).map(l => ({ ...l }));
     // grid records stay raw here; GridManager._hydrate() validates them into
     // GridLine instances (schema gate) on the next access after load/undo
-    this.grids = data.grid ? data.grid.map(g => ({ ...g })) : (this.grids || []);
+    // grids hydrate back into GridLine instances (distance/intersection
+    // methods) — plain record copies would strip the GridSystem API
+    this.grids = data.grid ? data.grid.map(g => (typeof GridLine === 'function' ? GridLine.fromRecord(g) : null) || { ...g }) : (this.grids || []);
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
       ...x, params: x.params ? JSON.parse(JSON.stringify(x.params)) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],

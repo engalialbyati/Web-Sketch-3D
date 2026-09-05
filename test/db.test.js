@@ -178,4 +178,28 @@ module.exports = async h => {
     ({ types } = await db.getCatalog());
     ok(!types.some(t => t.id === 'typ_junk'), 'force seed clears junk types');
   });
+
+  await t('incremental migration: an older database receives missing seed rows', async () => {
+    const db = new BimDatabase(new BimDatabase.MemoryStore());
+    // simulate an OLD database seeded before Structural Framing existed:
+    // categories exist, so the full seed skips, but the framing rows are absent
+    for (const c of [
+      { id: 'cat_wall', name: 'Wall' }, { id: 'cat_floor', name: 'Floor' },
+      { id: 'cat_slab', name: 'Slab' }, { id: 'cat_window', name: 'Window' },
+      { id: 'cat_door', name: 'Door' }, { id: 'cat_foundation', name: 'Foundation' },
+      { id: 'cat_column', name: 'Column' },
+    ]) await db.putCategory(c);
+    await db.putFamily({ id: 'fam_wall_basic', categoryId: 'cat_wall', name: 'Basic Wall' });
+    await db.putType({ id: 'typ_custom', familyId: 'fam_wall_basic', name: 'Mine', defaultParameters: { thickness: 0.33 } });
+    const seeded = await db.seedDefaults();
+    ok(!seeded, 'populated database reports no full seed');
+    const { categories, families, types } = await db.getCatalog();
+    ok(categories.some(c => c.id === 'cat_framing' && c.name === 'Structural Framing'),
+      'framing category migrated in');
+    ok(families.some(f => f.id === 'fam_beam_framing'), 'framing family migrated in');
+    ok(types.some(t => t.id === 'typ_beam_t_600' && t.defaultParameters.profile === 't'),
+      'beam types migrated in');
+    ok(types.some(t => t.id === 'typ_custom'), 'user rows untouched by the migration');
+    eq((await db.queryElementsByCategory('Structural Framing')).category.name, 'Structural Framing');
+  });
 };

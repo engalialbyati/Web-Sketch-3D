@@ -93,9 +93,12 @@ class Viewport {
     this.scene.add(this.sun.target);
 
     // ground + grid + shadow catcher
+    // the ground is a translucent veil (no depth write): below-grade
+    // geometry — footings, basements, piles — stays visible THROUGH it from
+    // above instead of being depth-occluded until the camera dips under z=0
     this.ground = new THREE.Mesh(
       new THREE.PlaneGeometry(800, 800),
-      new THREE.MeshBasicMaterial({ color: 0xf2f0ea, fog: true }));
+      new THREE.MeshBasicMaterial({ color: 0xf2f0ea, fog: true, transparent: true, opacity: 0.55, depthWrite: false }));
     this.ground.position.z = -0.02;
     this.scene.add(this.ground);
 

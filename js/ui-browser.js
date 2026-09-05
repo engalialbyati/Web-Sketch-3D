@@ -269,6 +269,19 @@
       }
       app.setTool('column');
       app.toast(`Column tool — ${type.name}`);
+    } else if (catName === 'Structural Framing' && window.Engine && Engine.features.get('beam')) {
+      // structural framing types drive the Beam tool: the type's default
+      // parameters (profile + section dimensions) pre-load its feature state
+      const d = Engine.features.get('beam');
+      if (p.profile && ['rectangular', 't', 'l'].includes(p.profile)) d.state.profile = p.profile;
+      if (p.height > 0) d.state.height = p.height;
+      if (p.webWidth > 0) d.state.webWidth = p.webWidth;
+      if (p.flangeWidth > 0) d.state.flangeWidth = p.flangeWidth;
+      if (p.flangeThickness > 0) d.state.flangeThickness = p.flangeThickness;
+      if (p.flangeSide) d.state.flangeSide = p.flangeSide;
+      app.setTool('beam');
+      const prof = { rectangular: 'Rectangular', t: 'T-Beam', l: 'L-Beam' }[d.state.profile] || d.state.profile;
+      app.toast(`Beam tool — ${prof} ${Math.round(d.state.height * 1000)} mm`);
     } else {
       app.toast(`No placement tool for ${catName || 'that category'}`, true);
       return;
@@ -320,6 +333,7 @@
   const CAT_COLORS = {
     cat_wall: '#7b3fa0', cat_floor: '#0e8385', cat_slab: '#5b6470',
     cat_window: '#3e66c4', cat_door: '#a3502e', cat_foundation: '#8d6e63', cat_column: '#2e7d32',
+    cat_framing: '#b35900',
   };
 
   function renderTree() {

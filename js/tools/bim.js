@@ -145,13 +145,15 @@ static gridColumnTrim(G, A, B, colA, colB) {
 // App-facing lookup: does this committed straight wall run on ONE grid line
 // between two grid intersections that carry columns? Returns the trimmed
 // endpoints + reporting info, or null. quiet=true (live preview) suppresses
-// the refusal toast.
-static gridTrimFor(app, pts, quiet = false) {
+// the refusal toast. pickedGrid: the grid picked via Pick Lines — used
+// directly as the host instead of re-deriving it from endpoint positions.
+static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
   const gm = app.gridManager;
   if (!gm || !gm.grids || !gm.grids.length || typeof SnapSystem === 'undefined') return null;
   if (!pts || pts.length < 2) return null;
   const A = pts[0], B = pts[pts.length - 1];
-  const g = SnapSystem.gridUnder(gm, [A.x, A.y], 0.05);
+  const g = (pickedGrid && !pickedGrid.isCurved) ? pickedGrid
+    : SnapSystem.gridUnder(gm, [A.x, A.y], 0.05);
   if (!g || g.isCurved) return null;               // straight grid lines only
   if (g.distance([B.x, B.y]) > 0.05) return null;  // wall must sit on one grid
   const ixA = SnapSystem.intersectionAt(gm, [A.x, A.y], 0.05);
@@ -297,6 +299,10 @@ static gridTrimFor(app, pts, quiet = false) {
     }
   }
   _commitInner(r, h) {
+    // a picked GRID line hosts the wall on that grid directly (Pick Lines ➔
+    // grid); consumed here so a later commit never hosts on a stale pick
+    const pickedGrid = (this.engine && this.engine.lastPickGrid) || null;
+    if (this.engine) this.engine.lastPickGrid = null;
     // GRID TRIM — a wall drawn on one grid line between two carrying
     // intersections runs face-to-face with the columns: each endpoint
     // retreats by half the column's extent along the run (3 m grids,
@@ -304,8 +310,8 @@ static gridTrimFor(app, pts, quiet = false) {
     // The trimmed endpoints stay ON the grid, so the hostGridId attachment
     // below still binds.
     let gridTrim = null;
-    if (r.kind === 'line' && !r.closed && r.pts.length >= 2) {
-      gridTrim = WallTool.gridTrimFor(app, r.pts);
+    if ((r.kind === 'line' || r.kind === 'pick') && !r.closed && r.pts.length >= 2) {
+      gridTrim = WallTool.gridTrimFor(app, r.pts, false, pickedGrid);
       if (gridTrim) {
         r = {
           ...r,
@@ -363,8 +369,11 @@ static gridTrimFor(app, pts, quiet = false) {
     // GRID ATTACHMENT — a straight wall whose both endpoints sit on one grid
     // line hosts on it (SnapSystem snapped them there): the baseline is the
     // grid centerline, and GridManager.updateGrid re-projects the wall when
-    // the grid is stretched or moved.
-    if (r.kind === 'line' && !r.closed && app.gridManager && typeof SnapSystem !== 'undefined') {
+    // the grid is stretched or moved. A PICKED grid hosts unconditionally —
+    // the wall was drawn along it by construction.
+    if (pickedGrid && !r.closed) {
+      wallParams.hostGridId = pickedGrid.id;
+    } else if (r.kind === 'line' && !r.closed && app.gridManager && typeof SnapSystem !== 'undefined') {
       const host = SnapSystem.gridUnder(app.gridManager, [a.x, a.y], 0.03);
       if (host && host.distance([b.x, b.y]) <= 0.03) wallParams.hostGridId = host.id;
     }
@@ -507,8 +516,9 @@ class FloorTool extends Tool {
     if (this.engine.chainStart) snaps.push({ p: this.engine.chainStart, kind: 'endpoint', label: 'Chain Start' });
     this.app._liveSnaps = snaps;
     const inf = this.app.inferPoint(ev, anchor);
-    if (inf.kind === 'endpoint' || inf.kind === 'midpoint' || inf.kind === 'center')
-      this.app.view.showSnapDot(inf.p, inf.kind); // green dot: the snap is live
+    if (inf.kind === 'endpoint' || inf.kind === 'midpoint' || inf.kind === 'center'
+      || inf.kind === 'edge' || inf.kind === 'gridX')
+      this.app.view.showSnapDot(inf.p, inf.kind === 'gridX' ? 'endpoint' : inf.kind); // snap feedback while sketching
     const z = this.app.levelManager.getElevation(this.app.bimOptions.baseLevel);
     return G.v(inf.p.x, inf.p.y, z);
   }

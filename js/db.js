@@ -106,6 +106,7 @@
       { id: 'cat_door', name: 'Door' },
       { id: 'cat_foundation', name: 'Foundation' },
       { id: 'cat_column', name: 'Column' },
+      { id: 'cat_framing', name: 'Structural Framing' },
     ],
     families: [
       { id: 'fam_wall_basic', categoryId: 'cat_wall', name: 'Basic Wall' },
@@ -121,6 +122,7 @@
       { id: 'fam_fnd_strip', categoryId: 'cat_foundation', name: 'Strip Footing' },
       { id: 'fam_fnd_grade', categoryId: 'cat_foundation', name: 'Slab on Grade' },
       { id: 'fam_col_rect', categoryId: 'cat_column', name: 'Rectangular Column' },
+      { id: 'fam_beam_framing', categoryId: 'cat_framing', name: 'Concrete Beam' },
     ],
     types: [
       { id: 'typ_wall_050', familyId: 'fam_wall_basic', name: 'Curtain Wall — 50 mm', defaultParameters: { thickness: 0.05, defaultHeight: 3.0, material: 'Glass' } },
@@ -144,6 +146,11 @@
       { id: 'typ_fnd_600x300', familyId: 'fam_fnd_strip', name: 'Strip 600 x 300', defaultParameters: { thickness: 0.3, defaultHeight: 0.3, width: 0.6, material: 'Concrete' } },
       { id: 'typ_fnd_grade150', familyId: 'fam_fnd_grade', name: 'Slab on Grade — 150 mm', defaultParameters: { thickness: 0.15, defaultHeight: 0.15, material: 'Concrete' } },
       { id: 'typ_col_300x300', familyId: 'fam_col_rect', name: 'Column 300 x 300', defaultParameters: { width: 0.3, depth: 0.3, defaultHeight: 3.0, material: 'Concrete' } },
+      { id: 'typ_beam_rect_400', familyId: 'fam_beam_framing', name: 'Rectangular — 400 mm', defaultParameters: { profile: 'rectangular', height: 0.4, webWidth: 0.25, material: 'Concrete' } },
+      { id: 'typ_beam_rect_500', familyId: 'fam_beam_framing', name: 'Rectangular — 500 mm', defaultParameters: { profile: 'rectangular', height: 0.5, webWidth: 0.25, material: 'Concrete' } },
+      { id: 'typ_beam_rect_600', familyId: 'fam_beam_framing', name: 'Rectangular — 600 mm', defaultParameters: { profile: 'rectangular', height: 0.6, webWidth: 0.3, material: 'Concrete' } },
+      { id: 'typ_beam_t_600', familyId: 'fam_beam_framing', name: 'T-Beam — 600 mm', defaultParameters: { profile: 't', height: 0.6, webWidth: 0.25, flangeWidth: 0.6, flangeThickness: 0.15, material: 'Concrete' } },
+      { id: 'typ_beam_l_500', familyId: 'fam_beam_framing', name: 'L-Beam — 500 mm', defaultParameters: { profile: 'l', height: 0.5, webWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.12, material: 'Concrete' } },
     ],
   };
 
@@ -175,7 +182,13 @@
     // ------------------------------------------------------ catalog CRUD
     async seedDefaults(force = false) {
       const n = await this.store.count('categories');
-      if (n > 0 && !force) return false;
+      if (n > 0 && !force) {
+        // incremental migration: an existing database receives seed rows it is
+        // missing (new categories arrive with app updates; user rows —
+        // dynamic types, edits — are never touched)
+        await this._upsertMissingSeeds();
+        return false;
+      }
       if (force) {
         for (const s of ['categories', 'families', 'types']) await this.store.clear(s);
       }
@@ -183,6 +196,14 @@
       for (const f of SEED.families) await this.store.put('families', { ...f });
       for (const t of SEED.types) await this.store.put('types', { ...t });
       return true;
+    }
+    async _upsertMissingSeeds() {
+      for (const c of SEED.categories)
+        if (!(await this.store.get('categories', c.id))) await this.store.put('categories', { ...c });
+      for (const f of SEED.families)
+        if (!(await this.store.get('families', f.id))) await this.store.put('families', { ...f });
+      for (const t of SEED.types)
+        if (!(await this.store.get('types', t.id))) await this.store.put('types', { ...t });
     }
     async putCategory(rec) { return this.store.put('categories', { ...rec }); }
     async putFamily(rec) { return this.store.put('families', { ...rec }); }
