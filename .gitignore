@@ -1,0 +1,8 @@
+# test artifacts / local state
+gui-test-screenshots/
+.scene-backup.json
+.scene-history.log
+*.local.json
+node_modules/
+.DS_Store
+Thumbs.db

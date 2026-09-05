@@ -1,0 +1,9 @@
+{
+  "name": "websketch3d",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WebSketch 3D — a SketchUp-style drawing app. Static site; tests run on Node.",
+  "scripts": {
+    "test": "node test/run.js"
+  }
+}

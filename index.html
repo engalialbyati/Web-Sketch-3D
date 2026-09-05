@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebSketch 3D — a SketchUp-style modeler</title>
+<link rel="stylesheet" href="css/style.css?v=7">
+</head>
+<body>
+<div id="app">
+  <div id="menubar"><div class="brand">WebSketch 3D</div></div>
+  <div id="modetabs">
+    <button class="mtab active" data-mode="free">Free Drawing</button>
+    <button class="mtab" data-mode="bim">Precise Drawing</button>
+  </div>
+  <div id="bimoptions" class="hidden">
+    <label>Base Level <select id="opt-baselevel"></select></label>
+    <label>Top Constraint <select id="opt-topconstraint"></select></label>
+    <label>Unconnected Height <input id="opt-height" type="number" step="0.1" min="0.05" value="3.0"> m</label>
+    <label>Wall Thickness <select id="opt-thickness">
+      <option value="0.15">150 mm</option>
+      <option value="0.20" selected>200 mm</option>
+      <option value="0.30">300 mm</option>
+    </select></label>
+    <label>Location Line <select id="opt-locline">
+      <option value="centerline" selected>Centerline</option>
+      <option value="exterior">Finish Face: Exterior</option>
+      <option value="interior">Finish Face: Interior</option>
+    </select></label>
+    <label class="chk"><input id="opt-chain" type="checkbox" checked> Chain</label>
+    <span id="drawpalette" class="dp-row hidden">
+      <span class="dp-label">Draw:</span>
+      <button class="dchip" data-prim="line" title="Line (click-click; VCB = length)">Line</button>
+      <button class="dchip" data-prim="rect" title="Rectangle (VCB = w,h)">Rectangle</button>
+      <button class="dchip" data-prim="polygon" title="Inscribed/Circumscribed Polygon">Polygon</button>
+      <input id="dpa-sides" type="number" min="3" max="96" step="1" value="6" title="Polygon side count" style="width:44px">
+      <select id="dpa-fit" title="Inscribed or circumscribed">
+        <option value="inscribed" selected>Inscribed</option>
+        <option value="circumscribed">Circumscribed</option>
+      </select>
+      <button class="dchip" data-prim="circle" title="Circle (VCB = radius)">Circle</button>
+      <button class="dchip" data-prim="arc_ser" title="Arc: start, end, bulge (VCB = radius)">Arc</button>
+      <button class="dchip" data-prim="arc_ce" title="Arc: center, start, sweep (VCB = angle)">Arc•C</button>
+      <button class="dchip" data-prim="fillet" title="Fillet: two lines + radius (trims)">Fillet</button>
+      <button class="dchip" data-prim="pick" title="Pick Lines: existing edge or level datum">Pick Lines</button>
+      <label class="dp-off">Offset <input id="dpa-offset" type="number" step="0.05" value="0" style="width:56px"> m</label>
+      <button class="dchip" data-prim="cv-f" data-cvmode="floor" title="Convert clicked faces to finish floors (extruded down)" style="display:none">To Floor</button>
+      <button class="dchip" data-prim="cv-x" data-cvmode="slab" title="Convert clicked faces to slabs (extruded down)" style="display:none">To Slab</button>
+      <button class="dchip" data-prim="cv-y" data-cvmode="wall" title="Convert clicked faces to walls (extruded along the normal)" style="display:none">To Wall</button>
+      <button class="dchip" data-prim="cv-c" data-cvmode="column" title="Convert clicked faces to columns (risen to the top constraint)" style="display:none">To Column</button>
+      <button class="dchip" data-prim="cv-b" data-cvmode="beam" title="Convert clicked faces to beams (swept along the normal)" style="display:none">To Beam</button>
+    </span>
+    <span id="sketchbar" class="dp-row hidden" style="margin-left:8px">
+      <span class="dp-label" id="sketch-title">Sketch</span>
+      <button id="sketch-commit" title="Commit the sketch" style="color:#3fb950;border-color:#3fb950">✓ Commit</button>
+      <button id="sketch-cancel" title="Discard the sketch" style="color:#f85149;border-color:#f85149">✗ Cancel</button>
+    </span>
+  </div>
+  <div id="toolbar"></div>
+  <div id="main">
+    <div id="viewport">
+      <div id="selband"></div>
+      <div id="eipbanner" class="hidden">
+        <span class="eip-ic">✏</span>
+        <span id="eip-title">Edit In Place</span>
+        <span class="eip-flex"></span>
+        <button id="eip-finish" title="Validate, commit the B-Rep to the database, and return to Precise Drawing">✓ Finish</button>
+        <button id="eip-cancel" title="Discard every edit made in this session (Esc)">✕ Cancel</button>
+      </div>
+    </div>
+    <div id="tray">
+      <div class="panel">
+        <div class="panel-h">Materials</div>
+        <div id="swatches"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Entity Info</div>
+        <div id="entityinfo"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Groups</div>
+        <div id="grouplist"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Tips</div>
+        <div id="entityinfo2" style="padding:10px 12px; line-height:1.55; color:#5a626a; font-size:12px;">
+          Middle-drag = orbit · Shift+middle = pan · Wheel = zoom<br>
+          Arrows lock red/green/blue axes while drawing<br>
+          Type numbers anywhere → Measurements box<br>
+          R → rectangle, then P → push/pull. That's SketchUp!
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="statusbar">
+    <div id="hint"></div>
+    <div id="unitshint">Meters</div>
+    <input id="vcb" placeholder="Measurements" spellcheck="false" autocomplete="off">
+  </div>
+</div>
+
+<div id="ctxmenu" class="hidden"></div>
+<div id="toasts"></div>
+<div id="dialog-backdrop" class="hidden"><div id="dialog"></div></div>
+<input type="file" id="fileinput" accept=".json" style="display:none">
+
+<script src="js/lib/three.min.js"></script>
+<script src="js/geometry.js?v=24"></script>
+<script src="js/GridLine.js?v=4"></script>
+<script src="js/GridManager.js?v=4"></script>
+<script src="js/SnapSystem.js?v=1"></script>
+<script src="js/model.js?v=46"></script>
+<script src="js/db.js?v=1"></script>
+<script src="js/BimElement.js?v=4"></script>
+<script src="js/render.js?v=32"></script>
+<script src="js/tools/base.js?v=23"></script>
+<script src="js/tools/free.js?v=48"></script>
+<script src="js/tools/bim.js?v=58"></script>
+<script src="js/tools/draw.js?v=8"></script>
+    <script src="js/tools/registry.js?v=29"></script>
+<script src="js/engine/api.js?v=1"></script>
+<script src="js/features/column.js?v=2"></script>
+<script src="js/features/beam.js?v=3"></script>
+<script src="js/features/cleanup.js?v=1"></script>
+<script src="js/export-gltf.js?v=1"></script>
+<script src="js/features/measure-area.js?v=2"></script>
+<script src="js/edit-inplace.js?v=1"></script>
+<script src="js/StructuralManager.js?v=3"></script>
+<script src="js/app.js?v=62"></script>
+    <script src="js/families.js?v=2"></script>
+    <script src="js/families-loader.js?v=1"></script>
+    <script src="js/ui-cad.js?v=15"></script>
+    <script src="js/ui-browser.js?v=7"></script>
+</body>
+</html>

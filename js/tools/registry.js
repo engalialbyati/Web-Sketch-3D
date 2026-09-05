@@ -1,0 +1,22 @@
+'use strict';
+// ---------------------------------------------------------------------------
+// Tool registry. Combines the two tool families into the flat id -> class map
+// the app dispatches on. Free tools direct-model the B-Rep; BIM tools create
+// parametric primitives through the same model + transaction manager.
+// ---------------------------------------------------------------------------
+const TOOLS = {
+  // tools/free/*
+  select: FreeTools.SelectTool, line: FreeTools.LineTool, rect: FreeTools.RectTool,
+  circle: FreeTools.CircleTool, arc: FreeTools.ArcTool, pushpull: FreeTools.PushPullTool,
+  move: FreeTools.MoveTool, rotate: FreeTools.RotateTool, scale: FreeTools.ScaleTool,
+  offset: FreeTools.OffsetTool, paint: FreeTools.PaintTool, eraser: FreeTools.EraserTool,
+  trim: FreeTools.TrimTool,
+  tape: FreeTools.TapeMeasureTool, orbit: FreeTools.OrbitTool, pan: FreeTools.PanTool,
+  zoom: FreeTools.ZoomTool, resize: FreeTools.ResizeTool, extrude: FreeTools.ExtrudeCurveTool,
+  // tools/bim/*
+  draw: BimTools.DrawTool, wall: BimTools.WallTool, floor: BimTools.FloorTool,
+  convert: BimTools.ConvertTool,
+  door: BimTools.DoorTool, window: BimTools.WindowTool, opening: BimTools.WallOpeningTool,
+  measurearea: BimTools.MeasureAreaTool,
+};
+window.TOOLS = TOOLS;
