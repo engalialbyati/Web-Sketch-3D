@@ -139,6 +139,27 @@ classDiagram
 | 3 | No double faces / internal partitions: coincident quads mean union — the partition is deleted | `pushPull` twin culling |
 | 4 | Every ring pair has an edge; shells are valid or the transaction rolls back | `validate()` + tx guard |
 
+### 2a. Kernel indexes (why drags stay smooth as models grow)
+
+Every kernel operation used to be a full scan — `findEdge` walked all edges,
+`gc()` invalidated the whole vertex weld hash (so the next weld rebuilt it
+over every vertex), and `autoIntersect` recomputed both face AABBs for every
+candidate pair. Each is fine at 50 faces and effectively quadratic by a few
+hundred — which is exactly where "dragging an element feels laggy" came
+from. Three indexes keep the hot paths near constant-time:
+
+| Index | Maintained by | Answers |
+|---|---|---|
+| `_edgeIndex` — canonical vertex-pair → edge id | `_addEdge` / `_delEdge`; every edge mutation funnels through them, `load()` rebuilds | `findEdge(a, b)` in O(1) |
+| `_vh` — 0.2 mm spatial hash of vertices | incremental `_vhAdd` / `_vhRemove` on create, move (`setVertex`), and `gc()` — never wholesale-invalidated mid-edit | tolerance welding in O(1) |
+| per-scan AABB memo | `autoIntersect` caches each face's box, dropping entries only for faces an intersection mutated | broad-phase overlap without re-boxing |
+
+One flag on top: `model.noAutoIntersect`. Placement **previews** (the
+Scripted Elements drag ghost) build disposable geometry that is deleted the
+moment the preview refreshes, so intersecting it with the model is pure
+waste — with the flag set, a full Fire Stair ghost build costs ~2 ms on a
+small model (was ~90 ms) and stays interactive into the thousands of faces.
+
 ## 3. Input pipeline: from mouse to geometry
 
 ```mermaid
@@ -278,6 +299,29 @@ sequenceDiagram
     HC->>M: frame() → frame + leaf faces
     Note over HC: flip (facing / hand) rebuilds only the frame/leaf
 ```
+
+### 8a. Scripted Elements & downloaded assets
+
+Two extension paths deliberately avoid touching the kernel:
+
+- **Scripted Elements** (`js/script-elements.js`): a user script is a JS
+  expression `({ name, placement, params, build(c) })`, compiled with
+  `new Function` and run through the SAME kernel calls the built-in tools
+  use — `buildInto()` diffs the model before/after to collect the created
+  faces/edges, every face gets a role, and `bim.create('script', …)` turns
+  the result into a parametric entity. Declared params render as editable
+  Entity Info inputs; editing re-runs `buildInto` in a transaction. Source
+  text persists in the IndexedDB `scripts` store (v3) and recompiles on
+  load. `ScriptPlaceTool` places it — the drag ghost is real geometry built
+  under `bimHold` + `noAutoIntersect`, throttled to ~14 builds/s with
+  snap-input dedupe.
+- **BlenderKit assets** (`js/assets.js`): downloaded GLBs live as foreign
+  `THREE.Group`s under a dedicated root — serialized by hash, not by
+  geometry. `healMaterials` repairs the two recurring import defects
+  (WebP-decoded black albedo via canvas sampling, all-zero COLOR_0).
+  Assets defined as Door/Window become hosted insertions that cut their
+  host wall through the same `HostedCut` machinery above, fitted uniformly
+  to the opening and re-cut when the wall rebuilds.
 
 ## 9. Structural elements & dynamic walls
 

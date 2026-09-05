@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-169%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-251%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -10,6 +10,16 @@ walls, floors, doors/windows, structural columns/beams/slabs with level
 datums, dynamic infill-wall clearance, quantity takeoff, and glTF export for
 rendering engines (Twinmotion/Unreal/Blender). Runs 100% locally — no build
 step, no server required.
+
+It also grows past the built-ins: **Scripted Elements** turn pasted code from
+any AI into parametric element types (the app ships the contract template —
+your AI writes the element, the app renders its parameters as editable
+inputs), a **BlenderKit palette** drops free models into the scene (GLB
+imports need no Blender; downloaded doors/windows cut real wall openings),
+and AutoCAD-style **layers**, column design **families**, and datum **grids**
+round out the drafting workflow. The kernel is indexed (edge-pair lookup,
+incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
+models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
 
@@ -308,6 +318,43 @@ from its params and re-cuts every hosted element at its parametric position.
 BIM-originated cuts run under a `bimHold` so the structural-edit detach rule
 never eats their own host.
 
+Downloaded BlenderKit assets can join the same system: any placed asset can
+be **defined as a Door, Window, or Object** in the asset palette — doors and
+windows become hosted insertions that cut a real opening in their wall (the
+asset is uniformly fitted to the opening, oriented with the wall, and
+re-cut automatically when the wall changes), objects stay free.
+
+## Scripted Elements — code your own parametric types
+
+No AI is built into the app — you bring your own. Ask Gemini/ChatGPT/… for
+an element, hand it the app's template (one click copies the full contract),
+paste the code back, and it becomes a real element type with editable
+parameters.
+
+![Scripted Elements editor](docs/scripted-elements.png)
+
+- **Tools ▸ Scripted Element…** (or type `script`, or the ＋ row in the
+  Element Browser) opens the paste editor: **Copy Template** gives your AI
+  the spec, **Insert: Fire Stair / Railing** load shipped examples,
+  **Check** compiles and test-builds against the real kernel, **Save**
+  registers the type under the Element Browser's **Scripted** category.
+- The contract is a small JS expression — `({ name, placement, params,
+  build(c) })` — where `build` draws with the same kernel the app uses
+  (`c.face`, `c.extrude`, `c.role`, …). Whatever parameters the script
+  declares (steps, width, riser, tread, layout — anything) appear as
+  **editable inputs in Entity Info**; changing one regenerates the element.
+- The shipped **Fire Stair** example builds straight and dog-leg egress
+  stairs (steps recompute when you change the count — the tread stays
+  constant), plus landings and rails as kernel solids.
+- Placement previews are the *real* geometry, throttled to ~14 builds/s
+  with snap dedupe and muted script toasts, and preview builds skip model
+  intersection entirely — dragging stays smooth even in large projects.
+
+Scripts persist in IndexedDB (v3 `scripts` store — the source text is what
+round-trips; entities recompile on load). If another stale tab holds an old
+database version, the app detects the lock, falls back to a session store,
+and tells you to close it — the browser panels never hang.
+
 ## Verification engine & regression suite
 
 `model.validate()` is the invariant checker: edge-sharing (duplicate/self-loop
@@ -319,10 +366,14 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 87 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 251 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
-watertightness, sketch validation, and the draw-primitive geometry. The
+watertightness, sketch validation, the draw-primitive geometry, layers and
+grid placement, wall join/stub/bottom caps, the BlenderKit bridge contract
+and asset material healing, and the Scripted Elements system end to end
+(contract validation, Fire Stair/Railing builds against the real kernel,
+step-count regeneration, and the placement tool's gesture/throttling). The
 coordinate invariance check runs in the browser console as
 `runCoordInvariantTest()` — clientToWorldRay -> ground-plane point ->
 worldToScreenPixels is pixel-exact regardless of toolbar/banner visibility
