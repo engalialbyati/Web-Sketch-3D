@@ -2232,6 +2232,8 @@ class App {
           this.clearSelection();
           if (this.view.clearPins) this.view.clearPins();
           this.view.rebuild();
+          this.onLevelsChanged(); // datum view layers follow the loaded model
+          this.onGridsChanged();
           this.view.zoomExtents();
           this.updateInfo();
           this.syncElementsToDb(); // the database mirrors the loaded model
@@ -3570,9 +3572,18 @@ class App {
       const s = localStorage.getItem('websketch3d');
       if (!s) return;
       const data = JSON.parse(s);
-      if (data && data.v && data.v.length) {
+      // a project with only datums (grids/levels, no geometry yet) still
+      // restores — the vertex-count guard used to throw those saves away
+      const hasContent = data && ((data.v && data.v.length) || (data.f && data.f.length)
+        || (data.grid && data.grid.length) || (data.lvl && data.lvl.length));
+      if (hasContent) {
         this.model.load(data);
         this.view.rebuild();
+        // model.load swapped levels/grids wholesale: rebuild their view
+        // layers too, or the datum planes/grips hold the pre-load state
+        // (grids "disappeared" until a level edit nudged them back)
+        this.onLevelsChanged();
+        this.onGridsChanged();
         this.view.zoomExtents();
         this.updateInfo();
         this.toast('Restored autosaved model — File ▸ New for a fresh start');

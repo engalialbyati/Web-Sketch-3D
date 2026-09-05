@@ -56,7 +56,7 @@
       const L = Math.hypot(d[0], d[1]) || 1;
       for (const o of gm.grids) {
         if (o === g || (o.system || 'Main') !== (g.system || 'Main')) continue;
-        const p = window.GridLine.intersect(g, o);
+        const p = GridLine.intersect(g, o);
         if (!p) continue;
         ts.push(((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) / L);
       }
@@ -65,18 +65,29 @@
       const at = t => [g.start[0] + d[0] * t, g.start[1] + d[1] * t];
       return { a: at(Math.max(0, ts[0])), b: at(Math.min(L, ts[ts.length - 1])) };
     }
+    // toScreen() returns CANVAS-LOCAL pixels; tool events carry CLIENT
+    // coordinates — convert before comparing.
+    _clientPt(sp) {
+      const r = this.app.view.canvas.getBoundingClientRect();
+      return { x: sp.x + r.left, y: sp.y + r.top };
+    }
     _hoverAt(ev) {
       const view = this.app.view;
       const s = this.state || {};
       if (s.selectWhat === 'lines') {
         const gm = this.app.gridManager;
         if (!gm) return null;
-        let best = null, bestD = 12;
+        // closest point of each grid to the cursor's world position on the
+        // level plane, ranked in SCREEN pixels (zoom-independent picking)
+        const w = this._screenToWorld({ x: ev.clientX, y: ev.clientY });
+        if (!w) return null;
+        let best = null, bestD = 14;
         for (const g of gm.grids) {
-          const c = g.closestPoint([ev.px || 0, ev.py || 0]) || g.closestPoint(this._worldPt(ev));
-          if (!c) continue;
-          const sp = view.toScreen(G.v(c.p[0], c.p[1], this._z()));
-          if (!sp || sp.behind) continue;
+          const c = g.closestPoint(w);
+          if (!c || !c.p) continue;
+          const sp0 = view.toScreen(G.v(c.p[0], c.p[1], this._z()));
+          if (!sp0 || sp0.behind) continue;
+          const sp = this._clientPt(sp0);
           const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
           if (d < bestD) { bestD = d; best = { line: g }; }
         }
@@ -84,8 +95,9 @@
       }
       let best = null, bestD = 14;
       for (const ix of this._ixs()) {
-        const sp = view.toScreen(G.v(ix.p[0], ix.p[1], this._z()));
-        if (!sp || sp.behind) continue;
+        const sp0 = view.toScreen(G.v(ix.p[0], ix.p[1], this._z()));
+        if (!sp0 || sp0.behind) continue;
+        const sp = this._clientPt(sp0);
         const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
         if (d < bestD) { bestD = d; best = { ix }; }
       }
