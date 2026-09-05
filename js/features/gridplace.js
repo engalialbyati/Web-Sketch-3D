@@ -316,12 +316,13 @@
                 const c = mm.faceCentroid(f2);
                 roles[f2.id] = Math.abs(c.z - (zBase + h)) < 1e-6 ? 'top' : Math.abs(c.z - zBase) < 1e-6 ? 'bottom' : 'side';
               }
-              app.bim.create('wall', {
+              const went = app.bim.create('wall', {
                 base: [ax, ay, zBase], end: [bx, by, zBase],
                 baseLevel: app.bimOptions.baseLevel, topConstraint: app.bimOptions.topConstraint,
                 height: h, thickness: th, locationLine: 'centerline', primitive: 'grid', closed: false,
                 structuralDeductions: ded,
               }, roles, []);
+              if (went) app.bim.ensureWallBottom(went);
               n++;
             }
           } finally { mm.endEdgeSweep(); mm.bimHold = false; }

@@ -68,8 +68,10 @@ const SnapSystem = (() => {
 
     // 2) grid lines — closest point along the (sampled) segment
     best = null; bestD = EPS_PX;
+    const activeLvl = app.mode === 'bim' && app.bimOptions ? app.bimOptions.baseLevel : null;
     for (const g of gm.grids) {
       if (!g.covers(z)) continue;
+      if (g.hidden || (activeLvl && g.hiddenAt && g.hiddenAt(activeLvl))) continue; // per-level hidden grids don't snap
       const poly = g.polyline();
       let hit = null;
       for (let i = 0; i < poly.length - 1; i++) {

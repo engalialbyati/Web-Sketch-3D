@@ -429,6 +429,63 @@ class BimEntityManager {
     ent.params.topConstraint = 'unconnected'; // the push overrode the constraint
     return true;
   }
+  // Walls founded on a level plane with sporadic hosts (footing tops at
+  // the columns, joined neighbors during rebuilds) extrude with NO bottom
+  // cap — pushPull's merge semantics suppress the whole cap when the
+  // footprint touches anything, leaving the span between contacts open.
+  // Fix at the wall layer: draw the footprint over the plane and let the
+  // healing machinery keep only the UNCOVERED regions — a partial bottom
+  // with complementary boundaries (no internal partitions, no z-fighting).
+  ensureWallBottom(ent) {
+    const m = this.model;
+    if (!ent || ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end) return false;
+    const p = ent.params;
+    const hasBottom = ent.faces.some(id => {
+      const f = m.faces.get(id);
+      return f && f.userData && f.userData.role === 'bottom';
+    });
+    if (hasBottom) return false;
+    let ring;
+    try { ring = this.wallRing(p); } catch (e) { return false; }
+    if (!ring || ring.length < 3) return false;
+    const before = new Set(m.faces.keys());
+    m.bimHold = true;
+    let cap = null;
+    try {
+      cap = m.addFaceFromRings(ring.map(q => G.clone(q)));
+      if (cap) m.punchOrSplit(cap);
+    } finally { m.bimHold = false; }
+    if (!cap) return false;
+    // survivors of the punch/trim (cells of the uncovered regions) —
+    // claim only faces that genuinely lie inside this wall's band, never
+    // unrelated neighbors on the same plane
+    const dir = { x: p.end[0] - p.base[0], y: p.end[1] - p.base[1] };
+    const L = Math.hypot(dir.x, dir.y) || 1;
+    const nx = -dir.y / L, ny = dir.x / L;
+    const inBand = q => {
+      const dx = q.x - p.base[0], dy = q.y - p.base[1];
+      const t = (dx * dir.x + dy * dir.y) / L;
+      const s = Math.abs(dx * nx + dy * ny);
+      return t >= -0.01 && t <= L + 0.01 && s <= (p.thickness || 0.2) / 2 + 0.01;
+    };
+    let added = 0;
+    for (const id of [...m.faces.keys()]) {
+      if (before.has(id)) continue;
+      const f = m.faces.get(id);
+      if (!f || f.userData) continue;
+      const pts = m.pts(f.loop);
+      if (Math.min(...pts.map(q => q.z)) > p.base[2] + 1e-6 || Math.max(...pts.map(q => q.z)) < p.base[2] - 1e-6) continue;
+      if (!pts.every(inBand)) continue;
+      f.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'bottom' };
+      ent.faces.push(id);
+      for (const r of m.rings(f)) for (let i = 0; i < r.length; i++) {
+        const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+        if (e && !e.userData) { e.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'profile' }; ent.edges.push(e.id); }
+      }
+      added++;
+    }
+    return added > 0;
+  }
   // Structural clearance re-fit: the height param follows the cleared top
   // plane (Z under the lowest slab soffit / drop-beam underside above the
   // baseline) and the solid REGENERATES from params — robust even when the
@@ -624,6 +681,7 @@ class BimEntityManager {
       const hosted = this._deleteWallGeometry(ent);
       m.bimHold = false;
       const ok = this._rebuildWallCore(id, hosted);
+      if (ok) this.ensureWallBottom(ent); // joins strip caps — restore
       // one hop: refresh the joined neighbors so the caps follow this edit
       if (ok && chainJoins && ent.params.joins) {
         for (const side of ['start', 'end']) {
@@ -1067,7 +1125,7 @@ class App {
     this.gridManager._hydrate();
     // grid edits re-derive the level plane rectangles (they track the grid AABB)
     this.view.setLevels(this.levelManager.levels, this.gridManager.grids);
-    this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null);
+    this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null, this.selGridZ);
     this.view.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
     this._syncGridsToDb();
     const bd = document.getElementById('dialog-backdrop');
@@ -1554,31 +1612,87 @@ class App {
   isEntityHidden(id) { const e = this.bim.getEntityById(id); return !!(e && e.hidden); }
   /** Toggle lock/hidden on a BIM element, grid line, or level.
    * patch: { locked?: bool, hidden?: bool } */
-  setItemFlags(kind, id, patch) {
+  setItemFlags(kind, id, patch, lvlId) {
+    // bulk master over a set of ELEMENTS (category header in the browser):
+    // id is a comma-joined entity id list — one rebuild, one notification
+    if (kind === 'elements') {
+      const ids = String(id).split(',').filter(Boolean);
+      const live = ids.map(x => this.bim.getEntityById(x)).filter(Boolean);
+      if (!live.length) return;
+      // live-state toggle targets (stale-click safe, like the grid masters)
+      const eff = {};
+      if (patch.hidden != null) eff.hidden = live.every(e => e.hidden) ? false : patch.hidden;
+      if (patch.locked != null) eff.locked = live.every(e => e.locked) ? false : patch.locked;
+      for (const ent of live) {
+        if (eff.hidden != null) ent.hidden = eff.hidden;
+        if (eff.locked != null) ent.locked = eff.locked;
+        if (eff.hidden || eff.locked) {
+          for (const fid of ent.faces) this.sel.faces.delete(fid);
+          for (const eid of ent.edges) this.sel.edges.delete(eid);
+        }
+      }
+      this.onSelectionChanged();
+      this.view.rebuild();
+      this._saveAutosave();
+      if (window.ElementBrowser) ElementBrowser.refresh();
+      return;
+    }
+    // ONE grid, ONE level: hidden is per (grid, level) — hiding a grid on
+    // Level 1 must not hide it on Level 2
+    if (kind === 'grid-at' && lvlId) {
+      const g = this.gridManager && this.gridManager.getGrid(id);
+      if (!g) return;
+      g.hiddenLevels = g.hiddenLevels || [];
+      if (patch.hidden === true) {
+        if (!g.hiddenLevels.includes(lvlId)) g.hiddenLevels.push(lvlId);
+      } else if (patch.hidden === false) {
+        g.hidden = false; // showing here never keeps a global hide
+        g.hiddenLevels = g.hiddenLevels.filter(x => x !== lvlId);
+      }
+      if (patch.locked != null) g.locked = !!patch.locked;
+      this.onGridsChanged();
+      if (window.ElementBrowser) ElementBrowser.refresh();
+      return;
+    }
     // bulk masters from the Element Browser: one click, every grid in the
     // group flips, ONE notification (a 100-grid level must not rebuild ×100)
     if (kind === 'grid-level' || kind === 'grids-all') {
       const gm = this.gridManager;
       if (!gm) return;
-      const ids = kind === 'grids-all'
-        ? gm.grids.map(g => g.id)
-        : (() => {
-          const lvl = this.levelManager.getLevel(id);
-          if (!lvl) return [];
-          return gm.grids.filter(g => g.covers(lvl.elevation)).map(g => g.id);
-        })();
+      let ids, lvl = null;
+      if (kind === 'grids-all') {
+        ids = gm.grids.map(g => g.id);
+      } else {
+        lvl = this.levelManager.getLevel(id);
+        if (!lvl) return;
+        ids = gm.grids.filter(g => g.covers(lvl.elevation)).map(g => g.id);
+      }
       if (!ids.length) return;
       // toggle targets derive from LIVE state, not the (possibly stale, mid-
       // refresh) button class — rapid clicks always flip in the right direction
-      const stateOf = key => ids.every(id => { const g = gm.getGrid(id); return g && !!g[key]; });
+      const get = gid => gm.getGrid(gid);
+      const stateOf = key => ids.every(gid => { const g = get(gid); if (!g) return true;
+        return key === 'hidden'
+          ? (lvl ? g.hiddenAt(lvl.id) : !!g.hidden)   // per-level visibility
+          : !!g[key]; });
       const eff = {};
       if (patch.hidden != null) eff.hidden = stateOf('hidden') ? false : patch.hidden;
       if (patch.locked != null) eff.locked = stateOf('locked') ? false : patch.locked;
       let n = 0;
       for (const gid of ids) {
-        const g = gm.getGrid(gid);
+        const g = get(gid);
         if (!g) continue;
-        Object.assign(g, eff);
+        if (eff.hidden === true && lvl) {
+          g.hiddenLevels = g.hiddenLevels || [];
+          if (!g.hiddenLevels.includes(lvl.id)) g.hiddenLevels.push(lvl.id);
+        } else if (eff.hidden === false && lvl) {
+          g.hidden = false;
+          g.hiddenLevels = g.hiddenLevels.filter(x => x !== lvl.id);
+        } else {
+          g.hidden = eff.hidden;
+          if (eff.hidden === false) g.hiddenLevels = []; // master SHOW clears per-level hides too
+        }
+        if (eff.locked != null) g.locked = eff.locked;
         n++;
       }
       if (n) this.onGridsChanged();
@@ -2828,38 +2942,45 @@ class App {
   // geometry drawn on them (a hosted wall covers its grid line) — hitting a
   // hairline within tol px is intentional, so the grid wins over the faces
   // and edges beneath it. Returns { grid, z } or null.
-  _gridLineAt(ev, tol = 7) {
+  _gridLineAt(ev, tol = 10) {
     if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
     const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
-    const gripZ = new Map();
-    for (const gp of this.view.gridGripPoints()) gripZ.set(gp.gridId, gp.p.z);
+    // every COVERED LEVEL's copy is its own target: the level-2 line selects
+    // from level 2 (the drag plane follows the clicked level)
+    const zsAll = (this.levelManager.levels || [])
+      .map(l => l.elevation).filter(z => z != null).sort((a, b) => a - b);
     let best = null, bd = tol;
     for (const g of this.gridManager.grids) {
       if (g.hidden || g.locked) continue;
-      const z = gripZ.has(g.id) ? gripZ.get(g.id) : 0;
+      const covered = zsAll.filter(z => g.covers(z));
+      const zList = covered.length ? covered : [0];
       const poly = g.polyline();
-      for (let i = 0; i < poly.length - 1; i++) {
-        const sa = this.view.worldToScreenPixels({ x: poly[i][0], y: poly[i][1], z });
-        const sb = this.view.worldToScreenPixels({ x: poly[i + 1][0], y: poly[i + 1][1], z });
-        if (!sa.visible && !sb.visible) continue;
-        const dx = sb.x - sa.x, dy = sb.y - sa.y, L2 = dx * dx + dy * dy;
-        let d;
-        if (L2 < 1e-6) d = Math.hypot(sa.x - q.x, sa.y - q.y);
-        else {
-          const t = Math.max(0, Math.min(1, ((q.x - sa.x) * dx + (q.y - sa.y) * dy) / L2));
-          d = Math.hypot(sa.x + dx * t - q.x, sa.y + dy * t - q.y);
+      for (const z of zList) {
+        for (let i = 0; i < poly.length - 1; i++) {
+          const sa = this.view.worldToScreenPixels({ x: poly[i][0], y: poly[i][1], z });
+          const sb = this.view.worldToScreenPixels({ x: poly[i + 1][0], y: poly[i + 1][1], z });
+          if (!sa.visible && !sb.visible) continue;
+          const dx = sb.x - sa.x, dy = sb.y - sa.y, L2 = dx * dx + dy * dy;
+          let d;
+          if (L2 < 1e-6) d = Math.hypot(sa.x - q.x, sa.y - q.y);
+          else {
+            const t = Math.max(0, Math.min(1, ((q.x - sa.x) * dx + (q.y - sa.y) * dy) / L2));
+            d = Math.hypot(sa.x + dx * t - q.x, sa.y + dy * t - q.y);
+          }
+          if (d < bd) { bd = d; best = { grid: g, z }; }
         }
-        if (d < bd) { bd = d; best = { grid: g, z }; }
       }
     }
     return best;
   }
-  selectGrid(id) {
+  selectGrid(id, z = null) {
     this.selGridId = id;
+    this.selGridZ = z;
     this.sel.faces.clear(); this.sel.edges.clear();
     this.onSelectionChanged();
     const g = this.gridManager.getGrid(id);
-    if (g) this.setStatus(`Grid ${g.name} selected — drag the line to move it, Del to delete, endpoint grips to stretch`);
+    const lvl = z != null && this.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-6);
+    if (g) this.setStatus(`Grid ${g.name} selected${lvl ? ' on ' + lvl.name : ''} — drag the line to move it, Del to delete, endpoint grips to stretch`);
   }
   _gridGripAt(ev) {
     if (this.mode !== 'bim' || !this.gridManager || !this.gridManager.grids.length) return null;
@@ -3184,6 +3305,7 @@ class App {
   clearSelection() {
     this.sel = { edges: new Set(), faces: new Set() };
     this.selGridId = null;
+    this.selGridZ = null;
     this.onSelectionChanged();
   }
   pruneSelection() {
@@ -3195,7 +3317,7 @@ class App {
     this.updateInfo();
     // the selected grid highlights in its own overlay (setGrids rebuild)
     if (this.gridManager && this.gridManager.grids.length && this.view.setGrids)
-      this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null);
+      this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridId || null, this.selGridZ);
     if (this.tool && this.tool.id === 'scale') { this.tool.activate(); this.tool.status(); }
   }
   updateInfo() {
@@ -3446,6 +3568,7 @@ class App {
       const g = this.gridManager && this.gridManager.getGrid(this.selGridId);
       const id = this.selGridId;
       this.selGridId = null;
+      this.selGridZ = null;
       let err = null;
       this.run('delete grid', () => { err = this.gridManager.removeGrid(id); });
       if (typeof err === 'string') { // locked or elements attached: refused

@@ -468,7 +468,7 @@ class Viewport {
   // covers, with circular bubbles (billboard sprites — text never flips
   // upside down) and drag grips at both ends. `levels` is the sorted list of
   // { elevation } the grids are drawn against.
-  setGrids(grids, levels, selGridId = null) {
+  setGrids(grids, levels, selGridId = null, selGridZ = null) {
     if (!this.gridsGroup) {
       this.gridsGroup = new THREE.Group();
       this.gridsGroup.visible = false;
@@ -481,15 +481,21 @@ class Viewport {
       if (c.material) c.material.dispose();
     }
     this._gridGrips = []; // [{ gridId, which:'start'|'end', p:{x,y,z} }]
-    const zs = (levels || []).map(l => l.elevation).filter(z => z != null).sort((a, b) => a - b);
+    // a grid renders ONLY at the levels where it is visible: hidden on
+    // Level 1 must not hide it on Level 2 (per-level eye in the browser)
+    const lvObjs = (levels || []).filter(l => l.elevation != null).sort((a, b) => a.elevation - b.elevation);
     for (const g of grids || []) {
-      if (g.hidden) continue; // hidden grids leave the viewport and the grips
-      const covered = zs.filter(z => g.covers(z));
-      if (!covered.length) continue;
-      const zGrip = covered[0];
+      if (g.hidden) continue; // master-hidden grids leave the viewport entirely
+      const visible = lvObjs.filter(l => g.covers(l.elevation) && !g.hiddenAt(l.id));
+      if (!visible.length) continue;
+      const zs = visible.map(l => l.elevation);
+      const zGrip = zs[0];
       const poly = g.polyline();
-      const sel = g.id === selGridId; // selected grid reads in amber
-      for (const z of covered) {
+      const selGrid = g.id === selGridId; // selected grid reads in amber
+      for (const z of zs) {
+        // amber only the copy on the LEVEL it was selected from (a level-2
+        // selection highlights the level-2 line, not every copy)
+        const sel = selGrid && (selGridZ == null || Math.abs(z - selGridZ) < 1e-6);
         const pts = poly.map(p => new THREE.Vector3(p[0], p[1], z));
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
@@ -517,10 +523,11 @@ class Viewport {
         spr.position.set(end.p[0] + end.d.x * 0.7, end.p[1] + end.d.y * 0.7, zGrip);
         this.gridsGroup.add(spr);
       }
-      // drag grips (small squares) at both endpoints
+      // drag grips (small squares) at both endpoints — amber when the grid
+      // is selected (grips live at the lowest covered level only)
       for (const which of ['start', 'end']) {
         const p = which === 'start' ? S : E;
-        const spr = this._gridGrip(sel ? 0xf59e0b : 0x64748b);
+        const spr = this._gridGrip(selGrid ? 0xf59e0b : 0x64748b);
         spr.position.set(p[0], p[1], zGrip);
         this.gridsGroup.add(spr);
         this._gridGrips.push({ gridId: g.id, which, p: { x: p[0], y: p[1], z: zGrip } });

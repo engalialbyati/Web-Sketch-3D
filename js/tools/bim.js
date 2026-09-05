@@ -429,8 +429,10 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
         const ed = app.model.edges.get(eid);
         if (ed) ed.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'profile' };
       }
+      app.bim.ensureWallBottom(ent);
     } else {
-      app.bim.create('wall', wallParams, roles, newEdges);
+      const ent2 = app.bim.create('wall', wallParams, roles, newEdges);
+      if (ent2) app.bim.ensureWallBottom(ent2); // founded walls get their underside
     }
     if (gridTrim) {
       app.toast(`Wall on grid ${gridTrim.grid.name}: ${fmtLen(gridTrim.len1)} clear — ${fmtLen(gridTrim.len0)} between grids − ${fmtLen(gridTrim.tA)}${gridTrim.tB ? ' − ' + fmtLen(gridTrim.tB) : ''} of column`);

@@ -337,9 +337,10 @@
   };
 
   // eye / lock toggles shared by every project row (elements, grids, levels)
-  function flagBtns(kind, id, locked, hidden) {
-    return `<button class="elb-flag f-eye${hidden ? ' off' : ''}" data-flag="hidden" data-kind="${kind}" data-id="${esc(id)}" title="${hidden ? 'Show in viewport' : 'Hide from viewport (display only)'}">${hidden ? '\u{1F648}' : '\u{1F441}'}</button>` +
-      `<button class="elb-flag f-lock${locked ? ' on' : ''}" data-flag="locked" data-kind="${kind}" data-id="${esc(id)}" title="${locked ? 'Unlock (allow select / delete)' : 'Lock (no select, no delete, no edits)'}">${locked ? '\u{1F512}' : '\u{1F513}'}</button>`;
+  function flagBtns(kind, id, locked, hidden, lvlId) {
+    const lv = lvlId ? ` data-lvl="${esc(lvlId)}"` : '';
+    return `<button class="elb-flag f-eye${hidden ? ' off' : ''}" data-flag="hidden" data-kind="${kind}" data-id="${esc(id)}"${lv} title="${hidden ? 'Show' : 'Hide'}${lvlId ? ' at this level' : ''}">${hidden ? '\u{1F648}' : '\u{1F441}'}</button>` +
+      `<button class="elb-flag f-lock${locked ? ' on' : ''}" data-flag="locked" data-kind="${kind}" data-id="${esc(id)}"${lv} title="${locked ? 'Unlock (allow select / delete)' : 'Lock (no select, no delete, no edits)'}">${locked ? '\u{1F512}' : '\u{1F513}'}</button>`;
   }
 
   function renderTree() {
@@ -374,10 +375,10 @@
       // carries MASTER eye/lock so 100 grids hide with one click
       const gm = app.gridManager;
       const grids = (gm && gm.grids) || [];
-      const grRow = g => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')})">
+      const grRow = (g, lvlId) => `<div class="elb-node elb-elem elb-datum" title="Grid ${esc(g.name)} (${esc(g.system || 'Main')}) — hidden state is per level">
           <span class="elb-tw"></span>
           <span class="elb-lab">${esc(g.name)} <span class="elb-lvl">${esc(g.system || 'Main')}</span></span>
-          ${flagBtns('grid', g.id, !!g.locked, !!g.hidden)}
+          ${flagBtns('grid-at', g.id, !!g.locked, g.hiddenAt ? !!g.hiddenAt(lvlId) : !!g.hidden, lvlId)}
         </div>`;
       let grHtml = '';
       if (grids.length) {
@@ -398,14 +399,14 @@
           const matches = atLevel.filter(g => !filter || g.name.toLowerCase().includes(filter) || lvl.name.toLowerCase().includes(filter));
           if (!matches.length) continue;
           const lgOpen = exp.has('sec:grids:' + lvl.id);
-          const lgHidden = atLevel.every(g => g.hidden);
+          const lgHidden = atLevel.every(g => g.hiddenAt ? g.hiddenAt(lvl.id) : g.hidden);
           const lgLocked = atLevel.every(g => g.locked);
           grHtml += `<div class="elb-node elb-fam elb-levelgrp${lgOpen ? ' open' : ''}" data-sec="grids:${esc(lvl.id)}" title="Every grid line shown at ${esc(lvl.name)} (${(+lvl.elevation).toFixed(2)} m)">
             <span class="elb-tw">${lgOpen ? '\u25BE' : '\u25B8'}</span>
             <span class="elb-lab">${esc(lvl.name)} <span class="elb-lvl">${atLevel.length} grid${atLevel.length === 1 ? '' : 's'}</span></span>
             ${flagBtns('grid-level', lvl.id, lgLocked, lgHidden)}
           </div>`;
-          if (lgOpen) for (const g of matches) grHtml += grRow(g);
+          if (lgOpen) for (const g of matches) grHtml += grRow(g, lvl.id);
         }
       }
       html += grHtml;
@@ -417,11 +418,24 @@
       if (filter && !famsVisible.length && !cat.name.toLowerCase().includes(filter)) continue;
       const cOpen = exp.has('cat:' + cat.id);
       const n = counts.get(cat.id) || 0;
+      // master eye/lock over every placed element of this category
+      let catFlags = '';
+      if (n && app) {
+        const ents = [];
+        for (const fam of fams)
+          for (const ty of catalog.types.filter(t => t.familyId === fam.id))
+            for (const el of (elementsByType.get(ty.id) || []))
+              if (app.bim.getEntityById(el.id)) ents.push(app.bim.getEntityById(el.id));
+        if (ents.length)
+          catFlags = flagBtns('elements', ents.map(e => e.id).join(','),
+            ents.every(e => e.locked), ents.every(e => e.hidden));
+      }
       html += `<div class="elb-node elb-cat${cOpen ? ' open' : ''}" data-cat="${cat.id}">
         <span class="elb-tw">${cOpen ? '▾' : '▸'}</span>
         <span class="elb-ic" style="background:${CAT_COLORS[cat.id] || '#8a929a'}"></span>
         <span class="elb-lab">${esc(cat.name)}</span>
         <span class="elb-count">${n || ''}</span>
+        ${catFlags}
       </div>`;
       if (!cOpen) continue;
       for (const fam of (filter ? famsVisible : fams)) {
@@ -483,7 +497,7 @@
         if (app && app.setItemFlags) {
           const isLock = flag.dataset.flag === 'locked';
           const cur = flag.classList.contains(isLock ? 'on' : 'off');
-          app.setItemFlags(flag.dataset.kind, flag.dataset.id, { [flag.dataset.flag]: !cur });
+          app.setItemFlags(flag.dataset.kind, flag.dataset.id, { [flag.dataset.flag]: !cur }, flag.dataset.lvl);
         }
         return;
       }

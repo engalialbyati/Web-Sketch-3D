@@ -32,8 +32,12 @@ class GridLine {
     this.verticalExtent = Object.assign({ min: 0, max: 100 },
       def.verticalExtent || {});
     this.locked = !!def.locked; // grips refuse dragging, deletion refused
-    this.hidden = !!def.hidden; // leaves render, snapping and grips
+    this.hidden = !!def.hidden; // hidden at EVERY level (master eye)
+    this.hiddenLevels = Array.isArray(def.hiddenLevels) ? def.hiddenLevels.slice() : [];
   }
+  // visibility is PER LEVEL: one grid object serves many plan views, and
+  // hiding it on Level 1 must not hide it on Level 2
+  hiddenAt(levelId) { return this.hidden || this.hiddenLevels.includes(levelId); }
 
   static uuid() {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return 'gl_' + crypto.randomUUID();
@@ -162,6 +166,7 @@ class GridLine {
       r.ve = [this.verticalExtent.min, this.verticalExtent.max];
     if (this.locked) r.lk = 1;
     if (this.hidden) r.hd = 1;
+    if (this.hiddenLevels.length) r.hl = [...this.hiddenLevels];
     return r;
   }
 
@@ -193,6 +198,7 @@ class GridLine {
       verticalExtent: { min: ve[0], max: ve[1] },
       locked: !!(rec.lk || rec.locked),
       hidden: !!(rec.hd || rec.hidden),
+      hiddenLevels: Array.isArray(rec.hl) ? rec.hl.slice() : [],
     });
   }
 }

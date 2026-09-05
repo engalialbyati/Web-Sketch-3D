@@ -138,7 +138,7 @@ class SelectTool extends Tool {
     // covers its line): hitting the hairline wins over the wall beneath
     const gl = this.app._gridLineAt && this.app._gridLineAt(ev);
     if (gl) {
-      this.app.selectGrid(gl.grid.id);
+      this.app.selectGrid(gl.grid.id, gl.z);
       this._gdrag = { grid: gl.grid, z: gl.z, last: null, moved: false };
       return;
     }
@@ -262,6 +262,16 @@ class SelectTool extends Tool {
       const hosted = this._hostedSel();
       if (sel || hosted) this._drawWallHandles();
       else { this._hits = null; this._badge = null; this._flips = null; }
+      // grid hover: the dashed datum shows through the wall, and a light
+      // overlay confirms what a click will select (amber when already selected)
+      if (!this._bandStart) {
+        const gl = this.app._gridLineAt && this.app._gridLineAt(ev);
+        if (!sel && !hosted) this.app.view.clearPreview(); // no handles drew: own the overlay
+        if (gl) {
+          const poly = gl.grid.polyline().map(p => G.v(p[0], p[1], gl.z));
+          this.app.view.previewLine(poly, gl.grid.id === this.app.selGridId ? 0xf59e0b : 0x0ea5e9, true);
+        }
+      }
     }
     if (!this._bandStart) return;
     const q = this.app.view.eventPt(ev);
