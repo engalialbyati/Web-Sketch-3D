@@ -450,9 +450,20 @@
       // meeting beams OVERLAP solidly, autoIntersect welds the corner shut,
       // and the takeoff's join priority credits the overlap to the column.
       const prof0 = BeamProfiles.normalize(p);
+      // BUFFER ZONE (owner's rule): extend an end ONLY into an EMPTY corner.
+      // Where a column already occupies the intersection, the column IS the
+      // joint filler — extending there just overlaps the column and shreds
+      // both into fragments (39k faces on a full frame). Empty corner (no
+      // column within 0.5 m of the endpoint): extend to weld beams solidly.
+      const hasColumn = model.bimEntities ? model.bimEntities.some(e =>
+        e.type === 'column' && e.params && e.params.base
+        && Math.hypot(e.params.base[0] - A0[0], e.params.base[1] - A0[1]) < 0.5) : false;
+      const hasColumnB = model.bimEntities ? model.bimEntities.some(e =>
+        e.type === 'column' && e.params && e.params.base
+        && Math.hypot(e.params.base[0] - B0[0], e.params.base[1] - B0[1]) < 0.5) : false;
       const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
-      const A = [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
-      const B = [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
+      const A = hasColumn ? [A0[0], A0[1], A0[2]] : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
+      const B = hasColumnB ? [B0[0], B0[1], B0[2]] : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
       // The sweep sits 0.5 mm below the reference plane: a slab sketched at
       // the same level (or another beam crossing) then meets NO coplanar
