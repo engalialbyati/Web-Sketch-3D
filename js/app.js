@@ -940,7 +940,18 @@ class BimEntityManager {
     let built = [];
     try {
       built = app.structural.buildBeam(G, m, ent.params);
-    } catch (e) { m.bimHold = false; return false; }
+    } catch (e) {
+      // one retry after gc: mid-pass junctions can leave transient debris
+      // that makes the first sweep fail; a clean second attempt usually lands
+      try {
+        m.gc();
+        for (const f2 of m.faces.values()) {
+          m.edgesForRing(f2.loop, true);
+          for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+        }
+        built = app.structural.buildBeam(G, m, ent.params);
+      } catch (e2) { m.bimHold = false; return false; }
+    }
     const bl = ent.params.baseline;
     const ax = bl[0][0], ay = bl[0][1], bx = bl[bl.length - 1][0], by = bl[bl.length - 1][1];
     const zRef = bl[0][2];
@@ -5019,12 +5030,28 @@ class App {
     if (this.bim && this.bim._hostsDirty && this.bim._hostsDirty.size) {
       const dirty = [...this.bim._hostsDirty];
       this.bim._hostsDirty.clear();
+      // dependency order: columns stand alone, beams trim against them,
+      // walls trim against both — rebuilding a beam against a half-built
+      // column is what made placed beams vanish (rebuild deleted the old
+      // faces, then failed against the transient junction state)
+      const order = { column: 0, beam: 1, wall: 2 };
+      dirty.sort((a, b) => (order[(this.bim.getEntityById(a) || {}).type] ?? 3)
+        - (order[(this.bim.getEntityById(b) || {}).type] ?? 3));
+      let failed = 0;
       for (const wid of dirty) {
         const ent = this.bim.getEntityById(wid);
         if (!ent) continue;
-        if (ent.type === 'wall') this.bim.rebuildWallWithHosts(wid, false);
-        else if (ent.type === 'beam') this.bim.rebuildBeamEntity(wid);
-        else if (ent.type === 'column') this.bim.rebuildColumnEntity(wid);
+        let ok = true;
+        if (ent.type === 'wall') ok = this.bim.rebuildWallWithHosts(wid, false);
+        else if (ent.type === 'beam') ok = this.bim.rebuildBeamEntity(wid);
+        else if (ent.type === 'column') ok = this.bim.rebuildColumnEntity(wid);
+        if (!ok) failed++;
+      }
+      // a failed regeneration already deleted the entity's faces — the
+      // parametric rebuild is the guaranteed recovery (params are truth)
+      if (failed) {
+        this.toast(`${failed} element${failed === 1 ? '' : 's'} failed to regenerate — rebuilding model from parameters`, true);
+        this.rebuildFromParams();
       }
     }
     this.refreshEdgeStamps();
