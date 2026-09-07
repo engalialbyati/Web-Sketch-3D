@@ -439,9 +439,20 @@
      *  kernel, so the solid welds into adjacent columns / walls / slabs.
      *  Returns the created face ids. */
     buildBeam(G, model, p) {
-      const A = p.baseline[0], B = p.baseline[p.baseline.length - 1];
-      const d = G.norm(G.v(B[0] - A[0], B[1] - A[1], 0));
+      const A0 = p.baseline[0], B0 = p.baseline[p.baseline.length - 1];
+      const d = G.norm(G.v(B0[0] - A0[0], B0[1] - A0[1], 0));
       if (G.isZero(d)) throw new Error('beam baseline is degenerate');
+      // END EXTENSION (cast-in-place join): beams run centerline-to-centerline,
+      // so two beams meeting at 90° only TOUCH at one point — the corner
+      // quadrant stays void (the visible gap) and the touching-only junction
+      // breeds degenerate split slivers (missing faces). Extend each end by
+      // half the section width — the same wrap-butt overlap walls use — so
+      // meeting beams OVERLAP solidly, autoIntersect welds the corner shut,
+      // and the takeoff's join priority credits the overlap to the column.
+      const prof0 = BeamProfiles.normalize(p);
+      const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
+      const A = [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
+      const B = [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
       // The sweep sits 0.5 mm below the reference plane: a slab sketched at
       // the same level (or another beam crossing) then meets NO coplanar

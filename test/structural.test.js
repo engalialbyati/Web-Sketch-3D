@@ -105,7 +105,8 @@ module.exports = h => {
     const M = mgr([]);
     const faces = M.buildBeam(G, m, p);
     ok(faces.length >= 6, 'rect beam needs 4 sides + 2 caps, got ' + faces.length);
-    near(m.shellVolume(faces.map(f => f.id)), 0.25 * 0.5 * 4, 1e-9);
+    // + join extension: webWidth/2 per end (cast-in-place corner overlap)
+    near(m.shellVolume(faces.map(f => f.id)), 0.25 * 0.5 * (4 + 0.25), 1e-9);
     // the sweep hangs from the level plane (0.5 mm anti-z-fight drop)
     const zs = faces.flatMap(f => m.pts(f.loop).map(q => q.z));
     near(Math.max(...zs), 4.0 - 5e-4, 1e-9);
@@ -120,7 +121,7 @@ module.exports = h => {
       baseline: [[0, 0, 4], [3, 0, 4]],
     };
     const faces = mgr([]).buildBeam(G, m, p);
-    const expected = (0.25 * 0.45 + 0.8 * 0.15) * 3;
+    const expected = (0.25 * 0.45 + 0.8 * 0.15) * (3 + 0.25);
     near(m.shellVolume(faces.map(f => f.id)), expected, 1e-9);
     eq(m.validate().ok, true);
   });
@@ -132,7 +133,7 @@ module.exports = h => {
       baseline: [[0, 0, 4], [2, 0, 4]],
     };
     const faces = mgr([]).buildBeam(G, m, p);
-    near(m.shellVolume(faces.map(f => f.id)), (0.25 * 0.5 + 0.35 * 0.12) * 2, 1e-9);
+    near(m.shellVolume(faces.map(f => f.id)), (0.25 * 0.5 + 0.35 * 0.12) * (2 + 0.25), 1e-9);
     // flange juts to +u only (left of draw dir = +y side... u maps to left
     // normal (-dy, dx) = (0,1): flange on the +y side, none on -y)
     const ys = faces.flatMap(f => m.pts(f.loop).map(q => q.y));
@@ -147,7 +148,7 @@ module.exports = h => {
       baseline: [[1, 1, 0], [4, 4, 0]], // 45 degrees, length 3*sqrt(2)
     };
     const faces = mgr([]).buildBeam(G, m, p);
-    near(m.shellVolume(faces.map(f => f.id)), 0.3 * 0.4 * 3 * Math.SQRT2, 1e-9);
+    near(m.shellVolume(faces.map(f => f.id)), 0.3 * 0.4 * (3 * Math.SQRT2 + 0.3), 1e-9);
     eq(m.validate().ok, true);
   });
   test('column solid spans exactly its level bounds', () => {
