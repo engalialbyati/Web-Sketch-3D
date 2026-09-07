@@ -455,15 +455,33 @@
       // joint filler — extending there just overlaps the column and shreds
       // both into fragments (39k faces on a full frame). Empty corner (no
       // column within 0.5 m of the endpoint): extend to weld beams solidly.
-      const hasColumn = model.bimEntities ? model.bimEntities.some(e =>
-        e.type === 'column' && e.params && e.params.base
-        && Math.hypot(e.params.base[0] - A0[0], e.params.base[1] - A0[1]) < 0.5) : false;
-      const hasColumnB = model.bimEntities ? model.bimEntities.some(e =>
-        e.type === 'column' && e.params && e.params.base
-        && Math.hypot(e.params.base[0] - B0[0], e.params.base[1] - B0[1]) < 0.5) : false;
+      // Revit contract: a beam ENDS AT THE COLUMN FACE — the sweep is trimmed
+      // back by the column's plan half-extent along the run direction (the
+      // support function of its box). No column: extend webWidth/2 to weld
+      // into an empty corner. Either way the PARAMS keep the analytical
+      // centerline-to-centerline baseline, so regenerating after the column
+      // is deleted restores the full-length beam (it meets its neighbor).
       const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
-      const A = hasColumn ? [A0[0], A0[1], A0[2]] : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
-      const B = hasColumnB ? [B0[0], B0[1], B0[2]] : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
+      const colReach = (px, py) => {
+        let best = 0;
+        if (!model.bimEntities) return 0;
+        for (const e of model.bimEntities) {
+          if (e.type !== 'column' || !e.params || !e.params.base) continue;
+          const c = e.params.base;
+          if (Math.hypot(c[0] - px, c[1] - py) > 0.75) continue;
+          const hw = (e.params.width || 0.3) / 2, hd = (e.params.depth || 0.3) / 2;
+          // box half-extent along the run direction (support function)
+          const reach = Math.abs(d.x) * hw + Math.abs(d.y) * hd;
+          if (reach > best) best = reach;
+        }
+        return best;
+      };
+      const reachA = colReach(A0[0], A0[1]);
+      const reachB = colReach(B0[0], B0[1]);
+      const A = reachA > 0 ? [A0[0] + d.x * reachA, A0[1] + d.y * reachA, A0[2]]
+        : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
+      const B = reachB > 0 ? [B0[0] - d.x * reachB, B0[1] - d.y * reachB, B0[2]]
+        : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
       // The sweep sits 0.5 mm below the reference plane: a slab sketched at
       // the same level (or another beam crossing) then meets NO coplanar

@@ -426,6 +426,12 @@ class BimEntityManager {
     const R = ent.type === 'column' ? 0.6 : (ent.params.height || 1) + 1; // crude plan reach
     this._hostsDirty = this._hostsDirty || new Set();
     for (const w of this.entities) {
+      if (w.type === 'beam' && w.params && w.params.baseline) {
+        const bl = w.params.baseline;
+        for (const p of bl)
+          if (Math.hypot(p[0] - c.x, p[1] - c.y) < 0.75) { this._hostsDirty.add(w.id); break; }
+        continue;
+      }
       if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
       // distance point-to-segment from intruder center to wall baseline
       const ax = w.params.base[0], ay = w.params.base[1], bx = w.params.end[0], by = w.params.end[1];
@@ -834,6 +840,47 @@ class BimEntityManager {
       m.endEdgeSweep();
     }
   }
+  // Regenerate a beam FROM ITS PARAMS (element isolation): the sweep re-runs
+  // against the CURRENT neighbors — column present trims at its face, column
+  // gone runs full length (analytical baseline is untouched in params).
+  rebuildBeamEntity(id) {
+    const ent = this.getEntityById(id);
+    if (!ent || ent.type !== 'beam') return false;
+    const m = this.model;
+    const app = window.app;
+    m.bimHold = true;
+    for (const fid of [...ent.faces]) m.faces.delete(fid);
+    for (const eid of [...ent.edges]) m.edges.delete(eid);
+    m.gc();
+    for (const f2 of m.faces.values()) {
+      m.edgesForRing(f2.loop, true);
+      for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+    }
+    let built = [];
+    try {
+      built = app.structural.buildBeam(G, m, ent.params);
+    } catch (e) { m.bimHold = false; return false; }
+    const bl = ent.params.baseline;
+    const ax = bl[0][0], ay = bl[0][1], bx = bl[bl.length - 1][0], by = bl[bl.length - 1][1];
+    const zRef = bl[0][2];
+    const faces = built.filter(f => !f.userData);
+    const roles = {};
+    for (const f of faces) roles[f.id] = 'body';
+    const ne = [];
+    for (const f of faces) for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+      const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+      if (e && !e.userData) ne.push(e.id);
+    }
+    for (const [fid, role] of Object.entries(roles)) {
+      const f = m.faces.get(+fid);
+      if (f) f.userData = { bimEntityId: id, bimType: 'beam', role };
+    }
+    ent.faces = Object.keys(roles).map(Number);
+    ent.edges = [...new Set(ne)];
+    m.bimHold = false;
+    return true;
+  }
+
   // Synchronized junction re-solve — the reactive dependency graph. When a
   // wall's properties change (thickness, location line, baseline), every
   // wall connected to its start/end junctions must regenerate TOGETHER:
@@ -4779,8 +4826,12 @@ class App {
     if (this.bim && this.bim._hostsDirty && this.bim._hostsDirty.size) {
       const dirty = [...this.bim._hostsDirty];
       this.bim._hostsDirty.clear();
-      for (const wid of dirty)
-        if (this.bim.getEntityById(wid)) this.bim.rebuildWallWithHosts(wid, false);
+      for (const wid of dirty) {
+        const ent = this.bim.getEntityById(wid);
+        if (!ent) continue;
+        if (ent.type === 'wall') this.bim.rebuildWallWithHosts(wid, false);
+        else if (ent.type === 'beam') this.bim.rebuildBeamEntity(wid);
+      }
     }
     this.refreshEdgeStamps();
     this.view.rebuild();
