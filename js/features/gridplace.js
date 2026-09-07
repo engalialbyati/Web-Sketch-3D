@@ -334,17 +334,24 @@
       if (cellsMode) {
         for (const cell of this._cells()) {
           const ring = cell.ring.map(p => G.v(p[0], p[1], z));
-          if (this.selCell.has(cell.key)) view.previewFill([{ outer: ring }], 0xf59e0b, 0.4);
+          if (this.selCell.has(cell.key)) view.previewFill([{ outer: ring }], 0xffd400, 0.45);
           else view.previewLoop(ring, 0x94a3b8);
         }
       } else if (linesMode) {
         const gm = this.app.gridManager;
         if (gm) for (const g of gm.grids) {
           const e = this._lineExtent(g);
-          view.previewLine([G.v(e.a[0], e.a[1], z), G.v(e.b[0], e.b[1], z)], this.selLine.has(g.id) ? 0xf59e0b : 0x94a3b8);
+          // selected lines: BOLD strong yellow — the line plus an offset
+          // second pass reads as one thick stroke (matches the Select tool)
+          const selL = this.selLine.has(g.id);
+          view.previewLine([G.v(e.a[0], e.a[1], z), G.v(e.b[0], e.b[1], z)], selL ? 0xffd400 : 0x94a3b8);
+          if (selL) {
+            view.previewLine([G.v(e.a[0], e.a[1], z + 0.02), G.v(e.b[0], e.b[1], z + 0.02)], 0xffd400);
+            view.previewLine([G.v(e.a[0], e.a[1], z - 0.02), G.v(e.b[0], e.b[1], z - 0.02)], 0xffd400);
+          }
         }
       } else {
-        for (const ix of this._ixs()) marker(ix.p, this.selIx.has(IX_KEY(ix.p)) ? 0xf59e0b : 0x94a3b8, this.selIx.has(IX_KEY(ix.p)));
+        for (const ix of this._ixs()) marker(ix.p, this.selIx.has(IX_KEY(ix.p)) ? 0xffd400 : 0x94a3b8, this.selIx.has(IX_KEY(ix.p)));
       }
       // hover
       if (this.hover && this.hover.cell) {
