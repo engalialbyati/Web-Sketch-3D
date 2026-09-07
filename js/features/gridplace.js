@@ -53,7 +53,7 @@
     get hint() {
       const s = this.state || {};
       const what = { lines: 'grid LINES', cells: 'grid CELLS', intersections: 'grid INTERSECTIONS' }[s.selectWhat] || 'grid INTERSECTIONS';
-      const withWhat = { walls: 'WALLS', beams: 'BEAMS', floors: 'FLOORS/SLABS', columns: 'COLUMNS' }[s.placeWhat] || 'COLUMNS';
+      const withWhat = { walls: 'WALLS', beams: 'BEAMS', floors: 'FLOORS/SLABS', columns: 'COLUMNS', roofs: 'ROOFS' }[s.placeWhat] || 'COLUMNS';
       const n = s.selectWhat === 'lines' ? this.selLine.size : s.selectWhat === 'cells' ? this.selCell.size : this.selIx.size;
       const lvl = (this.app.levelManager.getLevel(this.app.bimOptions.baseLevel) || {}).name || this.app.bimOptions.baseLevel;
       const lm = s.levelMode === 'selected' ? 'SELECTED levels' : s.levelMode === 'all' ? 'ALL levels' : lvl;
@@ -523,6 +523,54 @@
       // welds monolithically (cast-in-place behavior; the takeoff credits
       // the embedded overlap to the Column, so nothing is double-counted).
       // Sections come from the options bar and hang from the working level.
+      // ------------------------------------------------------------- roofs
+      // every selected grid CELL becomes one roof region (multi-select bays
+      // merge into one roof only via the Roof tool's sketch mode; Grid Place
+      // keeps per-cell roofs so each bay stays independently editable)
+      if (s.placeWhat === 'roofs') {
+        if (s.selectWhat !== 'cells') { app.toast('Roofs need CELLS selected (option: Select -> Grid Cells)'); return; }
+        if (!window.RoofFeature) { app.toast('Roof feature not loaded', true); return; }
+        const cells2 = this._cells().filter(c => this.selCell.has(c.key));
+        if (!cells2.length) { app.toast('Nothing selected'); return; }
+        const kind = s.roofKind || 'flat';
+        const thickness = Math.max(0.05, +s.roofThickness || 0.2);
+        const pitch = Math.max(0, +s.roofPitch || 15);
+        const overhang = Math.max(0, +s.roofOverhang || 0);
+        const lvlId = app.bimOptions.baseLevel;
+        const z = zBase;
+        const facesBefore = new Set(m.faces.keys());
+        const edgesBefore = new Set(m.edges.keys());
+        let ok = false, fellBack = 0;
+        app.transaction.run('grid roofs', mm => {
+          mm.bimHold = true;
+          try {
+            for (const c of cells2) {
+              const ring = this._cellRing(c, 'centerline');
+              const region = { outer: ring.map(p => [p[0], p[1], z]), holes: [] };
+              const built = RoofFeature.buildRegion(G, mm, { kind, thickness, pitch, overhang, region, z });
+              if (kind !== 'flat' && built && built.pitched === false) fellBack++;
+            }
+            ok = true;
+          } finally { mm.bimHold = false; }
+        });
+        if (!ok) { this.status(); return; }
+        const newFaces = [...m.faces.keys()].filter(id => !facesBefore.has(id)).map(id => m.faces.get(id)).filter(f => f && !f.userData);
+        const roles = {};
+        for (const f of newFaces) roles[f.id] = 'body';
+        const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id));
+        app.bim.create('roof', {
+          kind, thickness, pitch, overhang, source: 'grid',
+          baseLevel: lvlId, levelId: lvlId, height: Math.max(0.02, thickness),
+          regions: cells2.map(c => {
+            const ring = this._cellRing(c, 'centerline');
+            return { outer: ring.map(p => [p[0], p[1], z]), holes: [] };
+          }),
+        }, roles, newEdges);
+        this.selCell.clear(); app.view.clearPreview(); this.status();
+        app.toast(`Roof placed on ${cells2.length} cell${cells2.length === 1 ? '' : 's'} (${kind}${kind !== 'flat' ? ' ' + pitch + '°' : ''})` +
+          (fellBack ? ` — ${fellBack} non-rectangular bay${fellBack === 1 ? '' : 's'} fell back to flat` : ''));
+        return;
+      }
       if (s.placeWhat === 'beams') {
         if (s.selectWhat !== 'lines') { app.toast('Beams need Grid LINES selected (option: Select -> Grid Lines)'); return; }
         const lines = [...this.selLine].map(id => app.gridManager.getGrid(id)).filter(Boolean);
@@ -804,7 +852,7 @@
       options: [
         { key: 'selectWhat', type: 'select', label: 'Select', choices: [{ value: 'intersections', label: 'Intersections' }, { value: 'lines', label: 'Grid Lines' }, { value: 'cells', label: 'Grid Cells' }] },
         { key: 'levelMode', type: 'select', label: 'Levels', choices: [{ value: 'current', label: 'Current Level' }, { value: 'selected', label: 'All Selected Levels' }, { value: 'all', label: 'All Levels' }] },
-        { key: 'placeWhat', type: 'select', label: 'Place', choices: [{ value: 'columns', label: 'Columns' }, { value: 'walls', label: 'Walls' }, { value: 'beams', label: 'Beams' }, { value: 'floors', label: 'Floors/Slabs' }] },
+        { key: 'placeWhat', type: 'select', label: 'Place', choices: [{ value: 'columns', label: 'Columns' }, { value: 'walls', label: 'Walls' }, { value: 'beams', label: 'Beams' }, { value: 'floors', label: 'Floors/Slabs' }, { value: 'roofs', label: 'Roofs' }] },
         { key: 'width', type: 'number', label: 'Col w', step: 0.05, default: 0.3 },
         { key: 'depth', type: 'number', label: 'Col d', step: 0.05, default: 0.3 },
         { key: 'wallThickness', type: 'number', label: 'Wall t', step: 0.05, default: 0.2 },
@@ -816,9 +864,13 @@
         { key: 'slabKind', type: 'select', label: 'Kind', choices: [{ value: 'slab', label: 'Slab (structural)' }, { value: 'floor', label: 'Floor (finish)' }] },
         { key: 'slabLoc', type: 'select', label: 'Location', choices: [{ value: 'centerline', label: 'Grid Centerline' }, { value: 'exterior', label: 'Exterior (covers columns)' }, { value: 'interior', label: 'Interior (at column faces)' }] },
         { key: 'slabThickness', type: 'number', label: 'Slab t', step: 0.05, default: 0.2 },
+        { key: 'roofKind', type: 'select', label: 'Roof', choices: [{ value: 'flat', label: 'Flat' }, { value: 'mono', label: 'Mono-pitch' }, { value: 'gable', label: 'Gable' }] },
+        { key: 'roofPitch', type: 'number', label: 'Pitch °', step: 1, default: 15 },
+        { key: 'roofThickness', type: 'number', label: 'Roof t', step: 0.05, default: 0.2 },
+        { key: 'roofOverhang', type: 'number', label: 'Overhang', step: 0.05, default: 0.4 },
       ],
       tool: GridPlaceTool,
-      state: { selectWhat: 'intersections', placeWhat: 'columns', levelMode: 'current', width: 0.3, depth: 0.3, wallThickness: 0.2, beamProfile: 'rectangular', beamHeight: 0.4, beamWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, slabKind: 'slab', slabLoc: 'centerline', slabThickness: 0.2 },
+      state: { selectWhat: 'intersections', placeWhat: 'columns', levelMode: 'current', width: 0.3, depth: 0.3, wallThickness: 0.2, beamProfile: 'rectangular', beamHeight: 0.4, beamWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, slabKind: 'slab', slabLoc: 'centerline', slabThickness: 0.2, roofKind: 'flat', roofPitch: 15, roofThickness: 0.2, roofOverhang: 0.4 },
       onOption(d) {
         const t = window.app && window.app.tool;
         if (t && t.id === 'gridplace') {
