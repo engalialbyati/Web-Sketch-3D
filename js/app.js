@@ -928,10 +928,7 @@ class BimEntityManager {
     const L = Math.hypot(p.end[0] - ax, p.end[1] - ay) || 1;
     const ux = (p.end[0] - ax) / L, uy = (p.end[1] - ay) / L;
     const trims = app.structural ? app.structural.wallPlanTrims(p) : null;
-    // free spans = the complement of the blocked intervals on [0, L]. A
-    // mid-run intruder leaves TWO spans (the split); end intruders bite
-    // their end back; stubs under 5 cm retire — the intruder owns that
-    // ground. No intruder at all = one full span (the heal).
+    // free spans = the complement of the blocked intervals on [0, L]
     const spans = [];
     let cur = 0;
     for (const iv of (trims ? trims.intervals : [])) {
@@ -939,9 +936,59 @@ class BimEntityManager {
       cur = Math.max(cur, iv.t1);
     }
     if (L - cur > 0.05) spans.push([cur, L]);
-    // PARAMS ARE TRUTH: base/end keep the full drawn span forever — only
-    // the B-Rep cache is rebuilt here, so deleting the intruder heals the
-    // wall back to whole (no shortened params to un-shorten)
+
+    if (!trims) {
+      if (p.merge) return this._deriveGroupSpans(ent);
+      // plain un-split wall: nothing blocks it — its geometry should be the
+      // full param span (the heal); already-whole is a cheap no-op
+      if (ent.faces.length && ent.faces.every(fid => m.faces.has(fid))) return true;
+      return this._extrudeWallSpan(ent, p.base, p.end, true, true);
+    }
+    if (!spans.length) {
+      // fully consumed: the intruders own this ground — the wall (and its
+      // hosted openings) retire
+      m.beginEdgeSweep();
+      try {
+        m.bimHold = true;
+        for (const h of this.entities.filter(e => e.params && e.params.hostWallId === ent.id)) {
+          for (const fid of [...h.faces]) m.faces.delete(fid);
+          this.detach(h.id);
+          if (this.db) this.db.deleteElement(h.id).catch(() => { });
+        }
+        for (const fid of [...ent.faces]) m.faces.delete(fid);
+        for (const eid of [...ent.edges]) m.edges.delete(eid);
+        m.gc();
+        ent.faces = []; ent.edges = [];
+        m.bimHold = false;
+      } finally { m.endEdgeSweep(); }
+      return true;
+    }
+    // blocked: (re)allocate the span among independent wall pieces
+    return this._splitWallToSpans(ent, spans, { ax, ay, ux, uy, L });
+  }
+  // SPLIT: the wall's free spans become independent wall ELEMENTS — each
+  // selectable, editable, deletable and movable alone — sharing a merge
+  // group that remembers the original run (base/end/joins) and the slot
+  // each piece occupies on it. Piece 0 keeps the original entity's id;
+  // the rest are registered fresh. Hosted openings follow the piece that
+  // owns their position (distance re-anchored), or die with consumed ground.
+  _splitWallToSpans(ent, spans, g) {
+    const m = this.model;
+    const p = ent.params;
+    const z = p.base[2];
+    const at = t => [g.ax + g.ux * t, g.ay + g.uy * t, z];
+    const prev = p.merge || null;
+    const orig = prev
+      ? { group: prev.group, base: prev.base, end: prev.end, joins: prev.joins || {} }
+      : { group: ent.id, base: [p.base[0], p.base[1], z], end: [p.end[0], p.end[1], z],
+          joins: { start: (p.joins || {}).start, end: (p.joins || {}).end } };
+    const jo = orig.joins || {};
+    const ob = orig.base, oe = orig.end;
+    const L0 = Math.hypot(oe[0] - ob[0], oe[1] - ob[1]) || 1;
+    const ox = (oe[0] - ob[0]) / L0, oy = (oe[1] - ob[1]) / L0;
+    const tOf = q => (q[0] - ob[0]) * ox + (q[1] - ob[1]) * oy;
+    // slots in ORIGINAL-run coordinates — the map the heal derives from
+    const slots = spans.map(([t0, t1]) => { const A = at(t0), B = at(t1); return [tOf(A), tOf(B)]; });
     m.beginEdgeSweep();
     let ok = true;
     try {
@@ -957,32 +1004,213 @@ class BimEntityManager {
       }
       ent.faces = []; ent.edges = [];
       m.bimHold = false;
-      for (const [t0, t1] of spans)
-        if (!this._extrudeWallSpan(ent, [ax + ux * t0, ay + uy * t0, p.base[2]],
-          [ax + ux * t1, ay + uy * t1, p.base[2]], t0 <= 1e-6, t1 >= L - 1e-6)) ok = false;
-      // hosted openings re-cut from their params — distanceFromStart rides
-      // the ORIGINAL baseline so the world position survives any trim; a
-      // wall fully consumed by intruders takes its doors with it
+      const pieces = [];
+      for (let s = 0; s < spans.length; s++) {
+        const [t0, t1] = spans[s];
+        const A = at(t0), B = at(t1);
+        const atStart = s === 0 && t0 <= 1e-6;
+        const atEnd = s === spans.length - 1 && t1 >= g.L - 1e-6;
+        const joins = { start: atStart ? jo.start : undefined, end: atEnd ? jo.end : undefined };
+        let target;
+        if (s === 0) {
+          p.base = [...A]; p.end = [...B]; p.joins = joins;
+          p.merge = { group: orig.group, base: ob, end: oe, joins: jo, slots };
+          target = ent;
+        } else {
+          target = this._createInner('wall', { ...p, base: [...A], end: [...B],
+            joins, footprint: undefined, closed: false,
+            merge: { group: orig.group, base: ob, end: oe, joins: jo, slots } }, {}, []);
+        }
+        if (!this._extrudeWallSpan(target, A, B, atStart, atEnd)) ok = false;
+        pieces.push(target);
+      }
+      // hosted openings: re-anchor to the piece whose slot holds them
+      const tHost0 = tOf([g.ax, g.ay]);
       for (const h of hosted) {
-        if (!spans.length) { this.detach(h.id); if (this.db) this.db.deleteElement(h.id).catch(() => { }); continue; }
-        const spec = { distanceFromStart: h.params.distanceFromStart, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
-        const info = window.BimTools.HostedCut.cut(G, m, p, spec);
-        if (info.error) { this.detach(h.id); if (this.db) this.db.deleteElement(h.id).catch(() => { }); continue; }
-        const hb = new Set(m.faces.keys());
-        const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
-        h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
-        for (const fid of h.faces) {
-          const face = m.faces.get(fid);
-          const isLeaf = h.type === 'door' && faces.length && fid === faces[faces.length - 1].id;
-          face.userData = { bimEntityId: h.id, bimType: h.type, role: faces.some(x => x.id === fid) ? (isLeaf ? 'leaf' : 'frame') : 'lining' };
+        const t0 = tHost0 + (h.params.distanceFromStart || 0);
+        const t1 = t0 + (h.params.width || 0.9);
+        let best = -1, bestOverlap = 0;
+        slots.forEach((sl, i) => {
+          const ov = Math.min(t1, sl[1]) - Math.max(t0, sl[0]);
+          if (ov > bestOverlap) { bestOverlap = ov; best = i; }
+        });
+        if (best < 0 || bestOverlap <= 0) {
+          this.detach(h.id);
+          if (this.db) this.db.deleteElement(h.id).catch(() => { });
+          continue;
+        }
+        h.params.hostWallId = pieces[best].id;
+        h.params.distanceFromStart = t0 - slots[best][0];
+        if (!this._recutHosted(h, pieces[best], h.params.distanceFromStart)) {
+          this.detach(h.id);
+          if (this.db) this.db.deleteElement(h.id).catch(() => { });
         }
       }
-      if (this.assets) this.assets.recutHosted(id, m);
-    } finally {
-      m.endEdgeSweep();
-    }
+      if (this.assets) for (const piece of pieces) this.assets.recutHosted(piece.id, m);
+    } finally { m.endEdgeSweep(); }
     return ok;
   }
+  // HEAL / REUNITE: nothing blocks THIS piece — re-derive the whole group's
+  // span allocation against the intruders that remain. Pieces expand into
+  // freed ground (bounded by sibling slot edges: territory of a piece the
+  // user deleted never resurrects), and pieces whose targets meet MERGE
+  // back into one wall. Members whose span/section left the plan (user
+  // edited or moved them) drop out of the group permanently.
+  _deriveGroupSpans(ent) {
+    const app = window.app || {};
+    const m = this.model;
+    const p = ent.params;
+    const mg = p.merge;
+    if (!mg || !mg.base || !mg.end) { delete p.merge; return true; }
+    const ob = mg.base, oe = mg.end;
+    const z = p.base[2];
+    const L0 = Math.hypot(oe[0] - ob[0], oe[1] - ob[1]) || 1;
+    const ux = (oe[0] - ob[0]) / L0, uy = (oe[1] - ob[1]) / L0;
+    const tOf = q => (q[0] - ob[0]) * ux + (q[1] - ob[1]) * uy;
+    const offRun = q => Math.abs(-(q[0] - ob[0]) * uy + (q[1] - ob[1]) * ux) >= 1e-4;
+    // the app keeps span == slot after every split/derive it performs, so a
+    // span that no longer MATCHES its slot is a USER edit — that piece is
+    // independent from here on (its slot still guards the ground, so
+    // siblings never expand into it)
+    const inSlot = (t0, t1) => (mg.slots || []).some(s =>
+      Math.abs(t0 - s[0]) < 1e-6 && Math.abs(t1 - s[1]) < 1e-6);
+    const members = [];
+    for (const e of [...this.entities]) {
+      if (e.type !== 'wall' || !e.params || !e.params.merge || e.params.merge.group !== mg.group) continue;
+      const q = e.params;
+      if (!q.base || !q.end) continue;
+      if (Math.abs(q.base[2] - z) > 1e-6
+        || Math.abs((q.thickness || 0.2) - (p.thickness || 0.2)) > 1e-6
+        || Math.abs((q.height || 3) - (p.height || 3)) > 1e-6
+        || offRun(q.base) || offRun(q.end)
+        || !inSlot(tOf(q.base), tOf(q.end))) { delete q.merge; continue; } // edited: independent
+      members.push(e);
+    }
+    if (!members.length) return true;
+    // free ground on the ORIGINAL run
+    const trims = app.structural ? app.structural.wallPlanTrims({ ...p, base: [...ob], end: [...oe] }) : null;
+    const free = [];
+    let cur = 0;
+    for (const iv of (trims ? trims.intervals : [])) {
+      if (iv.t0 - cur > 0.05) free.push([cur, iv.t0]);
+      cur = Math.max(cur, iv.t1);
+    }
+    if (L0 - cur > 0.05) free.push([cur, L0]);
+    const slots = (mg.slots || []).map(s => [s[0], s[1]]);
+    // per-member target: the free interval containing it, clipped by the
+    // nearest FOREIGN slot edge on each side (outermost pieces may still
+    // run to the original bounds) and by live siblings' current spans
+    const rows = members.map(e => {
+      const t0 = tOf(e.params.base), t1 = tOf(e.params.end);
+      let lo = 0, hi = L0;
+      for (const s of slots) {
+        if (t0 >= s[0] - 1e-4 && t1 <= s[1] + 1e-4) continue; // my own slot
+        if (s[1] <= t0 + 1e-4) lo = Math.max(lo, s[1]);
+        if (s[0] >= t1 - 1e-4) hi = Math.min(hi, s[0]);
+      }
+      return { e, t0, t1, lo, hi };
+    }).sort((a, b) => a.t0 - b.t0);
+    for (let i = 0; i < rows.length; i++)
+      for (let j = 0; j < rows.length; j++) {
+        if (i === j) continue;
+        if (rows[j].t0 >= rows[i].t1 - 1e-4) rows[i].hi = Math.min(rows[i].hi, rows[j].t0);
+        if (rows[j].t1 <= rows[i].t0 + 1e-4) rows[i].lo = Math.max(rows[i].lo, rows[j].t1);
+      }
+    for (const r of rows) {
+      let a = r.t0, b = r.t1;
+      for (const f of free)
+        if (f[0] <= r.t0 + 1e-4 && f[1] >= r.t1 - 1e-4) { a = Math.max(f[0], r.lo); b = Math.min(f[1], r.hi); break; }
+      if (b - a < (r.t1 - r.t0) - 1e-9) { a = r.t0; b = r.t1; } // never shrink on a heal pass
+      r.a = a; r.b = b;
+    }
+    // touching targets merge into one wall (leftmost keeps the identity)
+    const groups = [];
+    for (const r of rows) {
+      const last = groups[groups.length - 1];
+      if (last && r.a <= last.b + 1e-4) { last.b = Math.max(last.b, r.b); last.members.push(r.e); last.rows.push(r); }
+      else groups.push({ a: r.a, b: r.b, members: [r.e], rows: [r] });
+    }
+    // stable? nothing expands, nothing merges — done, no rebuild churn
+    if (groups.length === rows.length && groups.every((gr, i) => gr.members[0] === rows[i].e
+      && Math.abs(gr.a - rows[i].t0) < 1e-6 && Math.abs(gr.b - rows[i].t1) < 1e-6)) return true;
+    m.beginEdgeSweep();
+    let ok = true;
+    try {
+      const A2 = t => [ob[0] + ux * t, ob[1] + uy * t, z];
+      const slotIdxOf = r => (mg.slots || []).findIndex(s =>
+        Math.abs(r.t0 - s[0]) < 1e-6 && Math.abs(r.t1 - s[1]) < 1e-6);
+      const used = new Set();
+      for (const gr of groups) for (const r of gr.rows) used.add(slotIdxOf(r));
+      const keptDead = (mg.slots || []).filter((s, i) => !used.has(i));
+      const newSlots = groups.map(gr => [gr.a, gr.b]).concat(keptDead).sort((a, b) => a[0] - b[0]);
+      const jo = mg.joins || {};
+      // re-anchor every hosted opening of the whole group
+      const hostedAll = this.entities.filter(e => e.params && e.params.hostWallId
+        && groups.some(gr => gr.members.some(mm => mm.id === e.params.hostWallId)));
+      for (const gr of groups) {
+        const survivor = gr.members[0];
+        for (const h of hostedAll) {
+          const host = gr.members.find(mm => mm.id === h.params.hostWallId);
+          if (!host) continue;
+          const tHost = tOf(host.params.base);
+          const t0 = tHost + (h.params.distanceFromStart || 0), t1 = t0 + (h.params.width || 0.9);
+          const c0 = Math.max(t0, gr.a), c1 = Math.min(t1, gr.b);
+          if (c1 - c0 <= 0) { this.detach(h.id); if (this.db) this.db.deleteElement(h.id).catch(() => { }); continue; }
+          h.params.hostWallId = survivor.id;
+          h.params.distanceFromStart = t0 - gr.a;
+        }
+      }
+      // wipe all members; absorbed ones detach; survivors retarget + rebuild
+      m.bimHold = true;
+      const allMembers = groups.flatMap(gr => gr.members);
+      for (const e of allMembers) {
+        for (const fid of [...e.faces]) m.faces.delete(fid);
+        for (const eid of [...e.edges]) m.edges.delete(eid);
+      }
+      m.gc();
+      for (const f2 of m.faces.values()) {
+        m.edgesForRing(f2.loop, true);
+        for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+      }
+      for (const e of allMembers) { e.faces = []; e.edges = []; }
+      m.bimHold = false;
+      for (const gr of groups) {
+        const survivor = gr.members[0];
+        for (const e of gr.members) if (e !== survivor) this.detach(e.id);
+        const whole = groups.length === 1 && gr.a <= 1e-6 && gr.b >= L0 - 1e-6;
+        survivor.params.base = A2(gr.a); survivor.params.end = A2(gr.b);
+        survivor.params.joins = { start: gr.a <= 1e-6 ? jo.start : undefined, end: gr.b >= L0 - 1e-6 ? jo.end : undefined };
+        if (whole) delete survivor.params.merge;
+        else survivor.params.merge = { group: mg.group, base: ob, end: oe, joins: jo, slots: newSlots };
+        if (!this._extrudeWallSpan(survivor, survivor.params.base, survivor.params.end, true, true)) ok = false;
+        for (const h of hostedAll.filter(x => x.params.hostWallId === survivor.id)) {
+          if (!this._recutHosted(h, survivor, h.params.distanceFromStart)) {
+            this.detach(h.id);
+            if (this.db) this.db.deleteElement(h.id).catch(() => { });
+          }
+        }
+        if (this.assets) this.assets.recutHosted(survivor.id, m);
+      }
+    } finally { m.endEdgeSweep(); }
+    return ok;
+  }
+  // re-cut one hosted opening on its (possibly new) host wall
+  _recutHosted(h, wallEnt, dist) {
+    const m = this.model;
+    const spec = { distanceFromStart: dist, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
+    const info = window.BimTools.HostedCut.cut(G, m, wallEnt.params, spec);
+    if (info.error) return false;
+    const hb = new Set(m.faces.keys());
+    const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
+    h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
+    for (const fid of h.faces) {
+      const face = m.faces.get(fid);
+      const isLeaf = h.type === 'door' && faces.length && fid === faces[faces.length - 1].id;
+      face.userData = { bimEntityId: h.id, bimType: h.type, role: faces.some(x => x.id === fid) ? (isLeaf ? 'leaf' : 'frame') : 'lining' };
+    }
+    return true;
+  }
+
   // extrude ONE (possibly shortened) span of a wall and stamp it for the
   // entity. Miter/butt joins survive only on ends coinciding with the
   // wall's ORIGINAL ends; an end retreating to an intruder face gets a

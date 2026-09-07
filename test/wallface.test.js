@@ -106,9 +106,19 @@ module.exports = h => {
     }
   };
 
-  // every vertex x of every wall-owned face, sorted — reads the run-axis
-  // coverage of the wall body (which spans exist on the ground)
-  const wallXs = (w, wall) => {
+  // every vertex x of every wall-owned face (ALL pieces), sorted — reads
+  // the run-axis coverage of the wall body on the ground
+  const allWallXs = w => {
+    const xs = [];
+    for (const wall of w.bim.entities.filter(e => e.type === 'wall'))
+      for (const fid of wall.faces) {
+        const f = w.m.faces.get(fid);
+        if (!f) continue;
+        for (const p of w.m.pts(f.loop)) xs.push(p.x);
+      }
+    return xs.sort((a, b) => a - b);
+  };
+  const pieceXs = (w, wall) => {
     const xs = [];
     for (const fid of wall.faces) {
       const f = w.m.faces.get(fid);
@@ -119,7 +129,7 @@ module.exports = h => {
   };
 
   // ------------------------------------------------- the owner's reported case
-  test('freeform wall: end + center columns split it face-to-face, params untouched', () => {
+  test('freeform wall: end + center columns split it into two independent elements', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
     ok(wall && wall.faces.length > 0, 'wall built with geometry');
@@ -128,26 +138,31 @@ module.exports = h => {
     ok(cEnd && cMid, 'columns built');
     runDirty(w);
 
-    ok(w.bim.getEntityById(wall.id) === wall, 'still ONE wall entity (split, not duplicated)');
-    ok(wall.faces.length > 0 && wall.faces.every(id => w.m.faces.has(id)), 'wall geometry is live');
-    eq(wall.params.base[0], 0, 'params.base untouched (truth)');
-    eq(wall.params.end[0], 8, 'params.end untouched (truth)');
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 2, 'split into TWO independent wall elements');
+    ok(w.bim.getEntityById(wall.id) === walls[0], 'piece 0 keeps the original identity');
+    for (const pw of walls)
+      ok(pw.faces.length > 0 && pw.faces.every(id => w.m.faces.has(id)), 'each piece owns live faces');
+    // both pieces remember the run they came from
+    const mg = walls[0].params.merge, mg2 = walls[1].params.merge;
+    ok(mg && mg2 && mg.group === mg2.group, 'pieces share a merge group');
+    near(mg.base[0], 0, 1e-9, 'merge record keeps the original start');
+    near(mg.end[0], 8, 1e-9, 'merge record keeps the original end');
 
-    const xs = wallXs(w, wall);
-    near(xs[0], 0.151, 5e-3, 'first span starts at the end column face + reveal');
-    near(xs[xs.length - 1], 8, 1e-9, 'wall still reaches its far end');
-    // two spans around the center column: vertices must NOT exist inside
-    // either blocked interval [−0.15, 0.149] or [3.851, 4.149]
-    for (const x of xs)
+    const a = walls.find(x => x.params.base[0] < 1), b = walls.find(x => x.params.base[0] > 1);
+    const ax = pieceXs(w, a), bx = pieceXs(w, b);
+    near(ax[0], 0.151, 5e-3, 'piece A starts at the end column face + reveal');
+    near(ax[ax.length - 1], 3.849, 5e-3, 'piece A ends at the center column face');
+    near(bx[0], 4.151, 5e-3, 'piece B starts at the center column face');
+    near(bx[bx.length - 1], 8, 1e-9, 'piece B still reaches the far end');
+    for (const x of allWallXs(w))
       ok((x > 0.149 && x < 3.851) || x > 4.149, `vertex x=${x} inside a column footprint`);
-    // and both sides of the center column are genuinely present
-    ok(xs.some(x => Math.abs(x - 3.849) < 5e-3), 'span A ends at the center column face');
-    ok(xs.some(x => Math.abs(x - 4.151) < 5e-3), 'span B starts at the center column face');
     ok(w.m.validate().ok, 'model valid after the split');
-    // no corpses: every live face stamped to this wall is in its list
+    // no corpses: every live stamped face is in its owner's list
     for (const [fid, f] of w.m.faces)
-      if (f.userData && f.userData.bimEntityId === wall.id)
-        ok(wall.faces.includes(fid), `stamped face ${fid} adopted by the wall`);
+      if (f.userData && f.userData.bimEntityId)
+        ok(w.bim.getEntityById(f.userData.bimEntityId).faces.includes(fid),
+          `stamped face ${fid} adopted by ${f.userData.bimEntityId}`);
   });
 
   // ------------------------------------------------------------ the heal
@@ -162,7 +177,9 @@ module.exports = h => {
     w.bim.detach(cMid.id);
     runDirty(w);
 
-    const xs = wallXs(w, wall);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'pieces merged back into ONE wall');
+    ok(!wall.params.merge, 'merged wall has no merge record (whole again)');
+    const xs = allWallXs(w);
     near(xs[0], 0, 1e-9, 'healed wall spans from the original base again');
     near(xs[xs.length - 1], 8, 1e-9, 'healed wall reaches the original end');
     ok(wall.faces.length > 0 && wall.faces.every(id => w.m.faces.has(id)), 'healed geometry is live');
@@ -173,10 +190,10 @@ module.exports = h => {
   test('a column directly ABOVE on the next level does not trim this wall', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
-    const xs0 = wallXs(w, wall);
+    const xs0 = allWallXs(w);
     buildColumn(w, 4, 0, 3.2); // same plan position, one story up
     runDirty(w);
-    const xs = wallXs(w, wall);
+    const xs = allWallXs(w);
     near(xs[0], xs0[0], 1e-9, 'wall start untouched');
     near(xs[xs.length - 1], 8, 1e-9, 'wall end untouched');
     ok(wall.faces.length > 0, 'wall kept its geometry');
@@ -188,11 +205,81 @@ module.exports = h => {
     buildColumn(w, 4, 0, 0); // column already there
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]); // create() self-marks
     runDirty(w);
-    const xs = wallXs(w, wall);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'two pieces at birth');
+    const xs = allWallXs(w);
     near(xs[0], 0, 1e-9, 'start intact (no intruder there)');
     for (const x of xs)
       ok(x < 3.851 || x > 4.149, `vertex x=${x} clear of the column footprint`);
     ok(xs.some(x => Math.abs(x - 4.151) < 5e-3), 'wall resumes past the column face');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
+  // ------------------------- per-piece independence + the no-resurrect guard
+  test('deleting a piece: its territory stays gone when the columns leave', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    const cEnd = buildColumn(w, 0, 0, 0);
+    const cMid = buildColumn(w, 4, 0, 0);
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 2, 'split first');
+    const b = walls.find(x => x.params.base[0] > 1);
+    w.bim.detach(b.id); // the USER deletes piece B
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'piece B gone, piece A alive');
+    // now the intruders leave too — ONE opDone per deletion, exactly like
+    // the live app (a heal pass between deletions must not drop B's slot
+    // from the map, or the wall later regrows through B's ground)
+    w.bim.detach(cEnd.id);
+    runDirty(w);
+    w.bim.detach(cMid.id);
+    runDirty(w);
+    const a = w.bim.entities.filter(e => e.type === 'wall');
+    eq(a.length, 1, 'no second piece resurrected');
+    const xs = pieceXs(w, a[0]);
+    near(xs[0], 0, 5e-3, 'piece A healed leftward into the freed end ground');
+    near(xs[xs.length - 1], 4.151, 5e-3, 'piece A stops at B\'s slot — deleted territory never resurrects');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
+  test('an edited piece stops participating in the merge', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    const cEnd = buildColumn(w, 0, 0, 0);
+    const cMid = buildColumn(w, 4, 0, 0);
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    const b = walls.find(x => x.params.base[0] > 1);
+    b.params.end = [6, 0, 0]; // the USER edits piece B: span leaves its slot
+    w.bim.detach(cEnd.id);
+    w.bim.detach(cMid.id);
+    runDirty(w);
+    const after = w.bim.entities.filter(e => e.type === 'wall');
+    eq(after.length, 2, 'no merge — the edited piece is independent');
+    const a = after.find(x => x.params.base[0] < 1);
+    const xs = pieceXs(w, a);
+    near(xs[0], 0, 5e-3, 'piece A still healed leftward (it honors the plan)');
+    near(xs[xs.length - 1], 4.151, 5e-3, 'piece A stops where B\'s slot began');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
+  test('three pieces: removing ONE column merges only its neighbors', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [8, 0, 0]);
+    const c2 = buildColumn(w, 2, 0, 0);
+    const c6 = buildColumn(w, 6, 0, 0);
+    runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 3, 'three pieces');
+    w.bim.detach(c2.id); // free the LEFT column only
+    runDirty(w);
+    const after = w.bim.entities.filter(e => e.type === 'wall');
+    eq(after.length, 2, 'left two pieces merged; right piece stays (column 6 blocks)');
+    const left = after.find(x => x.params.base[0] < 1);
+    const right = after.find(x => x.params.base[0] > 5);
+    const lx = pieceXs(w, left), rx = pieceXs(w, right);
+    near(lx[0], 0, 1e-9, 'merged piece spans from the original start');
+    near(lx[lx.length - 1], 5.849, 5e-3, 'merged piece ends at column 6 face');
+    near(rx[0], 6.151, 5e-3, 'right piece still starts at column 6 face');
+    near(rx[rx.length - 1], 8, 1e-9, 'right piece keeps the far end');
     ok(w.m.validate().ok, 'model valid');
   });
 
@@ -235,7 +322,7 @@ module.exports = h => {
     miniOpDone(w);
     ok(w.bim.getEntityById(wall.id), 'wall alive after the center column');
     ok(!w.__rebuildFallback, 'no regeneration failure (fallback would have fired)');
-    const xs = wallXs(w, wall);
+    const xs = allWallXs(w);
     near(xs[0], 0.151, 5e-3, 'split starts at the end column face');
     for (const x of xs)
       ok((x > 0.149 && x < 3.851) || x > 4.149, `vertex x=${x} clear of column footprints`);
