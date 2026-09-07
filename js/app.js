@@ -4820,6 +4820,13 @@ class App {
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates
+    // ring-edge repair: splits can bear faces whose HOLE rings reference
+    // vertex pairs with no edge (validate flags "ring pair has no edge" and
+    // the hole reads as a torn face). edgesForRing is idempotent.
+    for (const f of this.model.faces.values()) {
+      this.model.edgesForRing(f.loop, true);
+      for (const h of (f.holes || [])) this.model.edgesForRing(h, true);
+    }
     // element isolation: walls touched by structural intruders regenerate
     // from their params — column inside => split around it; column gone =>
     // one whole wall, gap healed
