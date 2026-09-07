@@ -923,6 +923,27 @@ class BimEntityManager {
   // sweep — the sweep then travels between the pieces instead of slicing
   // through wall material (the asymmetric slice is what tore the split
   // cascade: 'adding a column to a wall' froze the app).
+  preSplitWallsForBeam(beamParams) {
+    if (!window.app || !window.app.structural || !beamParams.baseline) return 0;
+    let n = 0;
+    const bl = beamParams.baseline;
+    const A2 = bl[0], B2 = bl[bl.length - 1];
+    const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1], bL = Math.hypot(bdx, bdy) || 1;
+    const reach = (beamParams.height || 0.5) / 2 + 1.2;
+    const distSeg = (px, py) => {
+      const t = Math.max(0, Math.min(1, ((px - A2[0]) * bdx + (py - A2[1]) * bdy) / (bL * bL)));
+      return Math.hypot(px - (A2[0] + bdx * t), py - (A2[1] + bdy * t));
+    };
+    for (const w of [...this.entities]) {
+      if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
+      const wm = [(w.params.base[0] + w.params.end[0]) / 2, (w.params.base[1] + w.params.end[1]) / 2];
+      if (distSeg(w.params.base[0], w.params.base[1]) > reach
+        && distSeg(w.params.end[0], w.params.end[1]) > reach
+        && distSeg(wm[0], wm[1]) > reach) continue;
+      if (this.planTrimWall(w.id, { pending: [{ type: 'beam', params: beamParams }] })) n++;
+    }
+    return n;
+  }
   preSplitWallsForColumn(colParams) {
     if (!window.app || !window.app.structural) return 0;
     let n = 0;

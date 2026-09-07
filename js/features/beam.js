@@ -96,6 +96,10 @@
       const edgesBefore = new Set(m.edges.keys());
       let ok = false;
       app.transaction.run('beam', mm => {
+        // PRE-SPLIT: walls in the beam's path retreat to its faces FIRST —
+        // the sweep travels between the pieces instead of slicing wall
+        // material (same contract as column placement)
+        app.bim.preSplitWallsForBeam(params);
         mm.bimHold = true; // the beam deliberately meets its neighbors
         try {
           const st = app.structural.buildBeam(G, mm, params);

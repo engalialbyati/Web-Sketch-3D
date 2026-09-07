@@ -93,7 +93,7 @@ module.exports = h => {
 
   // opDone's dirty-entity regen (dependency order, walls last)
   const runDirty = w => {
-    ok(w.bim._hostsDirty && w.bim._hostsDirty.size, 'something marked dirty');
+    const hadDirty = w.bim._hostsDirty && w.bim._hostsDirty.size;
     const dirty = [...w.bim._hostsDirty];
     w.bim._hostsDirty.clear();
     const order = { column: 0, beam: 1, wall: 2 };
@@ -348,6 +348,73 @@ module.exports = h => {
     for (const x of xs)
       ok(x < 3.9245 + 5e-3 || x > 4.2265 - 5e-3, `vertex x=${x} clear of the column footprint`);
     ok(w.m.validate().ok, 'model valid — no torn rings');
+  });
+
+  // ------------------------------------------- beams: the wall ends at their faces
+  const buildBeamOn = (w, bp) => {
+    w.m.levels = [{ id: 'lvl3', name: 'L3', elevation: 3 }];
+    w.bim.preSplitWallsForBeam(bp);
+    const before = new Set(w.m.faces.keys());
+    w.app.structural.buildBeam(G, w.m, bp);
+    const faces = [...w.m.faces.keys()].filter(id => !before.has(id));
+    const roles = {};
+    for (const fid of faces) roles[fid] = 'body';
+    return w.bim.create('beam', bp, roles, []);
+  };
+
+  test('beam resting ON the wall top splits it at the beam faces', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    runDirty(w);
+    const beam = buildBeamOn(w, { baseline: [[4, -3, 3], [4, 3, 3]],
+      profile: 'rectangular', width: 0.2, height: 0.5,
+      referenceLevelId: 'lvl3', zJustification: 'Bottom' }); // z 3..3.5, touching the top
+    ok(beam, 'beam built');
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 2, 'wall split into two pieces around the beam');
+    const xs = allWallXs(w);
+    ok(xs.some(x => Math.abs(x - 3.874) < 5e-3), 'piece ends at the beam face');
+    ok(xs.some(x => Math.abs(x - 4.126) < 5e-3), 'piece resumes past the beam face');
+    ok(w.m.validate().ok, 'model valid');
+    // heal: delete the beam -> one whole wall again
+    w.bim.detach(beam.id);
+    runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'healed to one wall');
+    const hx = allWallXs(w);
+    near(hx[0], 0, 1e-9, 'healed from the original start');
+    near(hx[hx.length - 1], 8, 1e-9, 'healed to the original end');
+  });
+
+  test('a parallel beam riding the wall ends it at the beam near face', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    runDirty(w);
+    const beam = buildBeamOn(w, { baseline: [[5, 0, 3], [8, 0, 3]],
+      profile: 'rectangular', width: 0.2, height: 0.5,
+      referenceLevelId: 'lvl3', zJustification: 'Bottom' });
+    ok(beam, 'spandrel built');
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 1, 'one wall piece remains');
+    const xs = allWallXs(w);
+    near(xs[xs.length - 1], 4.999, 5e-3, 'wall ends 1mm off the beam near face');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
+  test('beams clear of the wall never trim it', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    runDirty(w);
+    // parallel but 1.5 m off the wall line — and high above with a gap
+    buildBeamOn(w, { baseline: [[0, 1.5, 3], [8, 1.5, 3]], profile: 'rectangular',
+      width: 0.2, height: 0.5, referenceLevelId: 'lvl3', zJustification: 'Bottom' });
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 1, 'wall untouched');
+    const xs = allWallXs(w);
+    near(xs[0], 0, 1e-9, 'start intact');
+    near(xs[xs.length - 1], 8, 1e-9, 'end intact');
   });
 
   return summary_if_needed;

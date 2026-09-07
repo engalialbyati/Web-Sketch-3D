@@ -401,24 +401,40 @@
         } else if (ent.type === 'beam' && ent.params && ent.params.baseline) {
           const bl = ent.params.baseline;
           const A2 = bl[0], B2 = bl[bl.length - 1];
-          // only beams CROSSING the wall's band (near-perpendicular or T)
           const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1];
           const bL = Math.hypot(bdx, bdy) || 1;
           const cross = Math.abs(ux * (bdx / bL) + uy * (bdy / bL));
-          if (cross > 0.85) continue; // parallel beams don't block the run
-          cx = (A2[0] + B2[0]) / 2; cy = (A2[1] + B2[1]) / 2;
           const prof = BeamProfiles.normalize(ent.params);
-          hw = (prof.flangeWidth || prof.webWidth || 0.2) / 2 + (prof.flangeWidth ? 0 : 0);
-          hd = (ent.params.height || 0.5) / 2; // plan depth ~ section height laid on side
-          hd = Math.max(hw, 0.15); // conservative plan footprint for a crossing beam
+          const bhw = (prof.flangeWidth || prof.webWidth || 0.2) / 2;
           const bb = this.beamBounds(ent.params);
           z0 = bb.zBottom; z1 = bb.zBottom + (bb.height || 0.5);
+          const wz0a = p.base[2], wz1a = wz0a + (p.height || 3);
+          if (z1 < wz0a - 1e-3 || z0 > wz1a + 1e-3) continue; // TOUCHING counts
+          if (cross > 0.55) {
+            // PARALLEL beam riding the wall (a spandrel on top of it, or an
+            // edge beam beside it): the wall's run ends at the beam's END
+            // faces — the beam owns its along-run extent outright
+            const offA = Math.abs(-(A2[0] - ax) * uy + (A2[1] - ay) * ux);
+            const offB = Math.abs(-(B2[0] - ax) * uy + (B2[1] - ay) * ux);
+            if (Math.min(offA, offB) > half + bhw + 0.02) continue; // off the wall line
+            const tA = (A2[0] - ax) * ux + (A2[1] - ay) * uy;
+            const tB = (B2[0] - ax) * ux + (B2[1] - ay) * uy;
+            const b0 = Math.max(0, Math.min(tA, tB) - REVEAL);
+            const b1 = Math.min(L, Math.max(tA, tB) + REVEAL);
+            if (b1 - b0 < 0.005) continue;
+            trims.push({ t0: b0, t1: b1 });
+            continue;
+          }
+          cx = (A2[0] + B2[0]) / 2; cy = (A2[1] + B2[1]) / 2;
+          hw = bhw;
+          hd = Math.max(hw, 0.15); // conservative plan footprint for a crossing beam
         } else continue;
-        // LEVEL GATE: the intruder must share vertical extent with the
-        // wall — plan x/y alone can't tell this floor's column from the
-        // one directly above it, and every level's wall would be eaten
+        // LEVEL GATE (closed — resting ON the wall top counts as being in
+        // its path; a slab between them lowers the wall top first, so a
+        // beam above a slab never reaches the wall): plan x/y alone can't
+        // tell this floor's intruder from the one directly above it
         const wz0 = p.base[2], wz1 = wz0 + (p.height || 3);
-        if (z1 <= wz0 + 1e-3 || z0 >= wz1 - 1e-3) continue;
+        if (z1 < wz0 - 1e-3 || z0 > wz1 + 1e-3) continue;
         // distance from intruder center to the wall baseline (cross-run)
         const rx = cx - ax, ry = cy - ay;
         const tAlong = rx * ux + ry * uy;
