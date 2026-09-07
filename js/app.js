@@ -318,7 +318,12 @@ class LevelManager {
   addLevel(name, elevation) {
     let n = 1;
     while (this.levels.some(l => l.id === 'lvl_' + n)) n++;
-    const lvl = { id: 'lvl_' + n, name: name || ('Level ' + n), elevation: +elevation || 0 };
+    // Revit refuses duplicate level names — auto-uniquify instead of silently
+    // creating two "Level 1" rows that read as one datum everywhere
+    let base = (name || ('Level ' + n)).trim() || ('Level ' + n);
+    let unique = base, k = 1;
+    while (this.levels.some(l => l.name === unique)) unique = base + ' (' + (++k) + ')';
+    const lvl = { id: 'lvl_' + n, name: unique, elevation: +elevation || 0 };
     this.levels.push(lvl);
     this.levels.sort((a, b) => a.elevation - b.elevation);
     if (window.app && app.onLevelsChanged) app.onLevelsChanged();
@@ -327,7 +332,12 @@ class LevelManager {
   updateLevel(id, patch) {
     const lvl = this.getLevel(id);
     if (!lvl) return null;
-    if (patch.name != null && patch.name.trim()) lvl.name = patch.name.trim();
+    if (patch.name != null && patch.name.trim()) {
+      const want = patch.name.trim();
+      if (this.levels.some(l => l !== lvl && l.name === want)) {
+        if (window.app) app.toast(`Level "${want}" already exists — name kept`, true);
+      } else lvl.name = want;
+    }
     if (patch.elevation != null && !isNaN(patch.elevation)) lvl.elevation = +patch.elevation;
     if (patch.gridSystem !== undefined) lvl.gridSystem = patch.gridSystem || null; // named grid line system
     this.levels.sort((a, b) => a.elevation - b.elevation);
@@ -2620,6 +2630,7 @@ class App {
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
         ['Face Style: Wireframe', 'styleWire', '', 'fs:wireframe'],
+        '-', ['Schedules…', 'schedules', ''],
       ]],
       ['Camera', [
         ['Perspective', 'projPersp', '', 'proj:persp'],
@@ -2717,6 +2728,7 @@ class App {
       exportGltf: () => A.exportGltf(),
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
+      schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
       selectAll: () => {
         A.sel = { edges: new Set([...A.model.edges.keys()]), faces: new Set([...A.model.faces.keys()]) };
@@ -3722,6 +3734,13 @@ class App {
       const aid = this.view.pickAssetAt(q);
       if (aid != null) return { face: null, edge: null, edges: [], group: null, asset: aid };
     }
+    // OBJECT MODE (Precise Drawing): whole elements first — one Group raycast,
+    // never the merged mesh or the edge list. The returned face still lets
+    // sub-element callers (Edit In Place entry) work unchanged.
+    if (this.mode === 'bim' && this.view.pickElementAt) {
+      const ep = this.view.pickElementAt(q);
+      if (ep) return { face: ep.faceId, entity: ep.entityId, group: null };
+    }
     const fid = this.view.pickFaceAt(q);
     if (fid != null) {
       const f = this.model.faces.get(fid);
@@ -4502,8 +4521,12 @@ class App {
   // as thin delegates so existing call sites keep working.
   _beginTx(label = 'edit') {
     if (this._openTx && !this._openTx.finished) {
-      console.warn(`[transaction] "${this._openTx.label}" was never committed — rolling it back`);
+      // B1 hardening: a stale open transaction (caller crashed mid-edit) is
+      // rolled back to its snapshot — the model returns to the last committed
+      // state, and the user HEARS about it instead of silently losing work
+      const stale = this._openTx.label;
       this._openTx.rollback();
+      this.toast(`"${stale}" was interrupted — rolled back to the last saved step`, true);
     }
     this._openTx = new Transaction(this, label);
     return this._openTx;

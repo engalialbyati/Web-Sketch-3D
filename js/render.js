@@ -297,6 +297,20 @@ class Viewport {
     // unified element Groups first: they claim their faces; the merged mesh
     // renders only the remaining (plain Free Drawing) geometry
     const elementFaceIds = (this.app.elements && this.app.elements.rebuild) ? this.app.elements.rebuild() : new Set();
+    // element-owned edges render inside their own Groups now — collect their
+    // ids once so the merged edge pass (and its O(all-edges) walk) skips them
+    const elementEdgeIds = new Set();
+    for (const fid of elementFaceIds) {
+      const f = model.faces.get(fid);
+      if (!f) continue;
+      for (const ring of model.rings(f)) {
+        const pts = model.pts(ring);
+        for (let i = 0; i < pts.length; i++) {
+          const e = model.findEdge(ring[i], ring[(i + 1) % pts.length]);
+          if (e) elementEdgeIds.add(e.id);
+        }
+      }
+    }
     // display-only view filters (Level View plan isolation) — never model state
     const ff = this.faceFilter || null, ef = this.edgeFilter || null, elf = this.elementFilter || null;
     // hidden elements leave the render (and with it, picking) entirely —
@@ -342,6 +356,7 @@ class Viewport {
     const ep = [];
     for (const e of model.edges.values()) {
       if (e.hidden || (ef && !ef(e))) continue;
+      if (elementEdgeIds.has(e.id)) continue; // renders inside its element Group
       const eu = e.userData && e.userData.bimEntityId;
       if (eu && this.app.isEntityHidden(eu)) continue; // hidden element edges go too
       const a = model.vp(e.a), b = model.vp(e.b);
@@ -1002,6 +1017,31 @@ class Viewport {
     const ro = this.raycaster.ray.origin;
     const rd = this.raycaster.ray.direction;
     return { ro: G.v(ro.x, ro.y, ro.z), rd: G.v(rd.x, rd.y, rd.z) };
+  }
+  // Object-mode pick (Precise Drawing): raycast ONLY the per-element Groups.
+  // Returns { entityId, faceId } of the closest hit, or null. Locked/hidden
+  // elements are not targets. This is the O(#elements) path — the merged-mesh
+  // and edge-list scans stay in Free Drawing (the "edit mode").
+  pickElementAt(s) {
+    if (!this.elementsRoot || !this.elementsRoot.children.length) return null;
+    const app = this.app;
+    this.applyCamera();
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const pickable = obj => {
+      const eid = obj.userData && obj.userData.elementId;
+      if (!eid) return true;
+      return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
+    };
+    const hits = this.raycaster.intersectObjects(
+      this.elementsRoot.children.filter(pickable), true);
+    if (!hits.length) return null;
+    for (const h of hits) {
+      const eid = h.object.userData && h.object.userData.elementId;
+      if (!eid) continue;
+      const map = h.object.userData.triangleFace;
+      return { entityId: eid, faceId: map ? map[h.faceIndex] : null };
+    }
+    return null;
   }
   pickFaceAt(s) {
     if (!this.faceMesh.visible) return null;

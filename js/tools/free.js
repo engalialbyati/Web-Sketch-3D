@@ -143,6 +143,16 @@ class SelectTool extends Tool {
       this._gdrag = { grid: gl.grid, z: gl.z, last: null, moved: false };
       return;
     }
+    // OBJECT MODE (Precise Drawing): a hit on a BIM element selects the WHOLE
+    // element — never its faces/edges (those belong to Edit In Place / Free
+    // Drawing, the app's "edit modes"). Shift toggles it into the selection.
+    if (this.app.mode === 'bim') {
+      const pe = this.app.pickEntity(ev);
+      if (pe && pe.entity) {
+        this.app.selectElement(pe.entity, ev.shiftKey ? 'toggle' : 'replace');
+        return;
+      }
+    }
     this._bandStart = this.app.view.eventPt(ev);
     this._band = false;
     this._mod = ev.shiftKey || ev.ctrlKey;

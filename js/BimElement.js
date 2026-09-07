@@ -76,6 +76,27 @@
         group.add(mesh);
         this.mesh = mesh;
       }
+      // the element's own edges render INSIDE its Group — per-element edges
+      // are what lets the merged pass skip them and rebuilds stay local
+      const ep = [];
+      for (const fid of this.entity.faces) {
+        const f = model.faces.get(fid);
+        if (!f || f.hidden) continue;
+        for (const ring of model.rings(f)) {
+          const pts = model.pts(ring);
+          for (let i = 0; i < pts.length; i++) {
+            const a = pts[i], b = pts[(i + 1) % pts.length];
+            ep.push(a.x, a.y, a.z, b.x, b.y, b.z);
+          }
+        }
+      }
+      if (ep.length) {
+        const eg = new THREE.BufferGeometry();
+        eg.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
+        const lines = new THREE.LineSegments(eg, model.__edgeMaterial || new THREE.LineBasicMaterial({ color: 0x1b1f23 }));
+        lines.userData.elementId = this.entity.id;
+        group.add(lines);
+      }
       this.group = group;
       return group;
     }
@@ -121,8 +142,6 @@
      *  owned by elements (the merged mesh skips those). */
     rebuild() {
       const app = this.app, model = app.model, view = app.view;
-      for (const el of this._byId.values()) el.dispose();
-      this._byId.clear();
       if (!view || !view.elementsRoot) return new Set();
       const faceIds = new Set();
       // ByLayer color: the entity's layer color tints its whole Group
@@ -130,14 +149,31 @@
         const ly = (model.layers || []).find(l => l.id === ent.layerId);
         return (ly && ly.color) || null;
       };
+      // INCREMENTAL: an element whose face signature is unchanged keeps its
+      // Group (no dispose, no re-triangulation) — only dirty entities rebuild.
+      // This is the per-element half of the performance path: a commit that
+      // touches one beam costs that beam, not the whole model.
+      const live = new Set();
       for (const ent of app.bim.entities) {
         ent.faces = ent.faces.filter(id => model.faces.has(id));
         if (!ent.faces.length) continue;
-        const el = new BimElement(ent);
-        view.elementsRoot.add(el.build(model, view.faceMat, layerColor(ent)));
-        this._byId.set(ent.id, el);
+        live.add(ent.id);
+        const sig = ent.faces.join(',');
+        let el = this._byId.get(ent.id);
+        if (el && el._sig === sig && el.group) {
+          // unchanged — but hidden/lock display state must still track
+          if (el.group.parent) el.group.visible = !ent.hidden;
+        } else {
+          if (el) el.dispose();
+          el = new BimElement(ent);
+          el._sig = sig;
+          view.elementsRoot.add(el.build(model, view.faceMat, layerColor(ent)));
+          this._byId.set(ent.id, el);
+        }
         for (const id of ent.faces) faceIds.add(id);
       }
+      for (const [id, el] of [...this._byId])
+        if (!live.has(id)) { el.dispose(); this._byId.delete(id); }
       return faceIds;
     }
 
@@ -241,6 +277,18 @@
           const prof = { rectangular: 'Rectangular', t: 'T-Beam', l: 'L-Beam' }[p.profile || 'rectangular'] || 'Rectangular';
           sel = pick(null, famId, `${prof} — ${Math.round((p.height || 0.5) * 1000)} mm`,
             { profile: p.profile || 'rectangular', height: p.height || 0.5, webWidth: p.webWidth || 0.25, flangeWidth: p.flangeWidth || 0.6, flangeThickness: p.flangeThickness || 0.15, material: 'Concrete' });
+          break;
+        }
+        case 'foundation': {
+          // isolated pads live in the strip-footing family; the PLAN SIZE
+          // names the type (a Pad 1200 x 1200 reuses the type a previous
+          // identical pad already grew, Revit-style)
+          const w = p.width || 1.2, d = p.depth || 1.2, t = p.thickness || 0.5;
+          const name = `Pad ${Math.round(w * 1000)} x ${Math.round(d * 1000)}`;
+          const known = this._catalog.types.find(x => x.familyId === 'fam_fnd_strip' && x.name === name);
+          sel = known
+            ? pick(null, 'fam_fnd_strip', known.name, known.defaultParameters)
+            : pick(null, 'fam_fnd_strip', name, { width: w, depth: d, thickness: t, defaultHeight: t, material: 'Concrete' });
           break;
         }
         case 'script': {
