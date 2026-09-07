@@ -66,13 +66,19 @@
       // request for a −3 m offset, it bases the column ON the level plane
       const onGeometry = kind === 'endpoint' || kind === 'midpoint' || kind === 'center'
         || kind === 'edge' || kind === 'face';
+      // stand-on-surface: only a slab/roof/free top under the cursor bases
+      // the column on it. A pick on a WALL bases at the level — the column
+      // lands on the floor and the wall-face rule splits it. (The old rule
+      // took ANY geometry pick's z: clicking a wall floated the column at
+      // the click height, half-embedded, and no split ever happened.)
+      const stand = onGeometry ? app.pointStandingZ(p, kind) : null;
       const params = {
         base: [p.x, p.y, baseZ],
         family: s.family || 'rect',
         ...fp,
         baseLevelId: baseLevel,
         topLevelId: app.bimOptions.topConstraint !== 'unconnected' ? app.bimOptions.topConstraint : null,
-        baseOffset: onGeometry && p.z != null ? p.z - baseZ : 0,
+        baseOffset: stand != null ? stand - baseZ : 0,
         topOffset: 0,
         // the options strip's Unconnected Height owns the height (walls,
         // grid columns, beams all read it) — the feature's legacy state is
@@ -128,14 +134,21 @@
       const facesBefore = new Set(app.model.faces.keys());
       const edgesBefore = new Set(app.model.edges.keys());
       let ok = false;
-      app.transaction.run('column', m => {
+      // the tx returns true only when the fn ran AND the commit survived the
+      // guard — a rolled-back build must not register a ghost entity over
+      // the restored model
+      ok = app.transaction.run('column', m => {
+        // PRE-SPLIT: walls crossing the footprint retreat to its face FIRST
+        // (with the column as a pending intruder) — the sweep then travels
+        // between the pieces instead of slicing wall material
+        app.bim.preSplitWallsForColumn(params);
         m.bimHold = true; // punching a slab at the top level keeps its entity
         try {
           const st = app.structural.buildColumn(G, m, params);
           if (!st.length) throw new Error('column placement failed');
-          ok = true;
+          return true;
         } finally { m.bimHold = false; }
-      });
+      }) === true;
       if (!ok) return;
       const m = app.model;
       // Claim only UNSTAMPED new faces: pieces of elements the column

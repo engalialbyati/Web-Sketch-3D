@@ -374,7 +374,7 @@
     // retreats to the intruder's face along the run direction (plus the
     // 1 mm reveal that keeps faces off shared planes). Returns null when the
     // baseline crosses nothing (the common case — cheap early-out).
-    wallPlanTrims(wallParams) {
+    wallPlanTrims(wallParams, pending) {
       const p = wallParams;
       if (!p.base || !p.end) return null;
       const ax = p.base[0], ay = p.base[1], bx = p.end[0], by = p.end[1];
@@ -387,7 +387,11 @@
       // intruder's plan half-extent ALONG the wall run (support function of
       // its box, projected on the run direction) and the cross-run reach
       const trims = [];
-      for (const ent of this.entities) {
+      // PENDING intruders (a column about to land) count too — the wall
+      // pre-splits before the sweep, so the new element never cuts through
+      // wall material (same contract as preTrimWallsFor for beams/slabs)
+      const pool = (pending && pending.length ? pending.map(x => ({ ...x, id: '__pending__' + Math.random() })) : []).concat([...this.entities]);
+      for (const ent of pool) {
         if (ent.id === p.id) continue;
         let cx = 0, cy = 0, hw = 0, hd = 0, z0 = 0, z1 = 0;
         if (ent.type === 'column' && ent.params && ent.params.base) {

@@ -81,6 +81,31 @@ class Model {
     if (this.bimHold) return; // BIM-originated edits (hosted cuts) keep entities
     if (f && f.userData && f.userData.bimEntityId) this.bimDirty.add(f.userData.bimEntityId);
   }
+  // The horizontal standing surface at plan (x, y) on plane z: a face of a
+  // floor/slab/roof (or free-mode geometry) the cursor can stand a column
+  // on. Structural element faces (wall/column/beam/foundation — including
+  // their TOPS) never capture the base: clicking a wall means "a column
+  // here, from the floor".
+  standingZAt(p) {
+    for (const [, f] of this.faces) {
+      const t = f.userData && f.userData.bimType;
+      if (t === 'wall' || t === 'column' || t === 'beam' || t === 'foundation') continue;
+      const pts = this.pts(f.loop);
+      if (pts.length < 3) continue;
+      let zmin = Infinity, zmax = -Infinity;
+      for (const q of pts) { if (q.z < zmin) zmin = q.z; if (q.z > zmax) zmax = q.z; }
+      if (zmax - zmin > 1e-6) continue;          // horizontal faces only
+      if (Math.abs(zmin - p.z) > 1e-6) continue; // at the picked plane
+      let inside = false;                        // plan point-in-polygon, ray cast
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[i], b = pts[j];
+        if ((a.y > p.y) !== (b.y > p.y)
+          && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+      }
+      if (inside) return zmin;
+    }
+    return null;
+  }
   vp(id) { return this.vertices.get(id); }
   pts(ids) { return ids.map(id => this.vp(id)); }
   rings(f) { return [f.loop, ...(f.holes || [])]; }

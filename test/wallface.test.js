@@ -330,6 +330,26 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
+  // ------------------ the user's freeze case: column snapped to the wall FACE
+  // (asymmetric, half off the wall line) — pre-split must keep the sweep
+  // from ever slicing wall material
+  test('pre-split: an off-center column lands between the pieces, model stays valid', () => {
+    const w = makeWorld();
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    // column centered at the wall's FACE midpoint: x=4.075, y=+0.1
+    const colParams = { base: [4.075, 0.1, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl1' };
+    const n = w.bim.preSplitWallsForColumn(colParams);
+    ok(n >= 1, 'the wall pre-split for the pending column');
+    buildColumn(w, 4.075, 0.1, 0); // the real sweep now travels between pieces
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 2, 'two wall pieces around the column');
+    const xs = allWallXs(w);
+    for (const x of xs)
+      ok(x < 3.9245 + 5e-3 || x > 4.2265 - 5e-3, `vertex x=${x} clear of the column footprint`);
+    ok(w.m.validate().ok, 'model valid — no torn rings');
+  });
+
   return summary_if_needed;
   function summary_if_needed() { }
 };

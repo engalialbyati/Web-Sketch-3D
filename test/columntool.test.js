@@ -50,6 +50,10 @@ module.exports = h => {
         begin() { return { commit() { }, rollback() { }, rolledBack: false }; },
         run(label, fn) { return fn(m); },
       },
+      pointStandingZ(pp, kind) {
+        if (!['endpoint', 'midpoint', 'center', 'edge', 'face'].includes(kind)) return null;
+        return m.standingZAt(pp);
+      },
     };
     app.structural = StructuralManager.attach(app);
     const tool = Object.create(ColumnFeature.ColumnTool.prototype);
@@ -78,14 +82,32 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('a pick on real geometry (slab top) supplies the base offset', () => {
+  test('a pick on a real slab top supplies the base offset', () => {
     const w = makeWorld('lvl2', 3);
-    w.tool._setPick({ x: 2, y: 2, z: 3.2 }, 'face'); // slab top +0.2 over L2
+    // an actual slab top +0.2 over L2 under the cursor
+    const f = w.m.addFaceFromRings([[1, 1, 3.2], [3, 1, 3.2], [3, 3, 3.2], [1, 3, 3.2]].map(q => G.v(...q)));
+    ok(f, 'slab face exists');
+    w.tool._setPick({ x: 2, y: 2, z: 3.2 }, 'face');
     place(w);
     const col = lastCol(w);
-    near(col.params.baseOffset, 0.2, 1e-9, 'on-face pick becomes +0.2 m');
+    near(col.params.baseOffset, 0.2, 1e-9, 'slab-top pick becomes +0.2 m');
     const cb = w.app.structural.columnBounds(col.params);
     near(cb.zStart, 3.2, 1e-9);
+  });
+
+  test('a pick on a WALL never captures the base — the column lands on the floor', () => {
+    const w = makeWorld('lvl1', 3);
+    // a wall top face at z=3 (stamped 'wall'): clicking it must NOT float
+    // the column — it bases at the level and splits the wall instead
+    const f = w.m.addFaceFromRings([[1, 1, 3], [3, 1, 3], [3, 3, 3], [1, 3, 3]].map(q => G.v(...q)));
+    f.userData = { bimEntityId: 'wall_1', bimType: 'wall', role: 'top' };
+    w.tool._setPick({ x: 2, y: 2, z: 3 }, 'midpoint');
+    place(w);
+    const col = lastCol(w);
+    near(col.params.baseOffset, 0, 1e-9, 'wall pick contributes NO offset');
+    const cb = w.app.structural.columnBounds(col.params);
+    near(cb.zStart, 0, 1e-9, 'column stands on the level, not on the wall top');
+    near(cb.zEnd, 3, 1e-9);
   });
 
   test('the options strip Unconnected Height owns the height', () => {

@@ -589,6 +589,18 @@
     _place() {
       const app = this.app, s = this.state || {};
       const mode = s.levelMode || 'current';
+      // batch: N placements, ONE opDone at the end (per-create opDone would
+      // rebuild the view for every beam of a multi-level fan)
+      app.bim._holdOpDone = true;
+      try {
+        this._placeInner(mode);
+      } finally {
+        app.bim._holdOpDone = false;
+        if (app.opDone) app.opDone();
+      }
+    }
+    _placeInner(mode) {
+      const app = this.app;
       if (mode === 'current') { this._placeOnLevel(); return; }
       // LEVEL FANNING: place the SAME selection on multiple levels.
       //  'selected' — every level that currently HAS a selection (select on

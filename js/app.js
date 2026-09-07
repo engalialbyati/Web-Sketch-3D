@@ -507,6 +507,14 @@ class BimEntityManager {
       this._hostsDirty = this._hostsDirty || new Set();
       this._hostsDirty.add(ent.id);
     }
+    // registration completes the unit of work: tools register AFTER their
+    // transaction (whose commit-opDone ran before this entity existed), so
+    // without this the face-rule trims sat unprocessed until the NEXT
+    // operation — a column landed and the wall stood unsplit until you
+    // did something else. Batch placements suspend it (one opDone for all).
+    const A = window.app;
+    if (ent && A && A.opDone && !this._holdOpDone
+      && (!A._openTx || A._openTx.finished)) A.opDone();
     return ent;
   }
   _createInner(type, params, faceRoles, edgeIds = []) {
@@ -910,6 +918,38 @@ class BimEntityManager {
       m.endEdgeSweep();
     }
   }
+  // PRE-SPLIT walls for a column about to land: every wall whose run the
+  // column's footprint crosses retreats to its face BEFORE the column's
+  // sweep — the sweep then travels between the pieces instead of slicing
+  // through wall material (the asymmetric slice is what tore the split
+  // cascade: 'adding a column to a wall' froze the app).
+  preSplitWallsForColumn(colParams) {
+    if (!window.app || !window.app.structural) return 0;
+    let n = 0;
+    const c = colParams.base;
+    const R = Math.max(colParams.width || 0.3, colParams.depth || 0.3) + 0.6;
+    for (const w of [...this.entities]) {
+      if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
+      const ax = w.params.base[0], ay = w.params.base[1], bx = w.params.end[0], by = w.params.end[1];
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((c[0] - ax) * dx + (c[1] - ay) * dy) / L2));
+      if (Math.hypot(c[0] - (ax + dx * t), c[1] - (ay + dy * t)) > R) continue;
+      // pending intruders are entity-shaped: { type, params }
+      if (this.planTrimWall(w.id, { pending: [{ type: 'column', params: colParams }] })) n++;
+    }
+    return n;
+  }
+  // tear an entity's edge list down through the kernel (index stays
+  // consistent), then the wipe sites reap every zero-face edge the face
+  // deletes left behind. Raw m.edges.delete() leaves stale index entries,
+  // and orphaned edges are POISON to the split cascade: splitFacesAt
+  // divides rings through edges adjacent to its vertices, so corpses breed
+  // phantom splits until the model explodes (the 'adding a column freezes
+  // the app' freeze). model.load heals this via reapOrphanEdges — the live
+  // model must reap at the wipe sites too.
+  _wipeEdges(ids) {
+    for (const eid of ids) if (this.model.edges.has(eid)) this.model._delEdge(eid);
+  }
   // THE WALL-FACE RULE (dynamic): a wall ends at the FACE of any column or
   // beam in its path. Rebuild the wall's span around every crossing
   // intruder — same params (baseline, thickness, height, location line),
@@ -927,7 +967,7 @@ class BimEntityManager {
     const ax = p.base[0], ay = p.base[1];
     const L = Math.hypot(p.end[0] - ax, p.end[1] - ay) || 1;
     const ux = (p.end[0] - ax) / L, uy = (p.end[1] - ay) / L;
-    const trims = app.structural ? app.structural.wallPlanTrims(p) : null;
+    const trims = app.structural ? app.structural.wallPlanTrims(p, (arguments[1] && arguments[1].pending) || null) : null;
     // free spans = the complement of the blocked intervals on [0, L]
     const spans = [];
     let cur = 0;
@@ -947,6 +987,7 @@ class BimEntityManager {
     if (!spans.length) {
       // fully consumed: the intruders own this ground — the wall (and its
       // hosted openings) retire
+      const heldR = m.bimHold;
       m.beginEdgeSweep();
       try {
         m.bimHold = true;
@@ -956,11 +997,12 @@ class BimEntityManager {
           if (this.db) this.db.deleteElement(h.id).catch(() => { });
         }
         for (const fid of [...ent.faces]) m.faces.delete(fid);
-        for (const eid of [...ent.edges]) m.edges.delete(eid);
+        this._wipeEdges(ent.edges);
         m.gc();
+        m.reapOrphanEdges(); // corpses poison the next split cascade
         ent.faces = []; ent.edges = [];
-        m.bimHold = false;
-      } finally { m.endEdgeSweep(); }
+        m.bimHold = heldR;
+      } finally { m.endEdgeSweep(); m.bimHold = heldR; }
       return true;
     }
     // blocked: (re)allocate the span among independent wall pieces
@@ -991,19 +1033,21 @@ class BimEntityManager {
     const slots = spans.map(([t0, t1]) => { const A = at(t0), B = at(t1); return [tOf(A), tOf(B)]; });
     m.beginEdgeSweep();
     let ok = true;
+    const held = m.bimHold; // hold-transparent: a caller's hold survives us
     try {
       m.bimHold = true;
       const hosted = this.entities.filter(e => e.params && e.params.hostWallId === ent.id);
       for (const h of hosted) for (const fid of [...h.faces]) m.faces.delete(fid);
       for (const fid of [...ent.faces]) m.faces.delete(fid);
-      for (const eid of [...ent.edges]) m.edges.delete(eid);
+      this._wipeEdges(ent.edges);
       m.gc();
+      m.reapOrphanEdges(); // corpses poison the next split cascade
       for (const f2 of m.faces.values()) {
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
       ent.faces = []; ent.edges = [];
-      m.bimHold = false;
+      m.bimHold = held;
       const pieces = [];
       for (let s = 0; s < spans.length; s++) {
         const [t0, t1] = spans[s];
@@ -1047,7 +1091,7 @@ class BimEntityManager {
         }
       }
       if (this.assets) for (const piece of pieces) this.assets.recutHosted(piece.id, m);
-    } finally { m.endEdgeSweep(); }
+    } finally { m.endEdgeSweep(); m.bimHold = held; }
     return ok;
   }
   // HEAL / REUNITE: nothing blocks THIS piece — re-derive the whole group's
@@ -1061,6 +1105,7 @@ class BimEntityManager {
     const m = this.model;
     const p = ent.params;
     const mg = p.merge;
+    const heldD = m.bimHold; // hold-transparent: a caller's hold survives us
     if (!mg || !mg.base || !mg.end) { delete p.merge; return true; }
     const ob = mg.base, oe = mg.end;
     const z = p.base[2];
@@ -1165,15 +1210,16 @@ class BimEntityManager {
       const allMembers = groups.flatMap(gr => gr.members);
       for (const e of allMembers) {
         for (const fid of [...e.faces]) m.faces.delete(fid);
-        for (const eid of [...e.edges]) m.edges.delete(eid);
+        this._wipeEdges(e.edges);
       }
       m.gc();
+      m.reapOrphanEdges(); // corpses poison the next split cascade
       for (const f2 of m.faces.values()) {
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
       for (const e of allMembers) { e.faces = []; e.edges = []; }
-      m.bimHold = false;
+      m.bimHold = heldD;
       for (const gr of groups) {
         const survivor = gr.members[0];
         for (const e of gr.members) if (e !== survivor) this.detach(e.id);
@@ -1191,7 +1237,7 @@ class BimEntityManager {
         }
         if (this.assets) this.assets.recutHosted(survivor.id, m);
       }
-    } finally { m.endEdgeSweep(); }
+    } finally { m.endEdgeSweep(); m.bimHold = heldD; }
     return ok;
   }
   // re-cut one hosted opening on its (possibly new) host wall
@@ -1228,6 +1274,7 @@ class BimEntityManager {
     try { ring = this.wallRing(jp); } catch (e) { return false; }
     if (!ring || ring.length < 3 || G.ringDegenerate(ring)) return false;
     const before = new Set(m.faces.keys());
+    const heldE = m.bimHold;
     m.bimHold = true;
     try {
       const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
@@ -1250,7 +1297,7 @@ class BimEntityManager {
       }
       ent.faces = ent.faces.concat(nf.map(f2 => f2.id));
       ent.edges = [...new Set(ent.edges.concat(ne))];
-    } finally { m.bimHold = false; }
+    } finally { m.bimHold = heldE; }
     return true;
   }
 
@@ -1918,9 +1965,29 @@ class App {
               adopt(ent, (f) => { const c = mm.faceCentroid(f);
                 return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
             } else if (d.type === 'wall' && d.params.base && d.params.end) {
-              const ring = this.bim.wallRing(d.params);
-              const f = mm.addFaceFromRings(ring.map(q => G.clone(q)));
-              if (f && mm.pushPull(f, d.params.height || 3)) adopt(ent, () => 'exterior');
+              // span-wise: a full-span extrusion through a standing column
+              // crosses its faces exactly (no reveal) and the split cascade
+              // explodes. The split allocator extrudes each FREE span with
+              // the 1 mm reveal — and re-creates the piece elements for
+              // mid-run intruders, exactly like a live placement.
+              const bp = d.params.base, ep = d.params.end;
+              const wl = Math.hypot(ep[0] - bp[0], ep[1] - bp[1]) || 1;
+              const spans = [];
+              let cur = 0;
+              const tr = this.structural ? this.structural.wallPlanTrims(d.params) : null;
+              for (const iv of (tr ? tr.intervals : [])) {
+                if (iv.t0 - cur > 0.05) spans.push([cur, iv.t0]);
+                cur = Math.max(cur, iv.t1);
+              }
+              if (wl - cur > 0.05) spans.push([cur, wl]);
+              if (spans.length) {
+                this.bim._splitWallToSpans(ent, spans, {
+                  ax: bp[0], ay: bp[1],
+                  ux: (ep[0] - bp[0]) / wl, uy: (ep[1] - bp[1]) / wl, L: wl,
+                });
+                ent.faces = ent.faces.concat([]);
+                adopt(ent, () => 'exterior'); // sweep up any strays (holes from hosted cuts etc.)
+              }
             } else if ((d.type === 'slab' || d.type === 'floor') && d.params.regions) {
               for (const r of d.params.regions) {
                 const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
@@ -4084,6 +4151,18 @@ class App {
   // one locked axis keeps only that component, two keep their plane. While
   // locks are armed the free snap candidates and automatic axis inference
   // stand aside — the explicit constraint wins.
+  // The standing surface under a geometry pick: a horizontal face of a
+  // floor/slab/roof (or free-mode geometry) at the picked plane containing
+  // the picked plan point. Vertical elements (walls, columns, beams,
+  // foundations) return nothing — clicking a wall means "a column HERE,
+  // from the floor", never "float one at the height I happened to click"
+  // (the floating column then half-embeds in the wall and no split ever
+  // happens — the exact "can't add a column to a wall" report).
+  pointStandingZ(p, kind) {
+    if (!['endpoint', 'midpoint', 'center', 'edge', 'face'].includes(kind)) return null;
+    if (p.z == null) return null;
+    return this.model.standingZAt(p);
+  }
   inferPoint(ev, anchor) {
     const inf = this._inferPointRaw(ev, anchor);
     const locks = this.axisLocks;
@@ -5267,6 +5346,10 @@ class App {
       this.toast(`${label} failed — model restored`, true);
       return undefined;
     }
+    // a guard-rolled-back commit (invalid geometry) must read as failure to
+    // the caller — the column tool kept registering a ghost entity over the
+    // restored model otherwise
+    if (tx.rolledBack) return undefined;
     return out;
   }
   begin(label = 'edit') { return this.transaction.begin(label); }
