@@ -942,7 +942,11 @@ class Model {
   reapOrphanEdges() {
     let n = 0;
     for (const [id, e] of [...this.edges]) {
-      if (e.curveId || (e.userData && (e.userData.deliberate || e.userData.bimEntityId))) continue; // curves/arcs are legal standalone geometry
+      // deliberate drawn lines and curve-owned edges survive; an entity stamp
+      // does NOT — a stamped edge with zero adjacent faces is a corpse from a
+      // split cascade (merged co-linear ring segment outliving its faces),
+      // and was exactly the long orphan line between distant elements
+      if (e.curveId || (e.userData && e.userData.deliberate)) continue;
       if (this.facesAdjacentToEdge(e).length === 0) { this._delEdge(id); n++; }
     }
     if (n) this.gc();
