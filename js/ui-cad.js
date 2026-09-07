@@ -224,7 +224,7 @@
     ob.bar.classList.toggle('visible', bim);
     if (!bim) return;
     const o = app.bimOptions || {};
-    const sketchTools = ['draw', 'wall', 'floor'].includes(tool);
+    const sketchTools = ['draw', 'wall', 'floor', 'roof'].includes(tool);
     // SDK feature fields (generic: whatever the descriptor declares)
     const feat = window.Engine && Engine.features.get(tool);
     if (feat && feat.options && feat.options.length && !focusedInside(ob.gFeat)) {

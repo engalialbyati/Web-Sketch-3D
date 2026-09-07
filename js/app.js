@@ -1229,7 +1229,7 @@ class App {
     const row = el('drawpalette');
     if (!row) return;
     const toolId = (this.tool && this.tool.id) || '';
-    const sketchTools = ['draw', 'wall', 'floor'].includes(toolId);
+    const sketchTools = ['draw', 'wall', 'floor', 'roof'].includes(toolId);
     row.classList.toggle('hidden', this.mode !== 'bim' || !(sketchTools || toolId === 'convert'));
     row.querySelectorAll('.dchip').forEach(c => {
       if (c.dataset.prim && c.dataset.prim.startsWith('cv-')) return;
