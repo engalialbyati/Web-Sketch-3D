@@ -231,7 +231,11 @@ class Model {
   }
 
   addEdge(pa, pb) {
-    if (!pa || !pb || G.dist(pa, pb) < G.VEPS) return null;
+    const e = this._addEdgePublic(pa, pb);
+    if (e && !e.userData) e.userData = { deliberate: 1 }; // drawn geometry: sweeps never reap it
+    return e;
+  }
+  _addEdgePublic(pa, pb) {    if (!pa || !pb || G.dist(pa, pb) < G.VEPS) return null;
     const sa = this.snapEndpoint(pa), sb = this.snapEndpoint(pb);
     const a = sa || this.vertexAt(pa), b = sb || this.vertexAt(pb);
     if (a === b) return null;
@@ -316,7 +320,6 @@ class Model {
     this.autoFace(e);
     return e;
   }
-
   // Open or closed polyline; curveMeta groups segments into an arc/circle entity.
   addPolyline(pts, curveMeta = null) {
     if (!pts || pts.length < 2) return null;
@@ -910,17 +913,35 @@ class Model {
   // and reap edges BORN inside the bracket that ended up attached to no
   // face. Multi-stage residue (born attached in one hold, orphaned in the
   // next) is caught; free-drawn lines predate the bracket and survive.
-  beginEdgeSweep() { this._sweepSnap = new Set(this.edges.keys()); }
+  // EDGE SWEEP — the root guard against split residue (orphan lines): edges
+  // born inside a bracket that no face references by bracket-end are reaped.
+  // Brackets STACK (a transaction brackets everything; a wall rebuild opens
+  // its own nested window), and edges created through the PUBLIC API carry
+  // `deliberate` — drawn lines are geometry, never residue.
+  beginEdgeSweep() {
+    if (!this._sweepStack) this._sweepStack = [];
+    this._sweepStack.push(new Set(this.edges.keys()));
+  }
   endEdgeSweep() {
-    const snap = this._sweepSnap;
-    this._sweepSnap = null;
-    if (!snap) return;
+    if (!this._sweepStack || !this._sweepStack.length) return;
+    const snap = this._sweepStack.pop();
     for (const id of [...this.edges.keys()]) {
       if (snap.has(id)) continue;
       const e = this.edges.get(id);
-      if (e && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
+      if (e && !(e.userData && e.userData.deliberate)
+        && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
     }
     this.gc();
+  }
+  /** One-time cleanup for models saved before the sweep existed. */
+  reapOrphanEdges() {
+    let n = 0;
+    for (const [id, e] of [...this.edges]) {
+      if (e.userData && (e.userData.deliberate || e.userData.bimEntityId)) continue;
+      if (this.facesAdjacentToEdge(e).length === 0) { this._delEdge(id); n++; }
+    }
+    if (n) this.gc();
+    return n;
   }
 
   // Soften/hidden edges: display-only visibility (rendering skips them;

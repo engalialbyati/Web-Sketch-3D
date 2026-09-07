@@ -262,6 +262,7 @@ class Transaction {
     A.undoStack.push(this.snapshot);
     if (A.undoStack.length > Transaction.MAX_UNDO) A.undoStack.shift();
     A.redoStack.length = 0;
+    if (A.model && A.model.endEdgeSweep) A.model.endEdgeSweep(); // reap residue born in this tx
     if (A.validateOnCommit) {
       const v = A.model.validate();
       if (!v.ok) console.error(`[${this.label}] model invalid after commit:`, v.errors);
@@ -273,6 +274,7 @@ class Transaction {
     this.finished = true;
     this.rolledBack = true;
     this.app.model.load(this.snapshot);
+    if (this.app.model.endEdgeSweep) this.app.model.endEdgeSweep();
     this.app.opDone();
   }
 }
@@ -419,6 +421,26 @@ class BimEntityManager {
     return ent;
   }
   getEntityById(id) { return this.entities.find(e => e.id === id) || null; }
+  /** Same-kind element already at this spot? (same baseline/base plan point
+   *  and level — duplicate placements shred each other into split cascades) */
+  existsLike(type, params) {
+    const key = p => p ? [ +(+p[0]).toFixed(3), +(+p[1]).toFixed(3) ] : null;
+    return this.entities.some(e => {
+      if (e.type !== type) return false;
+      const a = e.params || {}, b = params || {};
+      if (type === 'beam' || type === 'wall') {
+        if ((a.baseLevel || a.referenceLevelId) !== (b.baseLevel || b.referenceLevelId)) return false;
+        const A1 = key(a.baseline && a.baseline[0]), B1 = key(b.baseline && b.baseline[0]);
+        const A2 = key(a.baseline && a.baseline[1]), B2 = key(b.baseline && b.baseline[1]);
+        return A1 && B1 && ((A1.join() === B1.join() && A2.join() === B2.join())
+          || (A1.join() === B2.join() && A2.join() === B1.join()));
+      }
+      // column / foundation / stairs: same plan base + level
+      if ((a.baseLevel || a.baseLevelId) !== (b.baseLevel || b.baseLevelId)) return false;
+      const A = key(a.base), B = key(b);
+      return A && B && A.join() === B.join();
+    });
+  }
   getEntityForFace(face) {
     const uid = face && face.userData && face.userData.bimEntityId;
     return uid ? this.getEntityById(uid) : null;
@@ -4528,6 +4550,9 @@ class App {
       this._openTx.rollback();
       this.toast(`"${stale}" was interrupted — rolled back to the last saved step`, true);
     }
+    // ROOT guard: every transaction carries an edge-sweep bracket — split
+    // residue born inside any mutation path is reaped at commit/rollback
+    if (this.model && this.model.beginEdgeSweep) this.model.beginEdgeSweep();
     this._openTx = new Transaction(this, label);
     return this._openTx;
   }
