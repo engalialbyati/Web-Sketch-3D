@@ -541,7 +541,8 @@ class Viewport {
       if (g.bubbleEnd === 'both' || g.bubbleEnd === 'start') ends.push({ p: S, d: { x: -dir.x / dl, y: -dir.y / dl } });
       if (g.bubbleEnd === 'both' || g.bubbleEnd === 'end') ends.push({ p: E, d: { x: dir.x / dl, y: dir.y / dl } });
       for (const end of ends) {
-        const spr = this._gridBubble(g.name);
+        // selected grid reads amber end-to-end: line, bubbles AND grips
+        const spr = selGrid ? this._gridBubble(g.name, 0xf59e0b) : this._gridBubble(g.name);
         spr.position.set(end.p[0] + end.d.x * 0.7, end.p[1] + end.d.y * 0.7, zGrip);
         this.gridsGroup.add(spr);
       }
@@ -557,15 +558,15 @@ class Viewport {
     }
   }
   // circular bubble with the axis name centered inside (R ≈ 0.4 m world)
-  _gridBubble(name) {
+  _gridBubble(name, color) {
     const cv = document.createElement('canvas');
     cv.width = 128; cv.height = 128;
     const cx = cv.getContext('2d');
     cx.beginPath(); cx.arc(64, 64, 56, 0, Math.PI * 2);
-    cx.lineWidth = 6; cx.strokeStyle = '#64748b'; cx.stroke();
-    cx.fillStyle = 'rgba(226,232,240,0.85)'; cx.fill();
+    cx.lineWidth = 6; cx.strokeStyle = color ? '#f59e0b' : '#64748b'; cx.stroke();
+    cx.fillStyle = color ? 'rgba(253,230,138,0.95)' : 'rgba(226,232,240,0.85)'; cx.fill();
     cx.font = '700 52px Segoe UI, sans-serif';
-    cx.fillStyle = '#334155';
+    cx.fillStyle = color ? '#7c4a03' : '#334155';
     cx.textAlign = 'center'; cx.textBaseline = 'middle';
     cx.fillText(String(name).slice(0, 3), 64, 68);
     const tex = new THREE.CanvasTexture(cv);

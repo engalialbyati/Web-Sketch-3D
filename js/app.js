@@ -425,6 +425,14 @@ class BimEntityManager {
     c.x /= n; c.y /= n;
     const R = ent.type === 'column' ? 0.6 : (ent.params.height || 1) + 1; // crude plan reach
     this._hostsDirty = this._hostsDirty || new Set();
+    // a removed/added BEAM cuts columns at its endpoints — mark them dirty
+    if (ent.type === 'beam' && ent.params && ent.params.baseline) {
+      for (const p of ent.params.baseline)
+        for (const c of this.entities)
+          if (c.type === 'column' && c.params && c.params.base
+            && Math.hypot(c.params.base[0] - p[0], c.params.base[1] - p[1]) < 0.75)
+            this._hostsDirty.add(c.id);
+    }
     for (const w of this.entities) {
       if (w.type === 'beam' && w.params && w.params.baseline) {
         const bl = w.params.baseline;
@@ -868,6 +876,51 @@ class BimEntityManager {
       m.endEdgeSweep();
     }
   }
+  // Regenerate a column FROM ITS PARAMS — a deleted/moved beam leaves its
+  // notch behind otherwise (the beam's sweep cut the column's faces; the
+  // column rebuilds whole from base/width/depth/height).
+  rebuildColumnEntity(id) {
+    const ent = this.getEntityById(id);
+    if (!ent || ent.type !== 'column') return false;
+    const m = this.model, app = window.app;
+    const p = ent.params;
+    m.bimHold = true;
+    for (const fid of [...ent.faces]) m.faces.delete(fid);
+    for (const eid of [...ent.edges]) m.edges.delete(eid);
+    m.gc();
+    for (const f2 of m.faces.values()) {
+      m.edgesForRing(f2.loop, true);
+      for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+    }
+    const b = p.base, z = b[2];
+    let made = [];
+    try {
+      made = window.ColumnFeature
+        ? ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height)
+        : [];
+    } catch (e) { m.bimHold = false; return false; }
+    if (!made || !made.length) { m.bimHold = false; return false; }
+    const roles = {};
+    for (const f of made) {
+      const c = m.faceCentroid(f);
+      roles[f.id] = Math.abs(c.z - z) < 1e-6 ? 'bottom'
+        : Math.abs(c.z - (z + p.height)) < 1e-6 ? 'top' : 'side';
+    }
+    ent.faces = made.map(f => f.id);
+    ent.edges = [];
+    for (const fid of ent.faces) {
+      const f = m.faces.get(fid);
+      f.userData = { bimEntityId: id, bimType: 'column', role: roles[fid] };
+      for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+        const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+        if (e) ent.edges.push(e.id);
+      }
+    }
+    ent.edges = [...new Set(ent.edges)];
+    m.bimHold = false;
+    return true;
+  }
+
   // Regenerate a beam FROM ITS PARAMS (element isolation): the sweep re-runs
   // against the CURRENT neighbors — column present trims at its face, column
   // gone runs full length (analytical baseline is untouched in params).
@@ -4304,6 +4357,20 @@ class App {
     const el = document.getElementById('entityinfo');
     const model = this.model;
 
+    // ----- selected grid line(s): always-visible selection state -----
+    if (this.selGridIds && this.selGridIds.size && !this.sel.faces.size && !this.sel.edges.size) {
+      const names = [...this.selGridIds].map(id => {
+        const g = this.gridManager && this.gridManager.getGrid(id);
+        return g ? g.name : id;
+      }).sort();
+      const lv = this.selGridZ != null && this.levelManager.levels.find(l => Math.abs(l.elevation - this.selGridZ) < 1e-6);
+      el.innerHTML = `
+        <div class="ok-badge" style="margin-top:2px">Grid Line${names.length > 1 ? 's' : ''} selected${lv ? ' · ' + lv.name : ''}</div>
+        <div style="margin-top:6px;font-weight:600;font-size:15px;color:#b45309">${names.join(', ')}</div>
+        <div style="color:#6a7178;font-size:12px;margin-top:4px">Drag the line to move it · Del to delete · endpoint grips stretch · click empty space to deselect</div>`;
+      return;
+    }
+
     // ----- downloaded-asset instance(s) selected: asset inspector -----
     if (this.selAssets.size && !this.sel.faces.size && !this.sel.edges.size && this.assets) {
       const recs = [...this.selAssets].map(id => this.assets.get(id)).filter(Boolean);
@@ -4957,6 +5024,7 @@ class App {
         if (!ent) continue;
         if (ent.type === 'wall') this.bim.rebuildWallWithHosts(wid, false);
         else if (ent.type === 'beam') this.bim.rebuildBeamEntity(wid);
+        else if (ent.type === 'column') this.bim.rebuildColumnEntity(wid);
       }
     }
     this.refreshEdgeStamps();
