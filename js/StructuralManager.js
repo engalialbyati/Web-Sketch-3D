@@ -369,6 +369,68 @@
     /** Clear height of a level-bounded infill wall under overhead structure.
      *  Returns { topZ, clearHeight, storyHeight, slabDeduction, beamDeduction,
      *  deductions:[{kind, entId, ...}] } — H = story − t_slab − h_beam_web. */
+    // PLAN TRIMS — the owner's rule: wall ends at the FACE of any column or
+    // beam standing in its path. For each crossing intruder the wall's span
+    // retreats to the intruder's face along the run direction (plus the
+    // 1 mm reveal that keeps faces off shared planes). Returns null when the
+    // baseline crosses nothing (the common case — cheap early-out).
+    wallPlanTrims(wallParams) {
+      const p = wallParams;
+      if (!p.base || !p.end) return null;
+      const ax = p.base[0], ay = p.base[1], bx = p.end[0], by = p.end[1];
+      const dx = bx - ax, dy = by - ay;
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1e-9) return null;
+      const L = Math.sqrt(L2), ux = dx / L, uy = dy / L;
+      const half = p.thickness != null ? p.thickness / 2 + 0.02 : 0.15; // wall half-band + slop
+      const REVEAL = 1e-3;
+      // intruder's plan half-extent ALONG the wall run (support function of
+      // its box, projected on the run direction) and the cross-run reach
+      const trims = [];
+      for (const ent of this.entities) {
+        if (ent.id === p.id) continue;
+        let cx = 0, cy = 0, hw = 0, hd = 0;
+        if (ent.type === 'column' && ent.params && ent.params.base) {
+          cx = ent.params.base[0]; cy = ent.params.base[1];
+          hw = (ent.params.width || 0.3) / 2; hd = (ent.params.depth || 0.3) / 2;
+        } else if (ent.type === 'beam' && ent.params && ent.params.baseline) {
+          const bl = ent.params.baseline;
+          const A2 = bl[0], B2 = bl[bl.length - 1];
+          // only beams CROSSING the wall's band (near-perpendicular or T)
+          const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1];
+          const bL = Math.hypot(bdx, bdy) || 1;
+          const cross = Math.abs(ux * (bdx / bL) + uy * (bdy / bL));
+          if (cross > 0.85) continue; // parallel beams don't block the run
+          cx = (A2[0] + B2[0]) / 2; cy = (A2[1] + B2[1]) / 2;
+          const prof = BeamProfiles.normalize(ent.params);
+          hw = (prof.flangeWidth || prof.webWidth || 0.2) / 2 + (prof.flangeWidth ? 0 : 0);
+          hd = (ent.params.height || 0.5) / 2; // plan depth ~ section height laid on side
+          hd = Math.max(hw, 0.15); // conservative plan footprint for a crossing beam
+        } else continue;
+        // distance from intruder center to the wall baseline (cross-run)
+        const rx = cx - ax, ry = cy - ay;
+        const tAlong = rx * ux + ry * uy;
+        const sCross = Math.abs(-rx * uy + ry * ux);
+        // does the intruder's plan box overlap the wall band?
+        const crossReach = Math.abs(ux) * hw + Math.abs(uy) * hd; // half-extent along run
+        const bandReach = Math.abs(-uy) * hw + Math.abs(ux) * hd; // half-extent across run
+        if (sCross > bandReach + half) continue;      // misses the band
+        if (tAlong < -crossReach || tAlong > L + crossReach) continue; // beyond the span
+        if (tAlong < 0.02 || tAlong > L - 0.02) continue; // at/behind the ends: endcaps handle
+        // the wall must SPLIT around this intruder: record the blocked interval
+        trims.push({ t0: Math.max(0, tAlong - crossReach - REVEAL), t1: Math.min(L, tAlong + crossReach + REVEAL) });
+      }
+      if (!trims.length) return null;
+      trims.sort((x, y) => x.t0 - y.t0);
+      // merge overlapping intervals
+      const merged = [trims[0]];
+      for (const t of trims.slice(1)) {
+        const last = merged[merged.length - 1];
+        if (t.t0 <= last.t1 + 0.01) last.t1 = Math.max(last.t1, t.t1);
+        else merged.push(t);
+      }
+      return { intervals: merged, L };
+    }
     wallClearance(wallParams, opts = {}) {
       const p = wallParams;
       const zBase = p.base ? p.base[2] : this.levelZ(p.baseLevel);

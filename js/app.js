@@ -425,13 +425,28 @@ class BimEntityManager {
     c.x /= n; c.y /= n;
     const R = ent.type === 'column' ? 0.6 : (ent.params.height || 1) + 1; // crude plan reach
     this._hostsDirty = this._hostsDirty || new Set();
-    // a removed/added BEAM cuts columns at its endpoints — mark them dirty
+    // a removed/added BEAM cuts columns at its endpoints — mark them dirty.
+    // A beam CROSSING walls also re-trims those walls (the face rule).
     if (ent.type === 'beam' && ent.params && ent.params.baseline) {
       for (const p of ent.params.baseline)
         for (const c of this.entities)
           if (c.type === 'column' && c.params && c.params.base
             && Math.hypot(c.params.base[0] - p[0], c.params.base[1] - p[1]) < 0.75)
             this._hostsDirty.add(c.id);
+      for (const w of this.entities) {
+        if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
+        // wall midpoint or endpoints near the beam's line = likely crossing
+        const A2 = ent.params.baseline[0], B2 = ent.params.baseline[ent.params.baseline.length - 1];
+        const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1];
+        const bL = Math.hypot(bdx, bdy) || 1;
+        const nb = [-bdy / bL, bdx / bL];
+        const distToBeam = (px, py) => Math.abs((px - A2[0]) * nb[0] + (py - A2[1]) * nb[1]);
+        const wmx = (w.params.base[0] + w.params.end[0]) / 2, wmy = (w.params.base[1] + w.params.end[1]) / 2;
+        if (distToBeam(w.params.base[0], w.params.base[1]) < 1.2
+          || distToBeam(w.params.end[0], w.params.end[1]) < 1.2
+          || distToBeam(wmx, wmy) < 1.2)
+          this._hostsDirty.add(w.id);
+      }
     }
     for (const w of this.entities) {
       if (w.type === 'beam' && w.params && w.params.baseline) {
@@ -441,12 +456,10 @@ class BimEntityManager {
         continue;
       }
       if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
-      // host regeneration is for PARAMETRIC walls only: grid-hosted or
-      // level-constrained. A freeform wall (unconnected, no hostGridId) keeps
-      // its drawn geometry — the physical split already handles the contact,
-      // and a forced rebuild of freeform geometry pops phantom fragments.
-      const constrained = w.params.topConstraint && w.params.topConstraint !== 'unconnected';
-      if (!w.params.hostGridId && !constrained) continue;
+      // every wall reacts to intruders now (the plan-trim rule), but the
+      // REGENERATION differs: parametric walls rebuild whole from params;
+      // freeform walls get a plan-trim rebuild that preserves their drawn
+      // baseline and only shortens the span around the intruder
       // distance point-to-segment from intruder center to wall baseline
       const ax = w.params.base[0], ay = w.params.base[1], bx = w.params.end[0], by = w.params.end[1];
       const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
@@ -882,6 +895,93 @@ class BimEntityManager {
       m.endEdgeSweep();
     }
   }
+  // THE WALL-FACE RULE (dynamic): a wall ends at the FACE of any column or
+  // beam in its path. Rebuild the wall's span around every crossing
+  // intruder — same params (baseline, thickness, height, location line),
+  // shortened span. This is what runs when a column or beam is placed,
+  // moved, or deleted near ANY wall: parametric or freeform.
+  planTrimWall(id) {
+    const ent = this.getEntityById(id);
+    if (!ent || ent.type !== 'wall' || ent.params.closed) return this.rebuildWallWithHosts ? false : false;
+    const p = ent.params;
+    if (!p.base || !p.end) return false;
+    const app = window.app, m = this.model;
+    const trims = app.structural ? app.structural.wallPlanTrims(p) : null;
+    if (!trims || !trims.intervals.length) {
+      // nothing blocks: restore the full span from the recorded baseline
+      return this._rebuildWallSpan(ent, p.base, p.end);
+    }
+    const [ax, ay] = [p.base[0], p.base[1]];
+    const [bx, by] = [p.end[0], p.end[1]];
+    const L = Math.hypot(bx - ax, by - ay) || 1;
+    const ux = (bx - ax) / L, uy = (by - ay) / L;
+    const at = t => [ax + ux * t, ay + uy * t];
+    const iv = trims.intervals;
+    // first free interval from each end; a single intruder -> two stubs
+    let a2 = null, b2 = null;
+    if (iv[0].t0 > 0.05) { a2 = at(0); b2 = at(iv[0].t0); }               // stub before first block
+    else if (iv[iv.length - 1].t1 < L - 0.05) { a2 = at(iv[iv.length - 1].t1); b2 = at(L); } // stub after last block
+    else {
+      // blocked at both ends: keep the middle gap (between two blocks) if any
+      for (let i = 0; i + 1 < iv.length; i++)
+        if (iv[i + 1].t0 - iv[i].t1 > 0.05) { a2 = at(iv[i].t1); b2 = at(iv[i + 1].t0); break; }
+    }
+    if (!a2) { // fully consumed — the wall becomes nothing (intruders own it)
+      m.bimHold = true;
+      for (const fid of [...ent.faces]) m.faces.delete(fid);
+      for (const eid of [...ent.edges]) m.edges.delete(eid);
+      m.gc(); m.bimHold = false;
+      ent.faces = []; ent.edges = [];
+      return true;
+    }
+    return this._rebuildWallSpan(ent, a2, b2);
+  }
+  // rebuild a wall's B-Rep for a (possibly shortened) span, keeping params
+  _rebuildWallSpan(ent, a2, b2) {
+    const app = window.app, m = this.model;
+    const p = ent.params;
+    const z = p.base[2];
+    const params = { ...p, base: [a2[0], a2[1], z], end: [b2[0], b2[1], z],
+      footprint: undefined };
+    delete params.footprint;
+    m.bimHold = true;
+    for (const fid of [...ent.faces]) m.faces.delete(fid);
+    for (const eid of [...ent.edges]) m.edges.delete(eid);
+    m.gc();
+    for (const f2 of m.faces.values()) {
+      m.edgesForRing(f2.loop, true);
+      for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+    }
+    let ok = false;
+    try {
+      const ring = app.bim.wallRing(params);
+      if (ring) {
+        const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+        if (f && m.pushPull(f, p.height || 3)) {
+          const fb = new Set(m.faces.keys());
+          const nf = [...m.faces.keys()].filter(x => !fb.has(x)).map(x => m.faces.get(x)).filter(f2 => f2 && !f2.userData);
+          const roles = {}; for (const f2 of nf) roles[f2.id] = 'exterior';
+          const ne = [];
+          for (const f2 of nf) for (const ring2 of m.rings(f2)) for (let i = 0; i < ring2.length; i++) {
+            const e = m.findEdge(ring2[i], ring2[(i + 1) % ring2.length]);
+            if (e && !e.userData) ne.push(e.id);
+          }
+          for (const [fid2, role] of Object.entries(roles)) {
+            const f2 = m.faces.get(+fid2);
+            if (f2) f2.userData = { bimEntityId: ent.id, bimType: 'wall', role };
+          }
+          ent.faces = Object.keys(roles).map(Number);
+          ent.edges = [...new Set(ne)];
+          ent.params.base = params.base;
+          ent.params.end = params.end;
+          ok = true;
+        }
+      }
+    } catch (e) { /* keep old state */ }
+    m.bimHold = false;
+    return ok;
+  }
+
   // Regenerate a column FROM ITS PARAMS — a deleted/moved beam leaves its
   // notch behind otherwise (the beam's sweep cut the column's faces; the
   // column rebuilds whole from base/width/depth/height).
@@ -5074,7 +5174,7 @@ class App {
         const ent = this.bim.getEntityById(wid);
         if (!ent) continue;
         let ok = true;
-        if (ent.type === 'wall') ok = this.bim.rebuildWallWithHosts(wid, false);
+        if (ent.type === 'wall') ok = this.bim.planTrimWall(wid);
         else if (ent.type === 'beam') ok = this.bim.rebuildBeamEntity(wid);
         else if (ent.type === 'column') ok = this.bim.rebuildColumnEntity(wid);
         if (!ok) failed++;
