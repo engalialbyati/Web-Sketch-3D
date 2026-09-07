@@ -406,7 +406,40 @@ class BimEntityManager {
   }
   // Registers a parametric entity and stamps metadata on its B-Rep.
   // roles: map faceId -> 'top'|'exterior'|'interior'|'start_cap'|'end_cap'|'bottom'
+  // HOST REGENERATION (element isolation): when a structural intruder (column,
+  // beam, foundation) is created or detached, walls whose baseline crosses its
+  // plan footprint are marked dirty. On the next opDone each dirty wall
+  // regenerates FROM ITS PARAMS: the column still inside re-splits it (two
+  // segments around the intruder), the column gone leaves ONE whole wall —
+  // the gap heals. No permanent scars, no orphan lines, each element alone.
+  _markHostsDirty(ent) {
+    if (!ent || !['column', 'beam', 'foundation'].includes(ent.type)) return;
+    const m = this.model;
+    const c = { x: 0, y: 0 };
+    let n = 0;
+    if (ent.params.base) { c.x = ent.params.base[0]; c.y = ent.params.base[1]; n = 1; }
+    else if (ent.params.baseline) {
+      for (const p of ent.params.baseline) { c.x += p[0]; c.y += p[1]; n++; }
+    }
+    if (!n) return;
+    c.x /= n; c.y /= n;
+    const R = ent.type === 'column' ? 0.6 : (ent.params.height || 1) + 1; // crude plan reach
+    this._hostsDirty = this._hostsDirty || new Set();
+    for (const w of this.entities) {
+      if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
+      // distance point-to-segment from intruder center to wall baseline
+      const ax = w.params.base[0], ay = w.params.base[1], bx = w.params.end[0], by = w.params.end[1];
+      const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((c.x - ax) * dx + (c.y - ay) * dy) / L2));
+      if (Math.hypot(c.x - (ax + dx * t), c.y - (ay + dy * t)) < R) this._hostsDirty.add(w.id);
+    }
+  }
   create(type, params, faceRoles, edgeIds = []) {
+    const ent = this._createInner(type, params, faceRoles, edgeIds);
+    if (ent) this._markHostsDirty(ent);
+    return ent;
+  }
+  _createInner(type, params, faceRoles, edgeIds = []) {
     const id = this._nextId(type);
     // new elements land on the CURRENT layer (AutoCAD behavior); legacy
     // entities without a layer resolve back to '0' on load
@@ -1006,6 +1039,8 @@ class BimEntityManager {
   // Disconnect an entity's B-Rep from its parametric definition: the geometry
   // stays as plain B-Rep, the metadata and registry entry go away.
   detach(id) {
+    const ent0 = this.entities.find(e => e.id === id);
+    if (ent0) this._markHostsDirty(ent0);
     const i = this.entities.findIndex(e => e.id === id);
     if (i < 0) return false;
     const ent = this.entities[i];
@@ -4738,6 +4773,15 @@ class App {
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates
+    // element isolation: walls touched by structural intruders regenerate
+    // from their params — column inside => split around it; column gone =>
+    // one whole wall, gap healed
+    if (this.bim && this.bim._hostsDirty && this.bim._hostsDirty.size) {
+      const dirty = [...this.bim._hostsDirty];
+      this.bim._hostsDirty.clear();
+      for (const wid of dirty)
+        if (this.bim.getEntityById(wid)) this.bim.rebuildWallWithHosts(wid, false);
+    }
     this.refreshEdgeStamps();
     this.view.rebuild();
     this.updateInfo();
