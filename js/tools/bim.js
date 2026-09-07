@@ -134,11 +134,16 @@ static gridColumnTrim(G, A, B, colA, colB) {
   };
   const tA = extent(colA), tB = extent(colB);
   if (tA + tB <= 1e-9) return null;
-  const len1 = len0 - tA - tB;
+  // 1 mm REVEAL: the trimmed endpoints pull 1 mm BACK from the column faces.
+  // Landing exactly ON the face puts two coplanar planes in kissing contact —
+  // the split cascade hits coincident geometry and degenerate rounds grind
+  // the app to a freeze (same reason buildBeam and the slabs carry a reveal).
+  const REVEAL = 1e-3;
+  const len1 = len0 - tA - tB - 2 * REVEAL;
   if (len1 <= 0.05) return { tooShort: true, len0, len1, tA, tB };
   return {
-    a2: G.add(A, G.mul(dir, tA)),
-    b2: G.sub(B, G.mul(dir, tB)),
+    a2: G.add(A, G.mul(dir, tA + REVEAL)),
+    b2: G.sub(B, G.mul(dir, tB + REVEAL)),
     len0, len1, tA, tB,
   };
 }

@@ -7,7 +7,7 @@
 // intersections, so a wall drawn on one grid line between two carrying
 // intersections runs FACE TO FACE with the columns —
 //   wall length = grid distance − column/2 − column/2
-// (3 m between grids with 0.4 x 0.4 columns at both ends -> 2.6 m).
+// (3 m between grids with 0.4 x 0.4 columns at both ends -> 2.598 m: face-to-face minus a 2 mm reveal that keeps the wall off the column planes).
 // ---------------------------------------------------------------------------
 module.exports = h => {
   const fs = require('node:fs');
@@ -31,21 +31,21 @@ module.exports = h => {
   const col = (x, y, w, d, ref) => ({ type: 'column', params: { base: [x, y, 0], width: w, depth: d, gridRef: ref || null } });
 
   // --------------------------------............................. pure trim
-  test('gridColumnTrim: 3 m between two centered 0.4 x 0.4 columns -> 2.6 m face-to-face', () => {
+  test('gridColumnTrim: 3 m between two centered 0.4 x 0.4 columns -> 2.598 m face-to-face (2 mm reveal)', () => {
     const tr = WallTool.gridColumnTrim(G, G.v(0, 0, 0), G.v(3, 0, 0), col(0, 0, 0.4, 0.4), col(3, 0, 0.4, 0.4));
     ok(tr && !tr.tooShort, 'trim applies');
     near(tr.len0, 3, 1e-9, 'grid distance');
-    near(tr.len1, 3 - 0.2 - 0.2, 1e-9, 'wall length 3 - 0.2 - 0.2 (half extents)');
-    near(tr.a2.x, 0.2, 1e-9, 'start at the first column face');
-    near(tr.b2.x, 2.8, 1e-9, 'end at the second column face');
+    near(tr.len1, 3 - 0.2 - 0.2 - 0.002, 1e-9, 'wall length = spans minus faces minus 2 mm reveal');
+    near(tr.a2.x, 0.201, 1e-9, 'start 1 mm off the first column face (reveal)');
+    near(tr.b2.x, 2.799, 1e-9, 'end 1 mm off the second column face (reveal)');
     near(tr.a2.y, 0, 1e-9); near(tr.b2.y, 0, 1e-9);
   });
 
   test('gridColumnTrim: one column only -> half the deduction', () => {
     const tr = WallTool.gridColumnTrim(G, G.v(0, 0, 0), G.v(3, 0, 0), col(0, 0, 0.4, 0.4), null);
-    near(tr.len1, 2.8, 1e-9);
-    near(tr.a2.x, 0.2, 1e-9);
-    near(tr.b2.x, 3, 1e-9, 'unblocked end stays on the intersection');
+    near(tr.len1, 2.798, 1e-9);
+    near(tr.a2.x, 0.201, 1e-9);
+    near(tr.b2.x, 2.999, 1e-9, 'unblocked end 1 mm off the intersection (reveal)');
   });
 
   test('gridColumnTrim: rectangular column retreats by half its extent along the wall', () => {
@@ -87,9 +87,9 @@ module.exports = h => {
     const tr = WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]);
     ok(tr, 'trim found the columns');
     eq(tr.grid.name, '1', 'host grid identified');
-    near(tr.len1, 2.6, 1e-9, '3 - 0.2 - 0.2');
-    near(tr.a2.y, 0.2, 1e-9);
-    near(tr.b2.y, 2.8, 1e-9);
+    near(tr.len1, 2.598, 1e-9, '3 - 0.2 - 0.2');
+    near(tr.a2.y, 0.201, 1e-9);
+    near(tr.b2.y, 2.799, 1e-9);
   });
 
   test('gridTrimFor: columns found by position when gridRef is missing', () => {
@@ -97,7 +97,7 @@ module.exports = h => {
     const ents = [col(0, 0, 0.4, 0.4), col(0, 3, 0.4, 0.4)]; // no gridRef
     const tr = WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]);
     ok(tr, 'positional lookup works');
-    near(tr.len1, 2.6, 1e-9);
+    near(tr.len1, 2.598, 1e-9);
   });
 
   test('gridTrimFor: no columns -> null (plain grid wall, no trim)', () => {
