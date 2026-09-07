@@ -1386,6 +1386,21 @@ class App {
     this._syncLevelViewControl(); // Level View options track the level list
     this._saveAutosave();
   }
+  // STANDING JUNCTION RE-DERIVATION (element isolation): every element's
+  // connections are DERIVED state, never placement-time history. Rebuilding
+  // each element from its params re-runs the trim against CURRENT neighbors:
+  // a beam end meeting a column lands on its face — whichever was drawn
+  // first. Runs on load (undo/redo/file open) so pre-fix models self-heal.
+  rederiveJunctions() {
+    if (!this.bim) return 0;
+    let n = 0;
+    for (const ent of [...this.bim.entities]) {
+      if (ent.type === 'beam' && this.bim.rebuildBeamEntity(ent.id)) n++;
+    }
+    if (n) { this.view.rebuild(); this.updateInfo(); }
+    return n;
+  }
+
   // GridSystem sync: viewport reference lines + intersection cache + db mirror.
   onGridsChanged() {
     this.gridManager._hydrate();
@@ -3003,6 +3018,7 @@ class App {
           if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
           this.onLevelsChanged(); // datum view layers follow the loaded model
           this.onGridsChanged();
+          this.rederiveJunctions(); // junctions re-derived against loaded neighbors
           this.view.zoomExtents();
           this.updateInfo();
           this.syncElementsToDb(); // the database mirrors the loaded model
@@ -4881,6 +4897,7 @@ class App {
         // (grids "disappeared" until a level edit nudged them back)
         this.onLevelsChanged();
         this.onGridsChanged();
+        this.rederiveJunctions(); // pre-fix geometry self-heals on open
         this.view.zoomExtents();
         this.updateInfo();
         this.toast('Restored autosaved model — File ▸ New for a fresh start');
