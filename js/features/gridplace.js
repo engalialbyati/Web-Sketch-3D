@@ -289,6 +289,15 @@
       const r = this.app.view.canvas.getBoundingClientRect();
       return { x: sp.x + r.left, y: sp.y + r.top };
     }
+    // Every level's plane the grids cover renders its own dashed copy — the
+    // user clicks the copy they SEE (usually the nearest), so hit-testing
+    // only the working level's elevation missed by the projection offset.
+    // Pick against every covered level; draws stay at the working level.
+    _pickZs() {
+      const lv = this.app.levelManager.levels || [];
+      const zs = [...new Set(lv.map(l => +(+l.elevation).toFixed(6)))].sort((a, b) => a - b);
+      return zs.length ? zs : [this._z()];
+    }
     _hoverAt(ev) {
       const view = this.app.view;
       const s = this.state || {};
@@ -309,21 +318,26 @@
         for (const g of gm.grids) {
           const c = g.closestPoint(w);
           if (!c || !c.p) continue;
-          const sp0 = view.toScreen(G.v(c.p[0], c.p[1], this._z()));
-          if (!sp0 || sp0.behind) continue;
-          const sp = this._clientPt(sp0);
-          const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
-          if (d < bestD) { bestD = d; best = { line: g }; }
+          for (const z of this._pickZs()) {
+            if (!g.covers(z)) continue;
+            const sp0 = view.toScreen(G.v(c.p[0], c.p[1], z));
+            if (!sp0 || sp0.behind) continue;
+            const sp = this._clientPt(sp0);
+            const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
+            if (d < bestD) { bestD = d; best = { line: g }; }
+          }
         }
         return best;
       }
       let best = null, bestD = 14;
       for (const ix of this._ixs()) {
-        const sp0 = view.toScreen(G.v(ix.p[0], ix.p[1], this._z()));
-        if (!sp0 || sp0.behind) continue;
-        const sp = this._clientPt(sp0);
-        const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
-        if (d < bestD) { bestD = d; best = { ix }; }
+        for (const z of this._pickZs()) {
+          const sp0 = view.toScreen(G.v(ix.p[0], ix.p[1], z));
+          if (!sp0 || sp0.behind) continue;
+          const sp = this._clientPt(sp0);
+          const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
+          if (d < bestD) { bestD = d; best = { ix }; }
+        }
       }
       return best;
     }
