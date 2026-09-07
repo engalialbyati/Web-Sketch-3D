@@ -69,14 +69,41 @@
       const pts = [];
       for (const h of gm.grids) {
         if (h === g || (h.system || 'Main') !== (g.system || 'Main')) continue;
+        // INFINITE-LINE crossing for straight pairs: a bay is defined by grid
+        // POSITIONS, not by the extents someone last dragged the crossing
+        // grid to — segX respects drawn extents, so a crossing grid that was
+        // stretched short made the selected line collapse to ONE long span
+        if (!g.isCurved && !h.isCurved) {
+          const x = GridLine.segX([g.start[0], g.start[1]], [g.end[0], g.end[1]],
+            [h.start[0], h.start[1]], [h.end[0], h.end[1]]);
+          // segX is segment-bounded; recompute unbounded for straight lines
+          if (x) { pts.push(x); continue; }
+          const d1 = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
+          const d2 = [h.end[0] - h.start[0], h.end[1] - h.start[1]];
+          const den = d1[0] * d2[1] - d1[1] * d2[0];
+          if (Math.abs(den) > 1e-12) { // not parallel: the lines cross somewhere
+            const t = ((h.start[0] - g.start[0]) * d2[1] - (h.start[1] - g.start[1]) * d2[0]) / den;
+            pts.push([g.start[0] + d1[0] * t, g.start[1] + d1[1] * t]);
+          }
+          continue;
+        }
         const x = GridLine.intersect(g, h);
         if (x) pts.push(x);
       }
       const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
       pts.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1])
         - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
-      const out = []; // dedupe near-coincident crossings
+      // crossings must lie ON the selected line's drawn extent (infinite
+      // crossing grids, bounded selected line) and dedupe near-coincidents.
+      // t is the projection PARAMETER: dot(p-s, d)/|d|^2 in [0,1] — dividing
+      // by |d| once made every crossing past one meter of start fall outside
+      // the (wrong) [0,1] bound and bays collapsed to nothing.
+      const d0 = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
+      const L02 = d0[0] * d0[0] + d0[1] * d0[1] || 1;
+      const out = [];
       for (const p of pts) {
+        const t = ((p[0] - g.start[0]) * d0[0] + (p[1] - g.start[1]) * d0[1]) / L02;
+        if (t < -0.01 || t > 1.01) continue;
         if (out.length && Math.hypot(p[0] - out[out.length - 1][0], p[1] - out[out.length - 1][1]) < 0.05) continue;
         out.push(p);
       }
