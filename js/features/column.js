@@ -142,6 +142,7 @@
         // (with the column as a pending intruder) — the sweep then travels
         // between the pieces instead of slicing wall material
         app.bim.preSplitWallsForColumn(params);
+        app.bim.preSplitBeamsForColumn(params);
         m.bimHold = true; // punching a slab at the top level keeps its entity
         try {
           const st = app.structural.buildColumn(G, m, params);

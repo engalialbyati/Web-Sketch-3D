@@ -450,9 +450,14 @@ class BimEntityManager {
     }
     for (const w of this.entities) {
       if (w.type === 'beam' && w.params && w.params.baseline) {
+        // segment proximity, not endpoint-only: a column in the beam's
+        // MID-RUN splits it (the element rule) — mark it dirty too
         const bl = w.params.baseline;
-        for (const p of bl)
-          if (Math.hypot(p[0] - c.x, p[1] - c.y) < 0.75) { this._hostsDirty.add(w.id); break; }
+        const A2 = bl[0], B2 = bl[bl.length - 1];
+        const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1], bL2 = bdx * bdx + bdy * bdy || 1;
+        const t = Math.max(0, Math.min(1, ((c.x - A2[0]) * bdx + (c.y - A2[1]) * bdy) / bL2));
+        if (Math.hypot(c.x - (A2[0] + bdx * t), c.y - (A2[1] + bdy * t)) < 1.0)
+          this._hostsDirty.add(w.id);
         continue;
       }
       if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
@@ -923,6 +928,263 @@ class BimEntityManager {
   // sweep — the sweep then travels between the pieces instead of slicing
   // through wall material (the asymmetric slice is what tore the split
   // cascade: 'adding a column to a wall' froze the app).
+  // PRE-SPLIT beams for a column about to land: every beam whose run the
+  // column rises through splits at its faces BEFORE the column's sweep —
+  // the same never-cut-through-material contract as walls.
+  preSplitBeamsForColumn(colParams) {
+    if (!window.app || !window.app.structural || !colParams.base) return 0;
+    let n = 0;
+    const c = colParams.base;
+    const reach = Math.max(colParams.width || 0.3, colParams.depth || 0.3) + 0.6;
+    for (const b of [...this.entities]) {
+      if (b.type !== 'beam' || !b.params || !b.params.baseline) continue;
+      const bl = b.params.baseline;
+      const A2 = bl[0], B2 = bl[bl.length - 1];
+      const bdx = B2[0] - A2[0], bdy = B2[1] - A2[1], bL2 = bdx * bdx + bdy * bdy || 1;
+      const t = Math.max(0, Math.min(1, ((c[0] - A2[0]) * bdx + (c[1] - A2[1]) * bdy) / bL2));
+      if (Math.hypot(c[0] - (A2[0] + bdx * t), c[1] - (A2[1] + bdy * t)) > reach) continue;
+      if (this.planTrimBeam(b.id, { pending: [{ type: 'column', params: colParams }] })) n++;
+    }
+    return n;
+  }
+  // BEAM-FACE RULE (element mirror of the wall rule): a column rising
+  // through a beam's depth splits it into independent BEAM elements — each
+  // selectable, editable, deletable alone — sharing a merge group. Piece
+  // baselines run CENTER-TO-CENTER (to the splitter's center) so buildBeam
+  // lands their ends on the column faces exactly like hand-drawn framing
+  // beams. No mid-run columns: a single piece rebuilds (the end-trim heal).
+  planTrimBeam(id) {
+    const ent = this.getEntityById(id);
+    if (!ent || ent.type !== 'beam') return false;
+    const p = ent.params;
+    if (!p.baseline || p.baseline.length < 2) return false;
+    const app = window.app || {};
+    const eipEnt = app._eip && app._eip.ent;
+    if (eipEnt === ent) return true;
+    const m = this.model;
+    const pending = (arguments[1] && arguments[1].pending) || null;
+    const trims = app.structural ? app.structural.beamPlanTrims(p, pending) : null;
+    if (!trims) {
+      if (p.merge) return this._deriveGroupSpansBeam(ent);
+      return this.rebuildBeamEntity(id); // no mid-run column: end-trim heal
+    }
+    const bl = p.baseline;
+    const A = bl[0], B = bl[bl.length - 1];
+    const L = Math.hypot(B[0] - A[0], B[1] - A[1]) || 1;
+    const ux = (B[0] - A[0]) / L, uy = (B[1] - A[1]) / L;
+    // spans run center-to-center: each blocked interval contributes its
+    // splitter center as the adjacent pieces' baseline endpoint
+    const spans = [];
+    let cur = 0;
+    for (const iv of trims.intervals) {
+      if (iv.tc - cur > 0.05) spans.push([cur, iv.tc]);
+      cur = iv.tc;
+    }
+    if (L - cur > 0.05) spans.push([cur, L]);
+    if (!spans.length) {
+      m.beginEdgeSweep();
+      const held = m.bimHold;
+      try {
+        m.bimHold = true;
+        for (const fid of [...ent.faces]) m.faces.delete(fid);
+        this._wipeEdges(ent.edges);
+        m.gc();
+        m.reapOrphanEdges();
+        ent.faces = []; ent.edges = [];
+        m.bimHold = held;
+      } finally { m.endEdgeSweep(); m.bimHold = held; }
+      return true;
+    }
+    return this._splitBeamToSpans(ent, spans, { A, ux, uy, L, pending });
+  }
+  // split a beam's span into independent beam pieces (see planTrimWall's
+  // _splitWallToSpans for the full contract — this is its beam mirror)
+  _splitBeamToSpans(ent, spans, g) {
+    const m = this.model;
+    const p = ent.params;
+    const z = g.A[2];
+    const at = t => [g.A[0] + g.ux * t, g.A[1] + g.uy * t, z];
+    const prev = p.merge || null;
+    const orig = prev
+      ? { group: prev.group, a: prev.a, b: prev.b }
+      : { group: ent.id, a: [g.A[0], g.A[1], z], b: [at(g.L)[0], at(g.L)[1], z] };
+    const slots = spans.map(([t0, t1]) => [t0, t1]);
+    m.beginEdgeSweep();
+    const held = m.bimHold;
+    let ok = true;
+    try {
+      m.bimHold = true;
+      for (const fid of [...ent.faces]) m.faces.delete(fid);
+      this._wipeEdges(ent.edges);
+      m.gc();
+      m.reapOrphanEdges(); // corpses poison the next split cascade
+      for (const f2 of m.faces.values()) {
+        m.edgesForRing(f2.loop, true);
+        for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+      }
+      ent.faces = []; ent.edges = [];
+      m.bimHold = held;
+      for (let s = 0; s < spans.length; s++) {
+        const [t0, t1] = spans[s];
+        const A2 = at(t0), B2 = at(t1);
+        let target;
+        if (s === 0) {
+          p.baseline = [[A2[0], A2[1], z], [B2[0], B2[1], z]];
+          p.merge = { group: orig.group, a: orig.a, b: orig.b, slots };
+          target = ent;
+        } else {
+          target = this._createInner('beam', { ...p,
+            baseline: [[A2[0], A2[1], z], [B2[0], B2[1], z]],
+            merge: { group: orig.group, a: orig.a, b: orig.b, slots } }, {}, []);
+        }
+        if (!this._extrudeBeamSpan(target, A2, B2, g.pending)) ok = false;
+      }
+    } finally { m.endEdgeSweep(); m.bimHold = held; }
+    return ok;
+  }
+  // extrude ONE beam piece from its center-to-center baseline — buildBeam
+  // lands the ends on the column faces (pending columns count while the
+  // splitter is still being placed)
+  _extrudeBeamSpan(piece, A2, B2, pending) {
+    const m = this.model;
+    const app = window.app || {};
+    const p = piece.params;
+    const before = new Set(m.faces.keys());
+    const held = m.bimHold;
+    m.bimHold = true;
+    try {
+      app.structural.buildBeam(G, m, { ...p,
+        baseline: [[A2[0], A2[1], A2[2]], [B2[0], B2[1], B2[2]]] }, pending);
+      const nf = [...m.faces.keys()].filter(x => !before.has(x)).map(x => m.faces.get(x)).filter(f2 => f2 && !f2.userData);
+      const ne = [];
+      for (const f2 of nf) {
+        f2.userData = { bimEntityId: piece.id, bimType: 'beam', role: 'body' };
+        for (const r of m.rings(f2)) for (let i = 0; i < r.length; i++) {
+          const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+          if (e) { if (!e.userData) e.userData = { bimEntityId: piece.id, bimType: 'beam', role: 'profile' }; ne.push(e.id); }
+        }
+      }
+      if (!nf.length) return false;
+      piece.faces = piece.faces.concat(nf.map(f2 => f2.id));
+      piece.edges = [...new Set(piece.edges.concat(ne))];
+    } finally { m.bimHold = held; }
+    return true;
+  }
+  // HEAL / REUNITE beams — the wall group-derivation mirror: expand into
+  // freed ground (bounded by sibling slots — deleted territory never
+  // resurrects), merge pieces whose targets meet, drop edited members.
+  _deriveGroupSpansBeam(ent) {
+    const app = window.app || {};
+    const m = this.model;
+    const p = ent.params;
+    const mg = p.merge;
+    const heldD = m.bimHold;
+    if (!mg || !mg.a || !mg.b) { delete p.merge; return true; }
+    const oa = mg.a, ob = mg.b;
+    const L0 = Math.hypot(ob[0] - oa[0], ob[1] - oa[1]) || 1;
+    const ux = (ob[0] - oa[0]) / L0, uy = (ob[1] - oa[1]) / L0;
+    const tOf = q => (q[0] - oa[0]) * ux + (q[1] - oa[1]) * uy;
+    const offRun = q => Math.abs(-(q[0] - oa[0]) * uy + (q[1] - oa[1]) * ux) >= 1e-4;
+    const sectOf = q => [q.profile || 'rectangular', q.webWidth, q.flangeWidth, q.height,
+      q.referenceLevelId != null ? q.referenceLevelId : q.baseLevel, q.zJustification, q.zOffset];
+    const inSlot = (t0, t1) => (mg.slots || []).some(s =>
+      Math.abs(t0 - s[0]) < 1e-6 && Math.abs(t1 - s[1]) < 1e-6);
+    const members = [];
+    for (const e of [...this.entities]) {
+      if (e.type !== 'beam' || !e.params || !e.params.merge || e.params.merge.group !== mg.group) continue;
+      const q = e.params;
+      if (!q.baseline || q.baseline.length < 2) continue;
+      if (JSON.stringify(sectOf(q)) !== JSON.stringify(sectOf(p))
+        || offRun(q.baseline[0]) || offRun(q.baseline[q.baseline.length - 1])
+        || !inSlot(tOf(q.baseline[0]), tOf(q.baseline[q.baseline.length - 1]))) { delete q.merge; continue; }
+      members.push(e);
+    }
+    if (!members.length) return true;
+    const trims = app.structural ? app.structural.beamPlanTrims({ ...p, baseline: [[oa[0], oa[1], oa[2]], [ob[0], ob[1], ob[2]]] }) : null;
+    const free = [];
+    let cur = 0;
+    for (const iv of (trims ? trims.intervals : [])) {
+      if (iv.tc - cur > 0.05) free.push([cur, iv.tc]);
+      cur = iv.tc;
+    }
+    if (L0 - cur > 0.05) free.push([cur, L0]);
+    const slots = (mg.slots || []).map(s => [s[0], s[1]]);
+    const rows = members.map(e => {
+      const bl = e.params.baseline;
+      const t0 = tOf(bl[0]), t1 = tOf(bl[bl.length - 1]);
+      let lo = 0, hi = L0;
+      for (const s of slots) {
+        if (t0 >= s[0] - 1e-4 && t1 <= s[1] + 1e-4) continue;
+        if (s[1] <= t0 + 1e-4) lo = Math.max(lo, s[1]);
+        if (s[0] >= t1 - 1e-4) hi = Math.min(hi, s[0]);
+      }
+      return { e, t0, t1, lo, hi };
+    }).sort((a, b) => a.t0 - b.t0);
+    for (let i = 0; i < rows.length; i++)
+      for (let j = 0; j < rows.length; j++) {
+        if (i === j) continue;
+        if (rows[j].t0 >= rows[i].t1 - 1e-4) rows[i].hi = Math.min(rows[i].hi, rows[j].t0);
+        if (rows[j].t1 <= rows[i].t0 + 1e-4) rows[i].lo = Math.max(rows[i].lo, rows[j].t1);
+      }
+    for (const r of rows) {
+      let a = r.t0, b = r.t1, fi = -1;
+      for (let k = 0; k < free.length; k++) {
+        const f = free[k];
+        if (f[0] <= r.t0 + 1e-4 && f[1] >= r.t1 - 1e-4) { a = Math.max(f[0], r.lo); b = Math.min(f[1], r.hi); fi = k; break; }
+      }
+      if (b - a < (r.t1 - r.t0) - 1e-9) { a = r.t0; b = r.t1; }
+      r.a = a; r.b = b; r.fi = fi;
+    }
+    // MERGE only within the SAME free interval: beam pieces share the
+    // splitter's center as a baseline endpoint by construction, so merely
+    // touching targets does NOT mean the blocker left (for walls it does —
+    // their pieces are always separated by the intruder's footprint).
+    // Same free interval = the ground between them opened up.
+    const groups = [];
+    for (const r of rows) {
+      const last = groups[groups.length - 1];
+      if (last && r.fi === last.fi && r.fi >= 0 && r.a <= last.b + 1e-4) {
+        last.b = Math.max(last.b, r.b); last.members.push(r.e); last.rows.push(r);
+      } else groups.push({ a: r.a, b: r.b, members: [r.e], rows: [r], fi: r.fi });
+    }
+    if (groups.length === rows.length && groups.every((gr, i) => gr.members[0] === rows[i].e
+      && Math.abs(gr.a - rows[i].t0) < 1e-6 && Math.abs(gr.b - rows[i].t1) < 1e-6)) return true;
+    m.beginEdgeSweep();
+    let ok = true;
+    try {
+      const A2 = t => [oa[0] + ux * t, oa[1] + uy * t, oa[2]];
+      const slotIdxOf = r => (mg.slots || []).findIndex(s =>
+        Math.abs(r.t0 - s[0]) < 1e-6 && Math.abs(r.t1 - s[1]) < 1e-6);
+      const used = new Set();
+      for (const gr of groups) for (const r of gr.rows) used.add(slotIdxOf(r));
+      const keptDead = (mg.slots || []).filter((s, i) => !used.has(i));
+      const newSlots = groups.map(gr => [gr.a, gr.b]).concat(keptDead).sort((a, b) => a[0] - b[0]);
+      m.bimHold = true;
+      const allMembers = groups.flatMap(gr => gr.members);
+      for (const e of allMembers) {
+        for (const fid of [...e.faces]) m.faces.delete(fid);
+        this._wipeEdges(e.edges);
+      }
+      m.gc();
+      m.reapOrphanEdges(); // corpses poison the next split cascade
+      for (const f2 of m.faces.values()) {
+        m.edgesForRing(f2.loop, true);
+        for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+      }
+      for (const e of allMembers) { e.faces = []; e.edges = []; }
+      m.bimHold = heldD;
+      for (const gr of groups) {
+        const survivor = gr.members[0];
+        for (const e of gr.members) if (e !== survivor) this.detach(e.id);
+        const whole = groups.length === 1 && gr.a <= 1e-6 && gr.b >= L0 - 1e-6;
+        survivor.params.baseline = [[A2(gr.a)[0], A2(gr.a)[1], oa[2]], [A2(gr.b)[0], A2(gr.b)[1], oa[2]]];
+        if (whole) delete survivor.params.merge;
+        else survivor.params.merge = { group: mg.group, a: oa, b: ob, slots: newSlots };
+        if (!this._extrudeBeamSpan(survivor, A2(gr.a), A2(gr.b))) ok = false;
+      }
+    } finally { m.endEdgeSweep(); m.bimHold = heldD; }
+    return ok;
+  }
   preSplitWallsForBeam(beamParams) {
     if (!window.app || !window.app.structural || !beamParams.baseline) return 0;
     let n = 0;
@@ -2041,6 +2303,11 @@ class App {
     for (const ent of this.bim.entities) {
       if (ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end || ent.params.closed) continue;
       if (this.structural && this.structural.wallPlanTrims(ent.params)) this.bim.planTrimWall(ent.id);
+    }
+    // beams re-derive their mid-run splits the same way
+    for (const ent of this.bim.entities) {
+      if (ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+      if (this.structural && this.structural.beamPlanTrims(ent.params)) this.bim.planTrimBeam(ent.id);
     }
     this.view.rebuild(); this.updateInfo();
     const v = this.model.validate();
@@ -5566,7 +5833,7 @@ class App {
         if (!ent) continue;
         let ok = true;
         if (ent.type === 'wall') ok = this.bim.planTrimWall(wid);
-        else if (ent.type === 'beam') ok = this.bim.rebuildBeamEntity(wid);
+        else if (ent.type === 'beam') ok = this.bim.planTrimBeam(wid);
         else if (ent.type === 'column') ok = this.bim.rebuildColumnEntity(wid);
         if (!ok) failed++;
       }

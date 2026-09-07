@@ -465,6 +465,57 @@
       }
       return { intervals: merged, L };
     }
+    // BEAM-RUN TRIMS — the element rule mirrored for beams: a column
+    // RISING THROUGH a beam's depth splits it into two beams that end at
+    // its faces. Columns merely standing on the beam (touching planes)
+    // don't — the beam continues over its support. End columns are NOT
+    // recorded: buildBeam's framing trim already lands beam ends on column
+    // faces. Each blocked interval carries tc, the splitter's center
+    // parameter — piece baselines run center-to-center and buildBeam does
+    // the face trim, exactly like every hand-drawn framing beam.
+    beamPlanTrims(beamParams, pending) {
+      const p = beamParams;
+      const bl = p.baseline;
+      if (!bl || bl.length < 2) return null;
+      const A = bl[0], B = bl[bl.length - 1];
+      const dx = B[0] - A[0], dy = B[1] - A[1];
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1e-9) return null;
+      const L = Math.sqrt(L2), ux = dx / L, uy = dy / L;
+      const prof = BeamProfiles.normalize(p);
+      const halfB = (prof.flangeWidth || prof.webWidth || 0.2) / 2 + 0.02;
+      const bb = this.beamBounds(p);
+      const bz0 = bb.zBottom, bz1 = bb.zBottom + (bb.height || 0.5);
+      const REVEAL = 1e-3;
+      const trims = [];
+      const pool = (pending && pending.length ? pending.map(x => ({ ...x, id: '__pending__' + Math.random() })) : []).concat([...this.entities]);
+      for (const ent of pool) {
+        if (ent.id === p.id) continue;
+        if (ent.type !== 'column' || !ent.params || !ent.params.base) continue;
+        const cx = ent.params.base[0], cy = ent.params.base[1];
+        const hw = (ent.params.width || 0.3) / 2, hd = (ent.params.depth || 0.3) / 2;
+        const cz0 = ent.params.base[2], cz1 = cz0 + (ent.params.height || 3);
+        if (Math.min(bz1, cz1) - Math.max(bz0, cz0) <= 1e-3) continue; // strict overlap only
+        const rx = cx - A[0], ry = cy - A[1];
+        const tAlong = rx * ux + ry * uy;
+        const sCross = Math.abs(-rx * uy + ry * ux);
+        const crossReach = Math.abs(ux) * hw + Math.abs(uy) * hd;
+        const bandReach = Math.abs(-uy) * hw + Math.abs(ux) * hd;
+        if (sCross > bandReach + halfB) continue;      // misses the beam band
+        if (tAlong < 0.03 || tAlong > L - 0.03) continue; // end: framing trim owns it
+        trims.push({ t0: Math.max(0, tAlong - crossReach - REVEAL),
+          t1: Math.min(L, tAlong + crossReach + REVEAL), tc: tAlong });
+      }
+      if (!trims.length) return null;
+      trims.sort((x, y) => x.t0 - y.t0);
+      const merged = [trims[0]];
+      for (const t of trims.slice(1)) {
+        const last = merged[merged.length - 1];
+        if (t.t0 <= last.t1 + 0.01) { last.t1 = Math.max(last.t1, t.t1); last.tc = (last.tc + t.tc) / 2; }
+        else merged.push(t);
+      }
+      return { intervals: merged, L };
+    }
     wallClearance(wallParams, opts = {}) {
       const p = wallParams;
       const zBase = p.base ? p.base[2] : this.levelZ(p.baseLevel);
@@ -534,7 +585,7 @@
      *  start (vertical plane) pushed along the baseline through the B-Rep
      *  kernel, so the solid welds into adjacent columns / walls / slabs.
      *  Returns the created face ids. */
-    buildBeam(G, model, p) {
+    buildBeam(G, model, p, pending) {
       const A0 = p.baseline[0], B0 = p.baseline[p.baseline.length - 1];
       const d = G.norm(G.v(B0[0] - A0[0], B0[1] - A0[1], 0));
       if (G.isZero(d)) throw new Error('beam baseline is degenerate');
@@ -560,8 +611,10 @@
       const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
       const colReach = (px, py) => {
         let best = 0;
-        if (!model.bimEntities) return 0;
-        for (const e of model.bimEntities) {
+        const pool = model.bimEntities ? [...model.bimEntities] : [];
+        if (pending && pending.length) for (const x of pending)
+          if (x.type === 'column') pool.push({ type: 'column', params: x.params });
+        for (const e of pool) {
           if (e.type !== 'column' || !e.params || !e.params.base) continue;
           const c = e.params.base;
           if (Math.hypot(c[0] - px, c[1] - py) > 0.75) continue;
