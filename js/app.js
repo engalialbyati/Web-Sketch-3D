@@ -262,7 +262,8 @@ class Transaction {
     A.undoStack.push(this.snapshot);
     if (A.undoStack.length > Transaction.MAX_UNDO) A.undoStack.shift();
     A.redoStack.length = 0;
-    if (A.model && A.model.endEdgeSweep) A.model.endEdgeSweep(); // reap residue born in this tx
+    if (A.model && A.model.endEdgeSweep)
+      while (A.model._sweepStack && A.model._sweepStack.length) A.model.endEdgeSweep(); // drain: an interrupted NESTED bracket must not shield residue
     if (A.validateOnCommit) {
       const v = A.model.validate();
       if (!v.ok) console.error(`[${this.label}] model invalid after commit:`, v.errors);
@@ -274,7 +275,8 @@ class Transaction {
     this.finished = true;
     this.rolledBack = true;
     this.app.model.load(this.snapshot);
-    if (this.app.model.endEdgeSweep) this.app.model.endEdgeSweep();
+    if (this.app.model.endEdgeSweep)
+      while (this.app.model._sweepStack && this.app.model._sweepStack.length) this.app.model.endEdgeSweep();
     this.app.opDone();
   }
 }
