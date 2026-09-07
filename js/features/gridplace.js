@@ -60,6 +60,28 @@
     }
 
     // ------------------------------------------------------------- targets
+    // Crossing points along a grid line with EVERY same-system grid —
+    // regardless of hidden state. Placement segmentation defines BAYS, and a
+    // bay exists even when its bounding grid is hidden (per-level eye) —
+    // using the snap cache here fused whole lines into single long elements.
+    _lineBays(g) {
+      const gm = this.app.gridManager;
+      const pts = [];
+      for (const h of gm.grids) {
+        if (h === g || (h.system || 'Main') !== (g.system || 'Main')) continue;
+        const x = GridLine.intersect(g, h);
+        if (x) pts.push(x);
+      }
+      const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
+      pts.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1])
+        - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
+      const out = []; // dedupe near-coincident crossings
+      for (const p of pts) {
+        if (out.length && Math.hypot(p[0] - out[out.length - 1][0], p[1] - out[out.length - 1][1]) < 0.05) continue;
+        out.push(p);
+      }
+      return out;
+    }
     _ixs() {
       const gm = this.app.gridManager;
       return gm ? gm.intersections() : [];
@@ -410,7 +432,7 @@
         for (const id of this.selLine) {
           const g = this.app.gridManager.getGrid(id);
           if (!g) continue;
-          for (const ix of this._ixs()) if (ix.a === g || ix.b === g) pts.push(ix.p);
+          for (const p of this._lineBays(g)) pts.push(p);
         }
       } else {
         for (const k of this.selIx) {
@@ -438,7 +460,7 @@
         if (!lines.length) { app.toast('Nothing selected'); return; }
         const segs = [];
         for (const g of lines) {
-          const pts2 = this._ixs().filter(ix => ix.a === g || ix.b === g).map(ix => ix.p);
+          const pts2 = this._lineBays(g);
           const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
           const L = Math.hypot(d[0], d[1]) || 1;
           pts2.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
@@ -606,7 +628,7 @@
         // consecutive-intersection segments per line, inset at column joints
         const segs = [];
         for (const g of lines) {
-          const pts2 = this._ixs().filter(ix => ix.a === g || ix.b === g).map(ix => ix.p);
+          const pts2 = this._lineBays(g);
           const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
           const L = Math.hypot(d[0], d[1]) || 1;
           pts2.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
