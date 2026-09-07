@@ -521,7 +521,11 @@ class Viewport {
         const pts = poly.map(p => new THREE.Vector3(p[0], p[1], z));
         const geo = new THREE.BufferGeometry().setFromPoints(pts);
         const line = new THREE.Line(geo, new THREE.LineDashedMaterial({
-          color: sel ? 0xf59e0b : 0x64748b, dashSize: 0.5, gapSize: 0.25,
+          // selected: strong yellow, BOLD — long dashes read as a thick
+          // solid stroke at distance; unselected stays the fine datum dash
+          color: sel ? 0xffd400 : 0x64748b,
+          dashSize: sel ? 2.0 : 0.5, gapSize: sel ? 0.12 : 0.25,
+          linewidth: 3,
           transparent: true, opacity: sel ? 1.0 : 0.85, fog: false,
           depthTest: false, // datums read THROUGH geometry — a wall drawn on
           // its grid never hides the line (it must stay visible to select)
@@ -529,6 +533,19 @@ class Viewport {
         line.computeLineDistances(); // dashed materials need the arc lengths
         line.renderOrder = 6;
         this.gridsGroup.add(line);
+        if (sel) {
+          // bold stroke: an offset second dashed pass (dash phase shifted by
+          // half a dash) fills the gaps of the first — together they read as
+          // one thick continuous line
+          const off = pts.map((q, i) => new THREE.Vector3(q.x, q.y, q.z + (i === 0 ? 0 : 0)));
+          const core = new THREE.Line(geo.clone(), new THREE.LineDashedMaterial({
+            color: 0xffd400, dashSize: 0.12, gapSize: 2.0, // inverse phase
+            transparent: true, opacity: 1.0, fog: false, depthTest: false,
+          }));
+          core.computeLineDistances();
+          core.renderOrder = 7;
+          this.gridsGroup.add(core);
+        }
       }
       // bubbles at the requested end(s), just past the endpoint, on the
       // lowest covered level — same plane the drag grips live on
@@ -563,10 +580,10 @@ class Viewport {
     cv.width = 128; cv.height = 128;
     const cx = cv.getContext('2d');
     cx.beginPath(); cx.arc(64, 64, 56, 0, Math.PI * 2);
-    cx.lineWidth = 6; cx.strokeStyle = color ? '#f59e0b' : '#64748b'; cx.stroke();
-    cx.fillStyle = color ? 'rgba(253,230,138,0.95)' : 'rgba(226,232,240,0.85)'; cx.fill();
+    cx.lineWidth = color ? 10 : 6; cx.strokeStyle = color ? '#e6a800' : '#64748b'; cx.stroke();
+    cx.fillStyle = color ? 'rgba(255,236,150,1)' : 'rgba(226,232,240,0.85)'; cx.fill();
     cx.font = '700 52px Segoe UI, sans-serif';
-    cx.fillStyle = color ? '#7c4a03' : '#334155';
+    cx.fillStyle = color ? '#5c3d00' : '#334155';
     cx.textAlign = 'center'; cx.textBaseline = 'middle';
     cx.fillText(String(name).slice(0, 3), 64, 68);
     const tex = new THREE.CanvasTexture(cv);
