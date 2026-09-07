@@ -1032,16 +1032,30 @@ class Viewport {
       if (!eid) return true;
       return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
     };
+    // MESH hits only: the per-element edge LineSegments are raycastable with
+    // a generous line threshold — a far element's edge line would 'catch' the
+    // click before the intended face (selecting a distant column under the
+    // cursor's beam). Face meshes carry the triangle map; lines do not.
     const hits = this.raycaster.intersectObjects(
-      this.elementsRoot.children.filter(pickable), true);
+      this.elementsRoot.children.filter(pickable), true)
+      .filter(h => h.object.userData && h.object.userData.triangleFace);
     if (!hits.length) return null;
+    // coincident hits: prefer the SMALLEST face (the beam under the slab, not
+    // the slab) — same rule as pickFaceAt
+    const d0 = hits[0].distance;
+    let best = null, bestArea = Infinity;
     for (const h of hits) {
-      const eid = h.object.userData && h.object.userData.elementId;
-      if (!eid) continue;
+      if (h.distance - d0 > 1e-4) break;
+      const eid = h.object.userData.elementId;
       const map = h.object.userData.triangleFace;
-      return { entityId: eid, faceId: map ? map[h.faceIndex] : null };
+      const fid = map ? map[h.faceIndex] : null;
+      if (fid == null) continue;
+      const f = this.app.model.faces.get(fid);
+      if (!f) continue;
+      const area = this.app.model.faceArea(f);
+      if (area < bestArea) { bestArea = area; best = { entityId: eid, faceId: fid }; }
     }
-    return null;
+    return best;
   }
   pickFaceAt(s) {
     if (!this.faceMesh.visible) return null;

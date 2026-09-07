@@ -148,8 +148,15 @@ class SelectTool extends Tool {
     // Drawing, the app's "edit modes"). Shift toggles it into the selection.
     if (this.app.mode === 'bim') {
       const pe = this.app.pickEntity(ev);
-      if (pe && pe.entity) {
-        this.app.selectElement(pe.entity, ev.shiftKey ? 'toggle' : 'replace');
+      let eid = pe && pe.entity;
+      if (!eid && pe && pe.face != null) {
+        // geometry outside any Group (split fragments, stale claims) still
+        // resolves through its stamp — no dead zones on an element's body
+        const f = this.app.model.faces.get(pe.face);
+        eid = f && f.userData && f.userData.bimEntityId;
+      }
+      if (eid) {
+        this.app.selectElement(eid, ev.shiftKey ? 'toggle' : 'replace');
         return;
       }
     }
