@@ -303,6 +303,7 @@
     if (cmd === 'gltf' || cmd === 'export') { app.action('exportGltf'); return; }
     if (cmd === 'free') { app.setMode('free'); app.setTool('select'); return; }
     if (cmd === 'bim' || cmd === 'precise') { app.setMode('bim'); app.setTool('select'); return; }
+    if (cmd === 'rebuild') { app.rebuildFromParams(); return; }
     if (cmd === 'sched' || cmd === 'schedules') {
       if (window.SchedulesUI) SchedulesUI.open();
       return;

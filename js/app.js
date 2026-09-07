@@ -440,6 +440,34 @@ class BimEntityManager {
       if (Math.hypot(c.x - (ax + dx * t), c.y - (ay + dy * t)) < R) this._hostsDirty.add(w.id);
     }
   }
+  // SPLIT-PIECE ADOPTION — the drift invariant. Splits replace face ids;
+  // stamp propagation carries ownership to the pieces, but nothing reliably
+  // added the new ids to the owner's list — unlisted fragments survived
+  // every regeneration as corpses (651 in the stress model). After every
+  // commit, each entity's lists must COVER every live-stamped face/edge.
+  syncEntityLists() {
+    const byId = new Map(this.entities.map(e => [e.id, e]));
+    const fsets = new Map(this.entities.map(e => [e.id, new Set(e.faces)]));
+    const esets = new Map(this.entities.map(e => [e.id, new Set(e.edges)]));
+    let nf = 0, ne = 0;
+    for (const [fid, f] of this.model.faces) {
+      const uid = f.userData && f.userData.bimEntityId;
+      if (!uid || !byId.has(uid)) continue;
+      const set = fsets.get(uid);
+      if (!set.has(fid)) { set.add(fid); nf++; }
+    }
+    for (const [eid, e] of this.model.edges) {
+      const uid = e.userData && e.userData.bimEntityId;
+      if (!uid || !byId.has(uid)) continue;
+      const set = esets.get(uid);
+      if (!set.has(eid)) { set.add(eid); ne++; }
+    }
+    if (nf || ne) for (const [id, ent] of byId) {
+      ent.faces = [...fsets.get(id)];
+      ent.edges = [...esets.get(id)];
+    }
+    return { faces: nf, edges: ne };
+  }
   create(type, params, faceRoles, edgeIds = []) {
     const ent = this._createInner(type, params, faceRoles, edgeIds);
     if (ent) this._markHostsDirty(ent);
@@ -1386,6 +1414,78 @@ class App {
     this._syncLevelViewControl(); // Level View options track the level list
     this._saveAutosave();
   }
+  // REBUILD FROM PARAMETERS — params are the model, the B-Rep is cache.
+  // Wipes all geometry and regenerates every entity against its CURRENT
+  // neighbors (foundation -> column -> wall -> slab -> beam). Repairs any
+  // history: corpses, stale trims, orphan lines, ring drift.
+  rebuildFromParams() {
+    const defs = this.bim.entities.map(e => ({ id: e.id, type: e.type, params: JSON.parse(JSON.stringify(e.params || {})) }));
+    const skipped = [];
+    let counts = {};
+    this.run('rebuild from parameters', mm => {
+      mm.bimHold = true;
+      try {
+        mm.faces.clear(); mm.edges.clear(); mm.vertices.clear(); mm.curves.clear();
+        for (const e of this.bim.entities) { e.faces = []; e.edges = []; }
+        const adopt = (ent, rolesOf) => {
+          const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
+          const roles = {}; for (const f of nf) roles[f.id] = rolesOf(f, ent);
+          const ne = [];
+          for (const f of nf) for (const ring of mm.rings(f)) for (let i = 0; i < ring.length; i++) {
+            const e2 = mm.findEdge(ring[i], ring[(i + 1) % ring.length]);
+            if (e2 && !e2.userData) ne.push(e2.id);
+          }
+          for (const [fid, role] of Object.entries(roles)) {
+            const f = mm.faces.get(+fid);
+            if (f) f.userData = { bimEntityId: ent.id, bimType: ent.type, role };
+          }
+          ent.faces = Object.keys(roles).map(Number);
+          ent.edges = [...new Set(ne)];
+          for (const eid of ent.edges) {
+            const e2 = mm.edges.get(eid);
+            if (e2 && !e2.userData) e2.userData = { bimEntityId: ent.id, bimType: ent.type, role: 'profile' };
+          }
+        };
+        for (const d of defs) {
+          const ent = this.bim.getEntityById(d.id);
+          if (!ent) continue;
+          try {
+            if (d.type === 'foundation') {
+              this.structural.buildFooting(G, mm, d.params);
+              adopt(ent, (f) => { const c = mm.faceCentroid(f);
+                return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
+            } else if (d.type === 'column') {
+              const b = d.params.base;
+              ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height);
+              adopt(ent, (f) => { const c = mm.faceCentroid(f);
+                return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
+            } else if (d.type === 'wall' && d.params.base && d.params.end) {
+              const ring = this.bim.wallRing(d.params);
+              const f = mm.addFaceFromRings(ring.map(q => G.clone(q)));
+              if (f && mm.pushPull(f, d.params.height || 3)) adopt(ent, () => 'exterior');
+            } else if (d.type === 'slab' && d.params.regions) {
+              for (const r of d.params.regions) {
+                const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
+                if (f) mm.pushPull(f, -(d.params.thickness || 0.2));
+              }
+              adopt(ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; });
+            } else if (d.type === 'beam') {
+              this.structural.buildBeam(G, mm, d.params);
+              adopt(ent, () => 'body');
+            } else { skipped.push(d.type); continue; }
+            counts[d.type] = (counts[d.type] || 0) + 1;
+          } catch (e) { /* one bad element never kills the repair */ }
+        }
+      } finally { mm.bimHold = false; }
+    });
+    this.view.rebuild(); this.updateInfo();
+    const v = this.model.validate();
+    this.toast(`Rebuilt from parameters: ${Object.entries(counts).map(([k, n]) => n + ' ' + k + 's').join(', ')}` +
+      (skipped.length ? ` (skipped ${skipped.length} unsupported)` : '') +
+      (v.ok ? ' — model valid' : ' — validate still flags issues', !v.ok));
+    return { counts, skipped, valid: v.ok };
+  }
+
   // STANDING JUNCTION RE-DERIVATION (element isolation): every element's
   // connections are DERIVED state, never placement-time history. Rebuilding
   // each element from its params re-runs the trim against CURRENT neighbors:
@@ -2742,6 +2842,7 @@ class App {
         ['Edit In Place…', 'editInPlace', ''],
         ['Levels…', 'levels', ''],
         ['Grids…', 'grids', ''],
+        ['Rebuild from Parameters', 'rebuildParams', ''],
         ['Hide Selected', 'hideSelected', ''], ['Unhide All', 'unhideAll', ''],
       ]],
       ['View', [
@@ -2851,6 +2952,7 @@ class App {
       levels: () => A.levelsDialog(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
+      rebuildParams: () => A.rebuildFromParams(),
       selectAll: () => {
         A.sel = { edges: new Set([...A.model.edges.keys()]), faces: new Set([...A.model.faces.keys()]) };
         A.onSelectionChanged();
@@ -4843,6 +4945,7 @@ class App {
       this.model.edgesForRing(f.loop, true);
       for (const h of (f.holes || [])) this.model.edgesForRing(h, true);
     }
+    this.bim.syncEntityLists(); // drift invariant: lists cover all stamped pieces
     // element isolation: walls touched by structural intruders regenerate
     // from their params — column inside => split around it; column gone =>
     // one whole wall, gap healed
@@ -4898,6 +5001,12 @@ class App {
         this.onLevelsChanged();
         this.onGridsChanged();
         this.rederiveJunctions(); // pre-fix geometry self-heals on open
+        // self-healing files: a model that still fails validate after
+        // re-derivation is rebuilt wholesale from its parameters
+        if (!this.model.validate().ok) {
+          this.rebuildFromParams();
+          this.toast('Model had invalid geometry — rebuilt from parameters');
+        }
         this.view.zoomExtents();
         this.updateInfo();
         this.toast('Restored autosaved model — File ▸ New for a fresh start');
