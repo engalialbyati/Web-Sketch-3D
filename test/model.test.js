@@ -714,10 +714,20 @@ module.exports = h => {
     const r = w.rect([[1, 0, 0.4], [3, 0, 0.4], [3, 0, 2.1], [1, 0, 2.1]]);
     m.punchOrSplit(r); m.pushPull(r, -0.6);
     const data = JSON.parse(JSON.stringify(m.serialize()));
+    // load() reaps residue: face-less edges that are neither deliberate
+    // (drawn lines) nor curve-owned count toward the expected edge total
+    const ringUsed = new Set();
+    for (const [, f] of m.faces) for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+      const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+      if (e) ringUsed.add(e.id);
+    }
+    let liveEdges = 0;
+    for (const [id, e] of m.edges)
+      if (ringUsed.has(id) || e.curveId || (e.userData && e.userData.deliberate)) liveEdges++;
     const m2 = new Model();
     m2.load(data);
     eq(m2.faces.size, m.faces.size, 'same face count');
-    eq(m2.edges.size, m.edges.size, 'same edge count');
+    eq(m2.edges.size, liveEdges, 'same edge count (residue reaped on load)');
     eq(m2.vertices.size, m.vertices.size, 'same vertex count');
     near(m2.shellVolume([...m2.faces.keys()]), w.vol(), 1e-6, 'same volume');
     const v = m2.validate();

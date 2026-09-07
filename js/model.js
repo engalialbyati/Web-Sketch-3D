@@ -322,6 +322,11 @@ class Model {
   }
   // Open or closed polyline; curveMeta groups segments into an arc/circle entity.
   addPolyline(pts, curveMeta = null) {
+    const r = this._addPolylineInner(pts, curveMeta);
+    if (r && r.edges) for (const e of r.edges) if (e && !e.userData) e.userData = { deliberate: 1 };
+    return r;
+  }
+  _addPolylineInner(pts, curveMeta = null) {
     if (!pts || pts.length < 2) return null;
     let cid = 0;
     if (curveMeta) { cid = curveMeta.id = nid(); this.curves.set(cid, curveMeta); }
@@ -928,7 +933,7 @@ class Model {
     for (const id of [...this.edges.keys()]) {
       if (snap.has(id)) continue;
       const e = this.edges.get(id);
-      if (e && !(e.userData && e.userData.deliberate)
+      if (e && !e.curveId && !(e.userData && e.userData.deliberate)
         && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
     }
     this.gc();
@@ -937,7 +942,7 @@ class Model {
   reapOrphanEdges() {
     let n = 0;
     for (const [id, e] of [...this.edges]) {
-      if (e.userData && (e.userData.deliberate || e.userData.bimEntityId)) continue;
+      if (e.curveId || (e.userData && (e.userData.deliberate || e.userData.bimEntityId))) continue; // curves/arcs are legal standalone geometry
       if (this.facesAdjacentToEdge(e).length === 0) { this._delEdge(id); n++; }
     }
     if (n) this.gc();
@@ -2942,6 +2947,11 @@ class Model {
     for (const k of this.faces.keys()) mx = Math.max(mx, k);
     for (const k of this.curves.keys()) mx = Math.max(mx, k);
     for (const k of this.groups.keys()) mx = Math.max(mx, k);
+    // a wholesale swap invalidates every sweep-bracket snapshot (ids changed
+    // worlds) — drop the brackets and reap the incoming state once so undo/
+    // redo / file-open can never resurrect or import residue
+    this._sweepStack = [];
+    this.reapOrphanEdges();
     this.levels = (data.lvl || this.levels || []).map(l => ({ ...l }));
     // grid records stay raw here; GridManager._hydrate() validates them into
     // GridLine instances (schema gate) on the next access after load/undo
