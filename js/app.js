@@ -441,6 +441,12 @@ class BimEntityManager {
         continue;
       }
       if (w.type !== 'wall' || !w.params || !w.params.base || !w.params.end) continue;
+      // host regeneration is for PARAMETRIC walls only: grid-hosted or
+      // level-constrained. A freeform wall (unconnected, no hostGridId) keeps
+      // its drawn geometry — the physical split already handles the contact,
+      // and a forced rebuild of freeform geometry pops phantom fragments.
+      const constrained = w.params.topConstraint && w.params.topConstraint !== 'unconnected';
+      if (!w.params.hostGridId && !constrained) continue;
       // distance point-to-segment from intruder center to wall baseline
       const ax = w.params.base[0], ay = w.params.base[1], bx = w.params.end[0], by = w.params.end[1];
       const dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy || 1;
