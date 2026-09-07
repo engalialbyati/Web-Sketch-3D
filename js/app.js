@@ -1486,11 +1486,27 @@ class App {
     const defs = this.bim.entities.map(e => ({ id: e.id, type: e.type, params: JSON.parse(JSON.stringify(e.params || {})) }));
     const skipped = [];
     let counts = {};
+    // rebuildable types — everything else (stairs, scripts, hosted openings,
+    // assets) KEEPS its geometry: never wipe what you cannot restore
+    const CAN = { foundation: 1, column: 1, wall: 1, slab: 1, floor: 1, beam: 1, roof: 1 };
     this.run('rebuild from parameters', mm => {
       mm.bimHold = true;
       try {
-        mm.faces.clear(); mm.edges.clear(); mm.vertices.clear(); mm.curves.clear();
-        for (const e of this.bim.entities) { e.faces = []; e.edges = []; }
+        const keepFaces = new Set(), keepEdges = new Set();
+        for (const e of this.bim.entities) {
+          if (CAN[e.type]) continue;
+          for (const fid of e.faces) keepFaces.add(fid);
+          for (const eid of e.edges) keepEdges.add(eid);
+        }
+        for (const [fid, f] of [...mm.faces]) if (!keepFaces.has(fid)) mm.faces.delete(fid);
+        for (const [eid, e2] of [...mm.edges]) if (!keepEdges.has(eid)) mm.edges.delete(eid);
+        mm.gc();
+        // recreate ring edges survivors may share with the wiped set
+        for (const f of mm.faces.values()) {
+          mm.edgesForRing(f.loop, true);
+          for (const h of (f.holes || [])) mm.edgesForRing(h, true);
+        }
+        for (const e of this.bim.entities) if (CAN[e.type]) { e.faces = []; e.edges = []; }
         const adopt = (ent, rolesOf) => {
           const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
           const roles = {}; for (const f of nf) roles[f.id] = rolesOf(f, ent);
@@ -1527,12 +1543,22 @@ class App {
               const ring = this.bim.wallRing(d.params);
               const f = mm.addFaceFromRings(ring.map(q => G.clone(q)));
               if (f && mm.pushPull(f, d.params.height || 3)) adopt(ent, () => 'exterior');
-            } else if (d.type === 'slab' && d.params.regions) {
+            } else if ((d.type === 'slab' || d.type === 'floor') && d.params.regions) {
               for (const r of d.params.regions) {
                 const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
                 if (f) mm.pushPull(f, -(d.params.thickness || 0.2));
               }
               adopt(ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; });
+            } else if (d.type === 'roof' && window.RoofFeature && d.params.regions) {
+              for (const r of d.params.regions) {
+                const zr = (r.outer[0] && r.outer[0][2] != null) ? r.outer[0][2]
+                  : this.levelManager.getElevation(d.params.baseLevel);
+                RoofFeature.buildRegion(G, mm, {
+                  kind: d.params.kind || 'flat', thickness: d.params.thickness || 0.2,
+                  pitch: d.params.pitch || 15, overhang: d.params.overhang || 0,
+                  region: r, z: zr });
+              }
+              adopt(ent, () => 'body');
             } else if (d.type === 'beam') {
               this.structural.buildBeam(G, mm, d.params);
               adopt(ent, () => 'body');
