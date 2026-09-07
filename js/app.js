@@ -498,6 +498,15 @@ class BimEntityManager {
   create(type, params, faceRoles, edgeIds = []) {
     const ent = this._createInner(type, params, faceRoles, edgeIds);
     if (ent) this._markHostsDirty(ent);
+    // a NEW wall must respect the face rule from birth: drawn through a
+    // standing column/beam, opDone plan-trims it immediately (a wall
+    // already grid-trimmed to an intruder's face kisses at 1 mm — under
+    // the bite gate this is a no-op)
+    if (ent && ent.type === 'wall' && ent.params && ent.params.base
+      && ent.params.end && !ent.params.closed) {
+      this._hostsDirty = this._hostsDirty || new Set();
+      this._hostsDirty.add(ent.id);
+    }
     return ent;
   }
   _createInner(type, params, faceRoles, edgeIds = []) {
@@ -882,6 +891,12 @@ class BimEntityManager {
       m.bimHold = false;
       const ok = this._rebuildWallCore(id, hosted);
       if (ok) this.ensureWallBottom(ent); // joins strip caps — restore
+      // the face rule survives every rebuild path — a wall edited onto a
+      // standing column's line re-trims on the spot (cheap null early-out
+      // when nothing blocks it)
+      if (ok && ent.params && ent.params.base && ent.params.end && !ent.params.closed
+        && window.app && window.app.structural && window.app.structural.wallPlanTrims(ent.params))
+        this.planTrimWall(id);
       // one hop: refresh the joined neighbors so the caps follow this edit
       if (ok && chainJoins && ent.params.joins) {
         for (const side of ['start', 'end']) {
@@ -902,84 +917,113 @@ class BimEntityManager {
   // moved, or deleted near ANY wall: parametric or freeform.
   planTrimWall(id) {
     const ent = this.getEntityById(id);
-    if (!ent || ent.type !== 'wall' || ent.params.closed) return this.rebuildWallWithHosts ? false : false;
+    if (!ent || ent.type !== 'wall' || ent.params.closed) return false;
     const p = ent.params;
     if (!p.base || !p.end) return false;
-    const app = window.app, m = this.model;
+    const app = window.app || {};
+    const eipEnt = app._eip && app._eip.ent;
+    if (eipEnt === ent) return true; // Edit In Place owns the geometry
+    const m = this.model;
+    const ax = p.base[0], ay = p.base[1];
+    const L = Math.hypot(p.end[0] - ax, p.end[1] - ay) || 1;
+    const ux = (p.end[0] - ax) / L, uy = (p.end[1] - ay) / L;
     const trims = app.structural ? app.structural.wallPlanTrims(p) : null;
-    if (!trims || !trims.intervals.length) {
-      // nothing blocks: restore the full span from the recorded baseline
-      return this._rebuildWallSpan(ent, p.base, p.end);
+    // free spans = the complement of the blocked intervals on [0, L]. A
+    // mid-run intruder leaves TWO spans (the split); end intruders bite
+    // their end back; stubs under 5 cm retire — the intruder owns that
+    // ground. No intruder at all = one full span (the heal).
+    const spans = [];
+    let cur = 0;
+    for (const iv of (trims ? trims.intervals : [])) {
+      if (iv.t0 - cur > 0.05) spans.push([cur, iv.t0]);
+      cur = Math.max(cur, iv.t1);
     }
-    const [ax, ay] = [p.base[0], p.base[1]];
-    const [bx, by] = [p.end[0], p.end[1]];
-    const L = Math.hypot(bx - ax, by - ay) || 1;
-    const ux = (bx - ax) / L, uy = (by - ay) / L;
-    const at = t => [ax + ux * t, ay + uy * t];
-    const iv = trims.intervals;
-    // first free interval from each end; a single intruder -> two stubs
-    let a2 = null, b2 = null;
-    if (iv[0].t0 > 0.05) { a2 = at(0); b2 = at(iv[0].t0); }               // stub before first block
-    else if (iv[iv.length - 1].t1 < L - 0.05) { a2 = at(iv[iv.length - 1].t1); b2 = at(L); } // stub after last block
-    else {
-      // blocked at both ends: keep the middle gap (between two blocks) if any
-      for (let i = 0; i + 1 < iv.length; i++)
-        if (iv[i + 1].t0 - iv[i].t1 > 0.05) { a2 = at(iv[i].t1); b2 = at(iv[i + 1].t0); break; }
-    }
-    if (!a2) { // fully consumed — the wall becomes nothing (intruders own it)
+    if (L - cur > 0.05) spans.push([cur, L]);
+    // PARAMS ARE TRUTH: base/end keep the full drawn span forever — only
+    // the B-Rep cache is rebuilt here, so deleting the intruder heals the
+    // wall back to whole (no shortened params to un-shorten)
+    m.beginEdgeSweep();
+    let ok = true;
+    try {
       m.bimHold = true;
+      const hosted = this.entities.filter(e => e.params && e.params.hostWallId === ent.id);
+      for (const h of hosted) for (const fid of [...h.faces]) m.faces.delete(fid);
       for (const fid of [...ent.faces]) m.faces.delete(fid);
       for (const eid of [...ent.edges]) m.edges.delete(eid);
-      m.gc(); m.bimHold = false;
+      m.gc();
+      for (const f2 of m.faces.values()) {
+        m.edgesForRing(f2.loop, true);
+        for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+      }
       ent.faces = []; ent.edges = [];
-      return true;
-    }
-    return this._rebuildWallSpan(ent, a2, b2);
-  }
-  // rebuild a wall's B-Rep for a (possibly shortened) span, keeping params
-  _rebuildWallSpan(ent, a2, b2) {
-    const app = window.app, m = this.model;
-    const p = ent.params;
-    const z = p.base[2];
-    const params = { ...p, base: [a2[0], a2[1], z], end: [b2[0], b2[1], z],
-      footprint: undefined };
-    delete params.footprint;
-    m.bimHold = true;
-    for (const fid of [...ent.faces]) m.faces.delete(fid);
-    for (const eid of [...ent.edges]) m.edges.delete(eid);
-    m.gc();
-    for (const f2 of m.faces.values()) {
-      m.edgesForRing(f2.loop, true);
-      for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
-    }
-    let ok = false;
-    try {
-      const ring = app.bim.wallRing(params);
-      if (ring) {
-        const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
-        if (f && m.pushPull(f, p.height || 3)) {
-          const fb = new Set(m.faces.keys());
-          const nf = [...m.faces.keys()].filter(x => !fb.has(x)).map(x => m.faces.get(x)).filter(f2 => f2 && !f2.userData);
-          const roles = {}; for (const f2 of nf) roles[f2.id] = 'exterior';
-          const ne = [];
-          for (const f2 of nf) for (const ring2 of m.rings(f2)) for (let i = 0; i < ring2.length; i++) {
-            const e = m.findEdge(ring2[i], ring2[(i + 1) % ring2.length]);
-            if (e && !e.userData) ne.push(e.id);
-          }
-          for (const [fid2, role] of Object.entries(roles)) {
-            const f2 = m.faces.get(+fid2);
-            if (f2) f2.userData = { bimEntityId: ent.id, bimType: 'wall', role };
-          }
-          ent.faces = Object.keys(roles).map(Number);
-          ent.edges = [...new Set(ne)];
-          ent.params.base = params.base;
-          ent.params.end = params.end;
-          ok = true;
+      m.bimHold = false;
+      for (const [t0, t1] of spans)
+        if (!this._extrudeWallSpan(ent, [ax + ux * t0, ay + uy * t0, p.base[2]],
+          [ax + ux * t1, ay + uy * t1, p.base[2]], t0 <= 1e-6, t1 >= L - 1e-6)) ok = false;
+      // hosted openings re-cut from their params — distanceFromStart rides
+      // the ORIGINAL baseline so the world position survives any trim; a
+      // wall fully consumed by intruders takes its doors with it
+      for (const h of hosted) {
+        if (!spans.length) { this.detach(h.id); if (this.db) this.db.deleteElement(h.id).catch(() => { }); continue; }
+        const spec = { distanceFromStart: h.params.distanceFromStart, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
+        const info = window.BimTools.HostedCut.cut(G, m, p, spec);
+        if (info.error) { this.detach(h.id); if (this.db) this.db.deleteElement(h.id).catch(() => { }); continue; }
+        const hb = new Set(m.faces.keys());
+        const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
+        h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
+        for (const fid of h.faces) {
+          const face = m.faces.get(fid);
+          const isLeaf = h.type === 'door' && faces.length && fid === faces[faces.length - 1].id;
+          face.userData = { bimEntityId: h.id, bimType: h.type, role: faces.some(x => x.id === fid) ? (isLeaf ? 'leaf' : 'frame') : 'lining' };
         }
       }
-    } catch (e) { /* keep old state */ }
-    m.bimHold = false;
+      if (this.assets) this.assets.recutHosted(id, m);
+    } finally {
+      m.endEdgeSweep();
+    }
     return ok;
+  }
+  // extrude ONE (possibly shortened) span of a wall and stamp it for the
+  // entity. Miter/butt joins survive only on ends coinciding with the
+  // wall's ORIGINAL ends; an end retreating to an intruder face gets a
+  // clean square cap. ent.faces/edges ACCUMULATE across spans — the split
+  // wall stays ONE element with N bodies (delete the column, it merges).
+  _extrudeWallSpan(ent, A, B, atStart, atEnd) {
+    const m = this.model;
+    const p = ent.params;
+    const z = p.base[2];
+    const joins = p.joins || {};
+    const jp = { ...p, base: [A[0], A[1], z], end: [B[0], B[1], z],
+      joins: { start: atStart ? joins.start : undefined, end: atEnd ? joins.end : undefined } };
+    delete jp.footprint; delete jp.closed;
+    let ring;
+    try { ring = this.wallRing(jp); } catch (e) { return false; }
+    if (!ring || ring.length < 3 || G.ringDegenerate(ring)) return false;
+    const before = new Set(m.faces.keys());
+    m.bimHold = true;
+    try {
+      const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+      if (!f) return false;
+      if (!m.pushPull(f, p.height || 3)) return false;
+      const nf = [...m.faces.keys()].filter(x => !before.has(x)).map(x => m.faces.get(x)).filter(f2 => f2 && !f2.userData);
+      const h = p.height || 3;
+      const roles = WallTool.classifyRoles(G, m, nf,
+        [G.v(A[0], A[1], z), G.v(B[0], B[1], z)], false, z, z + h);
+      const ne = [];
+      for (const f2 of nf) {
+        f2.userData = { bimEntityId: ent.id, bimType: 'wall', role: roles[f2.id] || 'exterior' };
+        for (const r of m.rings(f2)) for (let i = 0; i < r.length; i++) {
+          const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+          if (e) {
+            if (!e.userData) e.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'profile' };
+            ne.push(e.id);
+          }
+        }
+      }
+      ent.faces = ent.faces.concat(nf.map(f2 => f2.id));
+      ent.edges = [...new Set(ent.edges.concat(ne))];
+    } finally { m.bimHold = false; }
+    return true;
   }
 
   // Regenerate a column FROM ITS PARAMS — a deleted/moved beam leaves its
@@ -1674,6 +1718,14 @@ class App {
         }
       } finally { mm.bimHold = false; }
     });
+    // the wall-face rule survives parametric rebuilds: the wall branch
+    // above extrudes the FULL span — any wall whose path crosses a standing
+    // column/beam re-trims to its face right here, or 'Rebuild from
+    // Parameters' would quietly undo the rule
+    for (const ent of this.bim.entities) {
+      if (ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end || ent.params.closed) continue;
+      if (this.structural && this.structural.wallPlanTrims(ent.params)) this.bim.planTrimWall(ent.id);
+    }
     this.view.rebuild(); this.updateInfo();
     const v = this.model.validate();
     this.toast(`Rebuilt from parameters: ${Object.entries(counts).map(([k, n]) => n + ' ' + k + 's').join(', ')}` +
@@ -1692,6 +1744,13 @@ class App {
     let n = 0;
     for (const ent of [...this.bim.entities]) {
       if (ent.type === 'beam' && this.bim.rebuildBeamEntity(ent.id)) n++;
+    }
+    // walls re-derive the FACE rule the same way (after beams — a wall ends
+    // at a beam's face too): legacy models drawn through columns self-heal
+    // their split on open, and undo/redo re-lands every trim
+    for (const ent of [...this.bim.entities]) {
+      if (ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end || ent.params.closed) continue;
+      if (this.structural && this.structural.wallPlanTrims(ent.params) && this.bim.planTrimWall(ent.id)) n++;
     }
     if (n) { this.view.rebuild(); this.updateInfo(); }
     return n;

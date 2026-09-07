@@ -389,10 +389,11 @@
       const trims = [];
       for (const ent of this.entities) {
         if (ent.id === p.id) continue;
-        let cx = 0, cy = 0, hw = 0, hd = 0;
+        let cx = 0, cy = 0, hw = 0, hd = 0, z0 = 0, z1 = 0;
         if (ent.type === 'column' && ent.params && ent.params.base) {
           cx = ent.params.base[0]; cy = ent.params.base[1];
           hw = (ent.params.width || 0.3) / 2; hd = (ent.params.depth || 0.3) / 2;
+          z0 = ent.params.base[2]; z1 = z0 + (ent.params.height || 3);
         } else if (ent.type === 'beam' && ent.params && ent.params.baseline) {
           const bl = ent.params.baseline;
           const A2 = bl[0], B2 = bl[bl.length - 1];
@@ -406,7 +407,14 @@
           hw = (prof.flangeWidth || prof.webWidth || 0.2) / 2 + (prof.flangeWidth ? 0 : 0);
           hd = (ent.params.height || 0.5) / 2; // plan depth ~ section height laid on side
           hd = Math.max(hw, 0.15); // conservative plan footprint for a crossing beam
+          const bb = this.beamBounds(ent.params);
+          z0 = bb.zBottom; z1 = bb.zBottom + (bb.height || 0.5);
         } else continue;
+        // LEVEL GATE: the intruder must share vertical extent with the
+        // wall — plan x/y alone can't tell this floor's column from the
+        // one directly above it, and every level's wall would be eaten
+        const wz0 = p.base[2], wz1 = wz0 + (p.height || 3);
+        if (z1 <= wz0 + 1e-3 || z0 >= wz1 - 1e-3) continue;
         // distance from intruder center to the wall baseline (cross-run)
         const rx = cx - ax, ry = cy - ay;
         const tAlong = rx * ux + ry * uy;
@@ -415,10 +423,16 @@
         const crossReach = Math.abs(ux) * hw + Math.abs(uy) * hd; // half-extent along run
         const bandReach = Math.abs(-uy) * hw + Math.abs(ux) * hd; // half-extent across run
         if (sCross > bandReach + half) continue;      // misses the band
-        if (tAlong < -crossReach || tAlong > L + crossReach) continue; // beyond the span
-        if (tAlong < 0.02 || tAlong > L - 0.02) continue; // at/behind the ends: endcaps handle
+        // the blocked interval, CLAMPED to the span: an intruder at (or
+        // past) an end bites that end back to its face — the rule covers
+        // end columns too, not just mid-run ones. A net bite under 5 mm
+        // is a face-kiss (a wall already trimmed to this intruder's
+        // face at the 1 mm reveal) — leave it be
+        const t0 = Math.max(0, tAlong - crossReach - REVEAL);
+        const t1 = Math.min(L, tAlong + crossReach + REVEAL);
+        if (t1 - t0 < 0.005) continue;
         // the wall must SPLIT around this intruder: record the blocked interval
-        trims.push({ t0: Math.max(0, tAlong - crossReach - REVEAL), t1: Math.min(L, tAlong + crossReach + REVEAL) });
+        trims.push({ t0, t1 });
       }
       if (!trims.length) return null;
       trims.sort((x, y) => x.t0 - y.t0);
