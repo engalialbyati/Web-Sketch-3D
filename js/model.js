@@ -2331,13 +2331,52 @@ class Model {
     // hottest path in the app once a model passed a few hundred faces.
     const boxes = new Map();
     const box = f => { let b = boxes.get(f.id); if (b == null) boxes.set(f.id, b = this.faceAABB(f)); return b; };
+    // SPATIAL HASH broad phase: a uniform 3D grid over face AABBs. Each
+    // changed face asks only the cells it spans for candidates instead of
+    // walking every face in the model — the changed x all product was the
+    // split cascade's quadratic driver on multi-story frames. Faces created
+    // by splits join the grid on demand (their ids re-seed the queue).
+    const CELL = 4.0; // m — building scale: slabs span cells, treads share one
+    const grid = new Map();
+    const inGrid = new Set();
+    const key = (ix, iy, iz) => ix + ',' + iy + ',' + iz;
+    // faceAABB is a flat array [minx,miny,minz,maxx,maxy,maxz]
+    const gridInsert = id => {
+      const f = this.faces.get(id);
+      if (!f || f.hidden || inGrid.has(id)) return;
+      inGrid.add(id);
+      const b = box(f);
+      for (let ix = Math.floor(b[0] / CELL); ix <= Math.floor(b[3] / CELL); ix++)
+        for (let iy = Math.floor(b[1] / CELL); iy <= Math.floor(b[4] / CELL); iy++)
+          for (let iz = Math.floor(b[2] / CELL); iz <= Math.floor(b[5] / CELL); iz++) {
+            const k = key(ix, iy, iz);
+            let set = grid.get(k);
+            if (!set) grid.set(k, set = new Set());
+            set.add(id);
+          }
+    };
+    const gridQuery = b => {
+      const out = new Set();
+      for (let ix = Math.floor(b[0] / CELL); ix <= Math.floor(b[3] / CELL); ix++)
+        for (let iy = Math.floor(b[1] / CELL); iy <= Math.floor(b[4] / CELL); iy++)
+          for (let iz = Math.floor(b[2] / CELL); iz <= Math.floor(b[5] / CELL); iz++) {
+            const set = grid.get(key(ix, iy, iz));
+            if (set) for (const id of set) out.add(id);
+          }
+      return out;
+    };
+    for (const id of this.faces.keys()) gridInsert(id);
     let guard = 0;
     while (queue.length && guard++ < 64) {
       const next = [];
       let mutated = false;
       for (const cid of queue) {
-        for (const f of [...this.faces.values()]) {
-          if (f.hidden || f.id === cid) continue;
+        gridInsert(cid); // split-born faces join the index before querying
+        const A0 = this.faces.get(cid);
+        if (!A0) continue;
+        for (const fid of gridQuery(box(A0))) {
+          const f = this.faces.get(fid); // stale grid entries resolve to null
+          if (!f || f.hidden || f.id === cid) continue;
           const pk = cid < f.id ? cid + 'x' + f.id : f.id + 'x' + cid;
           if (seen.has(pk)) continue;
           seen.add(pk);
@@ -2349,7 +2388,10 @@ class Model {
             mutated = true;
             boxes.delete(cid); // rings changed under the intersection
             boxes.delete(f.id);
-            for (const nid2 of this.faces.keys()) if (!ids0.has(nid2)) next.push(nid2);
+            for (const nid2 of this.faces.keys()) if (!ids0.has(nid2)) {
+              next.push(nid2);
+              gridInsert(nid2); // born faces are candidates for later cids NOW
+            }
           }
         }
       }

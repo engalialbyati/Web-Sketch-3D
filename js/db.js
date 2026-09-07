@@ -118,6 +118,8 @@
       { id: 'cat_foundation', name: 'Foundation' },
       { id: 'cat_column', name: 'Column' },
       { id: 'cat_framing', name: 'Structural Framing' },
+      { id: 'cat_roof', name: 'Roof' },
+      { id: 'cat_stairs', name: 'Stairs' },
     ],
     families: [
       { id: 'fam_wall_basic', categoryId: 'cat_wall', name: 'Basic Wall' },
@@ -134,6 +136,8 @@
       { id: 'fam_fnd_grade', categoryId: 'cat_foundation', name: 'Slab on Grade' },
       { id: 'fam_col_rect', categoryId: 'cat_column', name: 'Rectangular Column' },
       { id: 'fam_beam_framing', categoryId: 'cat_framing', name: 'Concrete Beam' },
+      { id: 'fam_roof', categoryId: 'cat_roof', name: 'Roof' },
+      { id: 'fam_stairs', categoryId: 'cat_stairs', name: 'Assembled Stair' },
     ],
     types: [
       { id: 'typ_wall_050', familyId: 'fam_wall_basic', name: 'Curtain Wall — 50 mm', defaultParameters: { thickness: 0.05, defaultHeight: 3.0, material: 'Glass' } },
@@ -162,6 +166,11 @@
       { id: 'typ_beam_rect_600', familyId: 'fam_beam_framing', name: 'Rectangular — 600 mm', defaultParameters: { profile: 'rectangular', height: 0.6, webWidth: 0.3, material: 'Concrete' } },
       { id: 'typ_beam_t_600', familyId: 'fam_beam_framing', name: 'T-Beam — 600 mm', defaultParameters: { profile: 't', height: 0.6, webWidth: 0.25, flangeWidth: 0.6, flangeThickness: 0.15, material: 'Concrete' } },
       { id: 'typ_beam_l_500', familyId: 'fam_beam_framing', name: 'L-Beam — 500 mm', defaultParameters: { profile: 'l', height: 0.5, webWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.12, material: 'Concrete' } },
+      { id: 'typ_roof_flat200', familyId: 'fam_roof', name: 'Flat 200 mm', defaultParameters: { kind: 'flat', thickness: 0.20, pitch: 15, overhang: 0.4, material: 'Concrete' } },
+      { id: 'typ_roof_mono15', familyId: 'fam_roof', name: 'Mono 15°', defaultParameters: { kind: 'mono', thickness: 0.20, pitch: 15, overhang: 0.4, material: 'Concrete' } },
+      { id: 'typ_roof_gable15', familyId: 'fam_roof', name: 'Gable 15°', defaultParameters: { kind: 'gable', thickness: 0.20, pitch: 15, overhang: 0.4, material: 'Concrete' } },
+      { id: 'typ_stair_straight', familyId: 'fam_stairs', name: 'Straight Flight', defaultParameters: { run: 'straight', width: 1.2, riser: 0.175, tread: 0.28, material: 'Concrete' } },
+      { id: 'typ_stair_u', familyId: 'fam_stairs', name: 'Dog-Leg (U)', defaultParameters: { run: 'u', width: 1.2, riser: 0.175, tread: 0.28, uGap: 0.1, material: 'Concrete' } },
     ],
   };
 

@@ -438,13 +438,16 @@
       app.dialog(existing ? `Edit Script — ${esc(existing.name)}` : 'Scripted Element — paste code from your AI', `
         <div style="font-size:12px;color:#6a7178;margin-bottom:8px">
           Ask your AI (Gemini, ChatGPT…) for an element, give it the template, then paste the code below.
-          <b>Check</b> compiles and test-builds it; <b>Save</b> adds it to the Element Browser.
+          <b>Check</b> compiles and test-builds it; <b>Preview</b> shows it in the viewport;
+          <b>Accept & Add</b> saves it into the Element Browser.
         </div>
         <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
           <button class="mini-btn" id="scr-copy">Copy Template</button>
           <button class="mini-btn" id="scr-ex-fire">Insert: Fire Stair</button>
           <button class="mini-btn" id="scr-ex-rail">Insert: Railing</button>
           <button class="mini-btn" id="scr-check">Check</button>
+          <button class="mini-btn" id="scr-preview">Preview</button>
+          <button class="mini-btn" id="scr-accept" style="color:#1d6b3a;border-color:#1d6b3a">✓ Accept & Add</button>
         </div>
         <textarea id="scr-src" spellcheck="false" autocomplete="off"
           style="width:100%;height:340px;font:12px/1.5 ui-monospace,Menlo,monospace;border:1px solid #c3c9cf;border-radius:6px;padding:8px;box-sizing:border-box;white-space:pre;tab-size:2">${esc(existing ? (existing.src || '') : '')}</textarea>
@@ -476,6 +479,45 @@
           $('scr-msg').textContent = '✗ ' + e.message;
           $('scr-msg').style.color = '#c5221f';
         }
+      });
+      // PREVIEW — build the script into a scratch model and show it as a ghost
+      // in the live viewport: the user SEES the element before accepting it.
+      // ACCEPT — the previewed build is what gets saved (what you saw is what
+      // you add); the Element Browser refreshes and the ghost clears.
+      const drawPreview = () => {
+        const r = this.compile($('scr-src').value);
+        if (r.error) { $('scr-msg').textContent = '✗ ' + r.error; $('scr-msg').style.color = '#c5221f'; return false; }
+        try {
+          const scratch = new Model();
+          scratch.bimHold = true;
+          const built = this.buildInto(scratch, r.script, this.defaultValues(r.script),
+            { base: [0, 0, 0], end: r.script.placement === 'direction' ? [3, 0, 0] : null });
+          app.view.clearPreview();
+          for (const f of built.faces) {
+            for (const ring of scratch.rings(f)) {
+              const pts = scratch.pts(ring);
+              app.view.previewLine(pts, 0xd946ef);
+            }
+          }
+          this._previewOk = true;
+          $('scr-msg').textContent = `✓ Previewing “${r.script.name}” at the origin — ${built.faces.length} faces. Accept & Add to keep it, or edit and Preview again.`;
+          $('scr-msg').style.color = '#1d6b3a';
+          return true;
+        } catch (e) {
+          $('scr-msg').textContent = '✗ ' + e.message;
+          $('scr-msg').style.color = '#c5221f';
+          return false;
+        }
+      };
+      $('scr-preview').addEventListener('click', () => { this._previewOk = false; drawPreview(); });
+      $('scr-accept').addEventListener('click', () => {
+        if (!this._previewOk && !drawPreview()) return;
+        const src = document.getElementById('scr-src').value;
+        this.save(src, existingId);
+        app.view.clearPreview();
+        this._previewOk = false;
+        app.toast('Script accepted — find it under “Scripted” in the Element Browser');
+        app.closeDialog();
       });
       $('scr-src').addEventListener('keydown', ev => {
         ev.stopPropagation(); // typing here must not reach app hotkeys / VCB

@@ -291,6 +291,38 @@
             : pick(null, 'fam_fnd_strip', name, { width: w, depth: d, thickness: t, defaultHeight: t, material: 'Concrete' });
           break;
         }
+        case 'roof': {
+          // the kind + pitch name the type (Revit's roof types); a custom
+          // thickness/pitch grows the family the same way walls do
+          const kind = p.kind === 'mono' || p.kind === 'gable' ? p.kind : 'flat';
+          const t = p.thickness || 0.2;
+          const name = kind === 'flat'
+            ? `Flat ${Math.round(t * 1000)} mm`
+            : `${kind === 'mono' ? 'Mono' : 'Gable'} ${Math.round(p.pitch != null ? p.pitch : 15)}\u00B0`;
+          const known = this._catalog.types.find(x => x.familyId === 'fam_roof' && x.name === name);
+          sel = known
+            ? pick(null, 'fam_roof', known.name, known.defaultParameters)
+            : pick(null, 'fam_roof', name, { kind, thickness: t, pitch: p.pitch != null ? p.pitch : 15, overhang: p.overhang != null ? p.overhang : 0.4, material: 'Concrete' });
+          break;
+        }
+        case 'stairs': {
+          // floor-hosted stairs: the run type + flight width + riser count
+          // name the type ("Stair U 1.2 m / 17R"), so an identical stair
+          // reuses the type a previous one already grew (Revit-style)
+          const run = p.run === 'u' ? 'U' : 'Straight';
+          const w = p.width || 1.2;
+          const nR = p.nRisers || Math.max(2, Math.ceil((p.storyH || 3) / 0.19));
+          const name = `Stair ${run} ${w.toFixed(1)} m / ${nR}R`;
+          const known = this._catalog.types.find(x => x.familyId === 'fam_stairs' && x.name === name);
+          sel = known
+            ? pick(null, 'fam_stairs', known.name, known.defaultParameters)
+            : pick(null, 'fam_stairs', name, {
+              run: p.run === 'u' ? 'u' : 'straight', width: w,
+              riser: p.riser || 0.175, tread: p.tread || 0.28, uGap: p.uGap != null ? p.uGap : 0.1,
+              defaultHeight: p.storyH || 3, material: 'Concrete',
+            });
+          break;
+        }
         case 'script': {
           // Scripted Elements map to the type their script created on save
           // (js/script-elements.js ensureCatalogType); a missing script still
@@ -337,7 +369,7 @@
       return {
         typeId: null, familyId: null, categoryId: null,
         typeName: null, familyName: null,
-        categoryName: { wall: 'Wall', slab: 'Slab', floor: 'Floor', door: 'Door', window: 'Window', opening: 'Wall Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation' }[ent.type] || ent.type,
+        categoryName: { wall: 'Wall', slab: 'Slab', floor: 'Floor', door: 'Door', window: 'Window', opening: 'Wall Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation', roof: 'Roof', stairs: 'Stairs' }[ent.type] || ent.type,
       };
     }
 

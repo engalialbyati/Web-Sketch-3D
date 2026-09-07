@@ -324,6 +324,18 @@
       app.setTool('beam');
       const prof = { rectangular: 'Rectangular', t: 'T-Beam', l: 'L-Beam' }[d.state.profile] || d.state.profile;
       app.toast(`Beam tool — ${prof} ${Math.round(d.state.height * 1000)} mm`);
+    } else if (catName === 'Stairs' && window.Engine && Engine.features.get('stairs')) {
+      // stairs types drive the Stairs tool: the type's run layout + flight
+      // dimensions pre-load its feature state, then the click-drag placement
+      // hosts on a floor and cuts the opening
+      const d = Engine.features.get('stairs');
+      if (p.run === 'straight' || p.run === 'u') d.state.run = p.run;
+      if (p.width > 0) d.state.width = p.width;
+      if (p.riser > 0) d.state.riser = p.riser;
+      if (p.tread > 0) d.state.tread = p.tread;
+      if (p.uGap > 0) d.state.uGap = p.uGap;
+      app.setTool('stairs');
+      app.toast(`Stairs tool — ${type.name}: click the arrival floor, drag the run`);
     } else {
       app.toast(`No placement tool for ${catName || 'that category'}`, true);
       return;
