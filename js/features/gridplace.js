@@ -56,7 +56,8 @@
       const withWhat = { walls: 'WALLS', beams: 'BEAMS', floors: 'FLOORS/SLABS', columns: 'COLUMNS' }[s.placeWhat] || 'COLUMNS';
       const n = s.selectWhat === 'lines' ? this.selLine.size : s.selectWhat === 'cells' ? this.selCell.size : this.selIx.size;
       const lvl = (this.app.levelManager.getLevel(this.app.bimOptions.baseLevel) || {}).name || this.app.bimOptions.baseLevel;
-      return `Grid Select & Place (${what} -> ${withWhat}) — working level: ${lvl}. Click or drag a window to select (${n} selected on ${lvl}). Enter = place on ${lvl}, Esc = clear this level. Switch Base Level for an independent selection per level.`;
+      const lm = s.levelMode === 'selected' ? 'SELECTED levels' : s.levelMode === 'all' ? 'ALL levels' : lvl;
+      return `Grid Select & Place (${what} -> ${withWhat}) — working level: ${lvl}, placing on: ${lm}. Click or drag a window to select (${n} selected on ${lvl}). Enter = place, Esc = clear this level. Levels: Current / All Selected (select on several levels, Enter does them all) / All.`;
     }
 
     // ------------------------------------------------------------- targets
@@ -365,7 +366,12 @@
           view.previewLoop(off, 0x0ea5e9);
         }
       }
-      if (this.hover && this.hover.ix) marker(this.hover.ix.p, 0x0ea5e9, true);
+      if (this.hover && this.hover.ix) marker(this.hover.ix.p, 0xffd400, true);
+      if (this.hover && this.hover.line) {
+        // hovered line: strong yellow single stroke (selection is bold triple)
+        const e2 = this._lineExtent(this.hover.line);
+        view.previewLine([G.v(e2.a[0], e2.a[1], z), G.v(e2.b[0], e2.b[1], z)], 0xffd400);
+      }
       if (this.hover && this.hover.line) {
         const e = this._lineExtent(this.hover.line);
         view.previewLine([G.v(e.a[0], e.a[1], z), G.v(e.b[0], e.b[1], z)], 0x0ea5e9);
@@ -478,6 +484,35 @@
       return pts.filter(p => { const k = IX_KEY(p); if (seen.has(k)) return false; seen.add(k); return true; });
     }
     _place() {
+      const app = this.app, s = this.state || {};
+      const mode = s.levelMode || 'current';
+      if (mode === 'current') { this._placeOnLevel(); return; }
+      // LEVEL FANNING: place the SAME selection on multiple levels.
+      //  'selected' — every level that currently HAS a selection (select on
+      //               L1, switch Base Level, select on L3: Enter does both)
+      //  'all'      — every level in the project
+      const lv = app.levelManager.levels;
+      const targets = mode === 'all'
+        ? lv.map(l => l.id)
+        : Object.keys(this._selByLevel).filter(id => {
+            const sel = this._selByLevel[id];
+            return sel && (sel.ix.size || sel.line.size || sel.cell.size);
+          });
+      if (!targets.length) { app.toast('No levels with a selection'); return; }
+      const original = app.bimOptions.baseLevel;
+      let placed = 0;
+      for (const lvlId of targets) {
+        if (!app.levelManager.getLevel(lvlId)) continue;
+        app.bimOptions.baseLevel = lvlId;
+        const before = app.bim.entities.length;
+        this._placeOnLevel();          // dedup guard makes repeats no-ops
+        placed += app.bim.entities.length - before;
+      }
+      app.bimOptions.baseLevel = original;
+      app.toast(`Placed on ${targets.length} level${targets.length === 1 ? '' : 's'} — ${placed} new element${placed === 1 ? '' : 's'}`);
+      this.status();
+    }
+    _placeOnLevel() {
       const app = this.app, m = app.model;
       const s = this.state || {};
       const zBase = this._z();
@@ -768,6 +803,7 @@
       commands: ['gridplace', 'gp'],
       options: [
         { key: 'selectWhat', type: 'select', label: 'Select', choices: [{ value: 'intersections', label: 'Intersections' }, { value: 'lines', label: 'Grid Lines' }, { value: 'cells', label: 'Grid Cells' }] },
+        { key: 'levelMode', type: 'select', label: 'Levels', choices: [{ value: 'current', label: 'Current Level' }, { value: 'selected', label: 'All Selected Levels' }, { value: 'all', label: 'All Levels' }] },
         { key: 'placeWhat', type: 'select', label: 'Place', choices: [{ value: 'columns', label: 'Columns' }, { value: 'walls', label: 'Walls' }, { value: 'beams', label: 'Beams' }, { value: 'floors', label: 'Floors/Slabs' }] },
         { key: 'width', type: 'number', label: 'Col w', step: 0.05, default: 0.3 },
         { key: 'depth', type: 'number', label: 'Col d', step: 0.05, default: 0.3 },
@@ -782,7 +818,7 @@
         { key: 'slabThickness', type: 'number', label: 'Slab t', step: 0.05, default: 0.2 },
       ],
       tool: GridPlaceTool,
-      state: { selectWhat: 'intersections', placeWhat: 'columns', width: 0.3, depth: 0.3, wallThickness: 0.2, beamProfile: 'rectangular', beamHeight: 0.4, beamWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, slabKind: 'slab', slabLoc: 'centerline', slabThickness: 0.2 },
+      state: { selectWhat: 'intersections', placeWhat: 'columns', levelMode: 'current', width: 0.3, depth: 0.3, wallThickness: 0.2, beamProfile: 'rectangular', beamHeight: 0.4, beamWidth: 0.2, flangeWidth: 0.4, flangeThickness: 0.08, slabKind: 'slab', slabLoc: 'centerline', slabThickness: 0.2 },
       onOption(d) {
         const t = window.app && window.app.tool;
         if (t && t.id === 'gridplace') {
