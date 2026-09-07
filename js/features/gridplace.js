@@ -295,6 +295,55 @@
     // user clicks the copy they SEE (usually the nearest), so hit-testing
     // only the working level's elevation missed by the projection offset.
     // Pick against every covered level; draws stay at the working level.
+    // Bay index under a world point on this grid: crossings sorted along
+    // the line; the bay whose span contains the projection. -1 = outside.
+    // Selected spans on a grid, as [[x,y],[x,y]] endpoint pairs. Keys:
+    //   "gridId"     — the whole line
+    //   "gridId:i"   — bay i (between crossings i and i+1)
+    _selectedGridsAndSpans() {
+      const gm = this.app.gridManager;
+      const out = [];
+      for (const k of this.selLine) {
+        const ci = k.indexOf(':');
+        const gid = ci < 0 ? k : k.slice(0, ci);
+        const g = gm.getGrid ? gm.getGrid(gid) : gm.grids.find(x => x.id === gid);
+        if (!g) continue;
+        let rec = out.find(r => r.g === g);
+        if (!rec) { rec = { g, spans: [] }; out.push(rec); }
+        if (ci < 0) { rec.spans = [{ whole: true }]; continue; }
+        if (rec.spans.length === 1 && rec.spans[0].whole) continue;
+        const i = +k.slice(ci + 1);
+        const pts = this._lineBays(g);
+        if (i >= 0 && i + 1 < pts.length) rec.spans.push({ a: pts[i], b: pts[i + 1] });
+      }
+      return out;
+    }
+    _selectedSpans(g) {
+      const out = [];
+      if (this.selLine.has(g.id)) {
+        const e = this._lineExtent(g);
+        out.push([e.a, e.b]);
+        return out;
+      }
+      const pts = this._lineBays(g);
+      for (const k of this.selLine) {
+        if (!k.startsWith(g.id + ':')) continue;
+        const i = +k.slice(g.id.length + 1);
+        if (i >= 0 && i + 1 < pts.length) out.push([pts[i], pts[i + 1]]);
+      }
+      return out;
+    }
+    _bayUnder(g, w) {
+      if (!w) return -1;
+      const pts = this._lineBays(g);
+      if (pts.length < 2) return -1;
+      const dx = g.end[0] - g.start[0], dy = g.end[1] - g.start[1];
+      const t = ((w[0] - g.start[0]) * dx + (w[1] - g.start[1]) * dy) / (dx * dx + dy * dy || 1);
+      const ts = pts.map(p => ((p[0] - g.start[0]) * dx + (p[1] - g.start[1]) * dy) / (dx * dx + dy * dy || 1)).sort((a, b) => a - b);
+      for (let i = 0; i + 1 < ts.length; i++)
+        if (t >= ts[i] - 0.02 && t <= ts[i + 1] + 0.02) return i;
+      return -1;
+    }
     _pickZs() {
       const lv = this.app.levelManager.levels || [];
       const zs = [...new Set(lv.map(l => +(+l.elevation).toFixed(6)))].sort((a, b) => a - b);
@@ -326,7 +375,7 @@
             if (!sp0 || sp0.behind) continue;
             const sp = this._clientPt(sp0);
             const d = Math.hypot(sp.x - ev.clientX, sp.y - ev.clientY);
-            if (d < bestD) { bestD = d; best = { line: g }; }
+            if (d < bestD) { bestD = d; best = { line: g, at: w }; }
           }
         }
         return best;
@@ -382,15 +431,22 @@
         }
       } else if (linesMode) {
         const gm = this.app.gridManager;
+        const zs = this._pickZs();
         if (gm) for (const g of gm.grids) {
           const e = this._lineExtent(g);
-          // selected lines: BOLD strong yellow — the line plus an offset
-          // second pass reads as one thick stroke (matches the Select tool)
-          const selL = this.selLine.has(g.id);
-          view.previewLine([G.v(e.a[0], e.a[1], z), G.v(e.b[0], e.b[1], z)], selL ? 0xffd400 : 0x94a3b8);
-          if (selL) {
-            view.previewLine([G.v(e.a[0], e.a[1], z + 0.02), G.v(e.b[0], e.b[1], z + 0.02)], 0xffd400);
-            view.previewLine([G.v(e.a[0], e.a[1], z - 0.02), G.v(e.b[0], e.b[1], z - 0.02)], 0xffd400);
+          // selected spans on this grid: whole line, or specific bay keys
+          const spans = this._selectedSpans(g);
+          const anySel = spans.length > 0;
+          for (const zz of zs) {
+            if (!g.covers(zz)) continue;
+            const zz2 = (Math.abs(zz - z) < 1e-6) ? z : zz + 0.01;
+            // unselected full line: faint; then bold-yellow each selected span
+            if (!anySel) view.previewLine([G.v(e.a[0], e.a[1], zz2), G.v(e.b[0], e.b[1], zz2)], 0x94a3b8);
+            for (const sp of spans) {
+              view.previewLine([G.v(sp[0][0], sp[0][1], zz2), G.v(sp[1][0], sp[1][1], zz2)], 0xffd400);
+              view.previewLine([G.v(sp[0][0], sp[0][1], zz2 + 0.02), G.v(sp[1][0], sp[1][1], zz2 + 0.02)], 0xffd400);
+              view.previewLine([G.v(sp[0][0], sp[0][1], zz2 - 0.02), G.v(sp[1][0], sp[1][1], zz2 - 0.02)], 0xffd400);
+            }
           }
         }
       } else {
@@ -468,7 +524,12 @@
           const k = IX_KEY(h.ix.p);
           this.selIx.has(k) ? this.selIx.delete(k) : this.selIx.add(k);
         } else if (h.line) {
-          this.selLine.has(h.line.id) ? this.selLine.delete(h.line.id) : this.selLine.add(h.line.id);
+          // BAY selection: clicking a dashed line selects the span between
+          // the two crossings nearest the click point — NOT the whole line.
+          // (Placing on the whole line is what the rubber-band is for.)
+          const bay = this._bayUnder(h.line, h.at || this._screenToWorld({ x: ev.clientX, y: ev.clientY }));
+          const key = bay != null ? h.line.id + ':' + bay : h.line.id;
+          this.selLine.has(key) ? this.selLine.delete(key) : this.selLine.add(key);
         }
       } else {
         // rubber band: world rect
@@ -615,18 +676,21 @@
       }
       if (s.placeWhat === 'beams') {
         if (s.selectWhat !== 'lines') { app.toast('Beams need Grid LINES selected (option: Select -> Grid Lines)'); return; }
-        const lines = [...this.selLine].map(id => app.gridManager.getGrid(id)).filter(Boolean);
-        if (!lines.length) { app.toast('Nothing selected'); return; }
+        // expand selection keys: bay keys ("gridId:i") place ONE beam in the
+        // clicked span; whole-line keys (rubber band) place every bay
+        const selB = this._selectedGridsAndSpans();
+        if (!selB.length) { app.toast('Nothing selected'); return; }
         const segs = [];
-        for (const g of lines) {
-          const pts2 = this._lineBays(g);
-          const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
-          const L = Math.hypot(d[0], d[1]) || 1;
-          pts2.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
-          for (let i = 0; i + 1 < pts2.length; i++) {
-            const a = pts2[i], b = pts2[i + 1];
-            if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.05) continue;
-            segs.push([a[0], a[1], b[0], b[1]]);
+        for (const { g, spans } of selB) {
+          if (spans.length === 1 && spans[0].whole) {
+            const pts2 = this._lineBays(g);
+            for (let i = 0; i + 1 < pts2.length; i++) {
+              const a = pts2[i], b = pts2[i + 1];
+              if (Math.hypot(b[0] - a[0], b[1] - a[1]) < 0.05) continue;
+              segs.push([a[0], a[1], b[0], b[1]]);
+            }
+          } else {
+            for (const sp of spans) segs.push([sp.a[0], sp.a[1], sp.b[0], sp.b[1]]);
           }
         }
         if (!segs.length) { app.toast('No beam spans (no consecutive intersections)'); return; }
@@ -786,13 +850,14 @@
         const inset = 0.25;
         // consecutive-intersection segments per line, inset at column joints
         const segs = [];
-        for (const g of lines) {
-          const pts2 = this._lineBays(g);
+        for (const { g, spans } of selW) {
           const d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
           const L = Math.hypot(d[0], d[1]) || 1;
-          pts2.sort((p, q) => ((p[0] - g.start[0]) * d[0] + (p[1] - g.start[1]) * d[1]) - ((q[0] - g.start[0]) * d[0] + (q[1] - g.start[1]) * d[1]));
-          for (let i = 0; i + 1 < pts2.length; i++) {
-            const a = pts2[i], b = pts2[i + 1];
+          // spans: whole line -> every bay; bay keys -> just that span
+          const pairs = (spans.length === 1 && spans[0].whole)
+            ? this._lineBays(g).map((p, i, arr) => i + 1 < arr.length ? [p, arr[i + 1]] : null).filter(Boolean)
+            : spans.map(sp => [sp.a, sp.b]);
+          for (const [a, b] of pairs) {
             const ax = a[0] + d[0] / L * inset, ay = a[1] + d[1] / L * inset;
             const bx = b[0] - d[0] / L * inset, by = b[1] - d[1] / L * inset;
             if (Math.hypot(bx - ax, by - ay) < 0.05) continue;
