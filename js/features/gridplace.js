@@ -212,6 +212,32 @@
           if (-sd > fOut) fOut = -sd;
         }
       }
+      // INTERIOR also honors BEAMS: a beam narrower than the column leaves a
+      // sliver between the beam's side and the column's face when the slab
+      // stops at the column face. The slab edge moves to the CLOSEST edging
+      // face (usually the beam's flank) so the sliver is filled; the wider
+      // column's outer half stays exposed, and the lap at the corner is
+      // absorbed by the takeoff's Column > Slab priority.
+      if (mode === 'interior') {
+        for (const b of (this.app.bim ? this.app.bim.entities : [])) {
+          if (b.type !== 'beam' || !b.params || !b.params.baseline) continue;
+          const bl = b.params.baseline;
+          // beam lies ON this grid side: both endpoints project onto the line
+          let onLine = true, along = 0;
+          for (const q of bl) {
+            const rx = q[0] - g.start[0], ry = q[1] - g.start[1];
+            const u = rx * ux + ry * uy, sd = rx * nx + ry * ny;
+            if (Math.abs(sd) > 0.05) { onLine = false; break; }
+            along = Math.max(along, Math.abs(u));
+          }
+          if (!onLine || along > L + 1) continue;
+          const prof = b.params;
+          const half = (prof.profile === 'rectangular' || !prof.flangeWidth)
+            ? (prof.webWidth || 0.2) / 2 : (prof.flangeWidth / 2);
+          const face = half; // flank distance from the gridline
+          if (face < fIn) fIn = face;
+        }
+      }
       // exterior moves OUT past the columns — 1 mm beyond the face so the
       // punch pass sees the footprint STRICTLY inside (pointIn counts
       // boundary as outside; exactly-on-face would skip the punch and the
