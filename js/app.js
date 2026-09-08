@@ -4804,7 +4804,7 @@ class App {
     // Same ray/line math as the axis inference below.
     if (!locked) {
       const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
-      let eBest = null, eD = 10;
+      let eBest = null, eD = 10, eBestId = null;
       for (const e of model.edges.values()) {
         if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
@@ -4823,9 +4823,9 @@ class App {
         const sp = this.view.worldToScreenPixels(p);
         if (!sp.visible) continue;
         const d = Math.hypot(sp.x - q.x, sp.y - q.y);
-        if (d < eD) { eD = d; eBest = p; }
+        if (d < eD) { eD = d; eBest = p; eBestId = e.id; }
       }
-      if (eBest) return { p: eBest, kind: 'edge', label: 'On Edge' };
+      if (eBest) return { p: eBest, kind: 'edge', label: 'On Edge', edge: eBestId };
     }
 
     if (anchor && !locked) {
@@ -4858,7 +4858,7 @@ class App {
       const plane = this.model.facePlane(this.model.faces.get(fid));
       const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
       const p = G.rayPlane(ro, rd, plane);
-      if (p) return { p, kind: 'face', label: 'On Face' };
+      if (p) return { p, kind: 'face', label: 'On Face', face: fid };
     }
     const gp = this.view.groundAt(q);
     if (gp) return { p: gp, kind: 'ground', label: 'On Ground' };

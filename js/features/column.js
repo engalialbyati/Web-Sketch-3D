@@ -96,7 +96,8 @@
       this._lastEv = ev;
       view.clearPreview();
       const inf = this.app.inferPoint(ev, null);
-      const p = inf.p;
+      const pl = this._placementRot(inf, inf.p);
+      const p = pl.p;
       const { params, bounds } = this._boundsAt(p, inf.kind);
       const z0 = bounds.zStart, z1 = bounds.solidTop != null ? bounds.solidTop : bounds.zEnd;
       const CF = window.ColumnFamilies;
@@ -112,7 +113,7 @@
           if (s.z1 - s.z0 > 0.05) view.previewQuadsBetween(up, dn);
         }
       } else {
-        const rot = this._rotAt(inf);
+        const rot = pl.rot;
         const cs = Math.cos(rot), sn = Math.sin(rot);
         const pc = (lx, ly, z) => G.v(p.x + lx * cs - ly * sn, p.y + lx * sn + ly * cs, z);
         const ring = [
@@ -126,29 +127,69 @@
       }
       const fam = CF && CF.get(params.family);
       const under = bounds.solidTop != null && bounds.solidTop < bounds.zEnd - 1e-3;
-      const rotDeg = (this._rotAt(inf) * 180 / Math.PI);
+      const rotDeg = (pl.rot * 180 / Math.PI);
       view.stickyLabel(G.v(p.x, p.y, z1),
         `${fam ? fam.name + ' ' : ''}${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${(z1 - z0).toFixed(1)} m${rotDeg ? ` · ${rotDeg.toFixed(0)}°` : ''} (Z ${z0.toFixed(2)}…${z1.toFixed(2)})${under ? ' — head under slab' : ''}`, '#0a5f61', 0, 0);
     }
     // PLAN ROTATION — the Options Bar is the source of truth:
     //   Angle box  : an explicit rotation for every placement (empty = auto)
-    //   Parallel ✓ : snapped placements align with the host wall/beam axis
-    // Free clicks with no angle stay at 0°. (Measurements-box typing and
-    // Esc write into the same Angle box.)
-    _rotAt(inf) {
-      const o = this.app.bimOptions || {};
-      if (o.rotationDeg != null && isFinite(o.rotationDeg)) return o.rotationDeg * Math.PI / 180;
-      if (o.parallel !== false && inf && inf.kind === 'centerline' && inf.dir)
-        return Math.atan2(inf.dir.y, inf.dir.x);
-      return 0;
+    //   Parallel ✓ : the column aligns with the element it is drawn ON —
+    //                a click on the wall's BODY (face/edge pick) resolves
+    //                the owning wall/beam just like a centerline snap, and
+    //                the column centers itself on that axis
+    // Returns { rot, p }: the rotation and the (possibly axis-centered) point.
+    _placementRot(inf, p) {
+      const app = this.app, o = app.bimOptions || {};
+      if (o.rotationDeg != null && isFinite(o.rotationDeg))
+        return { rot: o.rotationDeg * Math.PI / 180, p };
+      if (o.parallel === false) return { rot: 0, p };
+      let ax = null;
+      if (inf.kind === 'centerline' && inf.dir) {
+        ax = { x: inf.p.x, y: inf.p.y, dir: inf.dir };  // already on the axis
+      } else if (inf.kind === 'face' && inf.face != null) {
+        ax = this._axisOfFace(inf.face);
+      } else if (inf.kind === 'edge' && inf.edge != null) {
+        const e = app.model.edges.get(inf.edge);
+        const ent = e && (e.userData && e.userData.bimEntityId)
+          ? app.bim.getEntityById(e.userData.bimEntityId) : null;
+        if (ent && ent.type === 'wall' && ent.params.base && ent.params.end) {
+          const A = ent.params.base, B = ent.params.end;
+          const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
+          ax = { x: A[0], y: A[1], dir: { x: dx / L, y: dy / L }, len: L };
+        }
+      }
+      if (!ax) return { rot: 0, p };
+      const rot = Math.atan2(ax.dir.y, ax.dir.x);
+      if (ax.len == null) return { rot, p };  // centerline snap: already centered
+      // center the element ON the host axis (plan projection, span-clamped)
+      const t = Math.max(0, Math.min(ax.len,
+        (p.x - ax.x) * ax.dir.x + (p.y - ax.y) * ax.dir.y));
+      return { rot, p: G.v(ax.x + ax.dir.x * t, ax.y + ax.dir.y * t, p.z) };
+    }
+    _axisOfFace(fid) {
+      const app = this.app;
+      const f = app.model.faces.get(fid);
+      const ent = f && app.bim.getEntityForFace(f);
+      if (!ent) return null;
+      let A = null, B = null;
+      if (ent.type === 'wall' && ent.params.base && ent.params.end) { A = ent.params.base; B = ent.params.end; }
+      else if (ent.type === 'beam' && Array.isArray(ent.params.baseline) && ent.params.baseline.length >= 2) {
+        A = ent.params.baseline[0]; B = ent.params.baseline[ent.params.baseline.length - 1];
+      }
+      if (!A) return null;
+      const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
+      return { x: A[0], y: A[1], dir: { x: dx / L, y: dy / L }, len: L };
     }
     onDown(ev) {
       if (ev.button !== 0) return;
       const app = this.app;
       const inf = app.inferPoint(ev, null);
-      const p = inf.p;
+      // parallel resolution: rotation from the host element (clicks on its
+      // body resolve the owner), and the point slides onto the host axis
+      const pl = this._placementRot(inf, inf.p);
+      const p = pl.p;
       const { params } = this._boundsAt(p, inf.kind);
-      params.rotation = this._rotAt(inf);
+      params.rotation = pl.rot;
       const facesBefore = new Set(app.model.faces.keys());
       const edgesBefore = new Set(app.model.edges.keys());
       let ok = false;
