@@ -1271,6 +1271,65 @@ class BimEntityManager {
       }
     }
   }
+  // HIDDEN CENTERLINES (pure inference — the line is never drawn): the
+  // parametric axis of every wall (base->end), beam (baseline) and column
+  // (center point). Returns the nearest axis point under the cursor ray
+  // within the same pixel reach as the on-edge tracker, so placing a
+  // column near a 200 mm wall lands at exactly its 100 mm center without
+  // any grid line. Corners stay with the endpoint snaps (higher tier).
+  _centerlineSnap(q, ro, rd, view) {
+    const PX = 10;
+    let best = null, bestD = PX;
+    const consider = (p, label, axis) => {
+      const sp = view.worldToScreenPixels(p);
+      if (!sp.visible) return;
+      const d = Math.hypot(sp.x - q.x, sp.y - q.y);
+      if (d < bestD) { bestD = d; best = { p: G.clone(p), kind: 'centerline', label, axis }; }
+    };
+    for (const ent of this.entities) {
+      const p = ent.params;
+      if (!p) continue;
+      if (ent.type === 'column' && p.base) {
+        consider(G.v(p.base[0], p.base[1], p.base[2]), `Column ${ent.id} center`);
+        continue;
+      }
+      let A = null, B = null, label = null;
+      if (ent.type === 'wall' && !p.closed && p.base && p.end) {
+        A = p.base; B = p.end; label = `Wall ${ent.id} centerline`;
+      } else if (ent.type === 'beam' && Array.isArray(p.baseline) && p.baseline.length >= 2) {
+        A = p.baseline[0]; B = p.baseline[p.baseline.length - 1]; label = `Beam ${ent.id} centerline`;
+      } else continue;
+      const a = G.v(A[0], A[1], A[2]), b = G.v(B[0], B[1], B[2]);
+      const axis = { a, b, half: (p.thickness || p.width || 0.3) / 2 + 0.02 };
+      const vec = G.sub(b, a);
+      const L = G.len(vec);
+      if (L < 1e-6) { consider(a, label, axis); continue; }
+      vec.x /= L; vec.y /= L; vec.z /= L;
+      // closest point between the cursor ray and the axis segment (same
+      // ray/line math as the on-edge tracker)
+      const r = G.sub(ro, a);
+      const bDot = G.dot(rd, vec);
+      const den = 1 - bDot * bDot;
+      if (Math.abs(den) < 1e-9) continue; // cursor ray parallel to the axis
+      const s = (G.dot(vec, r) - bDot * G.dot(rd, r)) / den;
+      const t = Math.max(0, Math.min(L, s)); // clamped: never past the ends
+      consider(G.add(a, G.mul(vec, t)), label, axis);
+    }
+    return best;
+  }
+  // does `pt` sit on an element's band EDGE (the B-Rep side faces of the
+  // wall/beam the axis belongs to)? Those tier-1 midpoint snaps are the
+  // element's own artifacts — the parametric axis outranks them.
+  _axisBandContains(cs, pt) {
+    if (!cs || !cs.axis) return false;
+    const { a, b, half } = cs.axis;
+    const ax = a.x, ay = a.y, dx = b.x - ax, dy = b.y - ay;
+    const L2 = dx * dx + dy * dy;
+    if (L2 < 1e-9) return Math.hypot(pt.x - a.x, pt.y - a.y) <= half;
+    const t = Math.max(0, Math.min(1, ((pt.x - ax) * dx + (pt.y - ay) * dy) / L2));
+    const d = Math.hypot(pt.x - (ax + dx * t), pt.y - (ay + dy * t));
+    return d > 1e-3 && d <= half; // off the axis but inside the band
+  }
   preSplitWallsForColumn(colParams) {
     if (!window.app || !window.app.structural) return 0;
     let n = 0;
@@ -4569,7 +4628,7 @@ class App {
     // grid snap (F9): round the inferred point to the nearest 1 m column —
     // real geometry snaps (endpoints/midpoints/centers) keep priority
     if (this.gridSnap && inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock' && inf.kind !== 'edge'
-      && inf.kind !== 'gridX' && inf.kind !== 'gridline') {
+      && inf.kind !== 'gridX' && inf.kind !== 'gridline' && inf.kind !== 'centerline') {
       inf.p = G.v(Math.round(inf.p.x), Math.round(inf.p.y), inf.p.z);
       inf.kind = 'grid';
       inf.label = 'Grid 1 m';
@@ -4607,7 +4666,20 @@ class App {
         const d = Math.hypot(s.x - q.x, s.y - q.y);
         if (d < bestD) { bestD = d; best = c; }
       }
-      if (best) return { p: G.clone(best.p), kind: best.kind, label: best.label };
+      if (best) {
+        // HIDDEN-CENTERLINE override: the wall's own band-edge MIDPOINTS are
+        // tier-1 artifacts of its side faces — when the cursor is on the
+        // wall, the parametric centerline is the intent (a column centers
+        // at mid-thickness, 100 mm on a 200 mm wall). Real ENDPOINTS (wall
+        // ends, corners) still win — only band-edge midpoints demote.
+        if (best.kind === 'midpoint' && this.bim && this.bim._centerlineSnap) {
+          const cl = this.bim._centerlineSnap(q,
+            this.view.clientToWorldRay(ev.clientX, ev.clientY).ro,
+            this.view.clientToWorldRay(ev.clientX, ev.clientY).rd, this.view);
+          if (cl && this.bim._axisBandContains(cl, best.p)) return cl;
+        }
+        return { p: G.clone(best.p), kind: best.kind, label: best.label };
+      }
     }
 
     // GridSystem snaps (SnapSystem.js). Priority contract: real geometry
@@ -4618,6 +4690,17 @@ class App {
     if (!locked && this.gridManager && this.gridManager.grids.length) {
       const gs = SnapSystem.snap(this, ev);
       if (gs) return gs;
+    }
+
+    // HIDDEN CENTERLINES: every parametric element owns an invisible axis
+    // (wall base->end, beam baseline, column center). The cursor snaps to
+    // the nearest point ON it — a column centers on a 200 mm wall at
+    // exactly 100 mm with no grid line at all. Beats raw face edges so the
+    // parametric intent wins over the B-Rep's side-face edges.
+    if (!locked && this.bim && this.bim.entities.length) {
+      const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
+      const cs = this.bim._centerlineSnap(q, ro, rd, this.view);
+      if (cs) return cs;
     }
 
     // On-edge tracking: the closest point between the cursor ray and each
