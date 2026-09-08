@@ -116,7 +116,18 @@ module.exports = h => {
         const punches = app.structural.columnHolesForSlab(m,
           { baseLevel: 'lvl_' + (s + 1), thickness: th, _planeZ: z },
           { outer, holes: [] });
-        const holes = punches.map(p2 => p2.ring.map(q => [+q.x.toFixed(6), +q.y.toFixed(6), z]));
+        // punch 3 mm OVERSIZE (a construction-joint reveal): a hole exactly
+        // filled by the coplanar column top lets the arrangement swallow the
+        // slab's holed TOP face — the missing-top-face bug (demo5 verified)
+        const holes = punches.map(p2 => {
+          const r = p2.ring;
+          const cx = r.reduce((a, q) => a + q.x, 0) / r.length;
+          const cy = r.reduce((a, q) => a + q.y, 0) / r.length;
+          return r.map(q => {
+            const dx = q.x - cx, dy = q.y - cy, l = Math.hypot(dx, dy) || 1;
+            return [+(q.x + dx / l * 0.003).toFixed(6), +(q.y + dy / l * 0.003).toFixed(6), z];
+          });
+        });
         const params = { regions: [{ outer, holes }], thickness: th, baseLevel: 'lvl_' + (s + 1) };
         reg('floor', params, () => {
           const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
@@ -180,13 +191,13 @@ module.exports = h => {
     eq(floors.length, 4, 'four slabs');
     for (const f of floors)
       eq(f.params.regions[0].holes.length, 4, f.id + ' punched at all 4 columns');
-    // and the punch is real in the geometry: holed top faces exist
-    let holed = 0;
-    for (const f of floors) for (const id of f.faces) {
-      const face = m.faces.get(id);
-      if (face && (face.holes || []).length >= 4) holed++;
+    // and the punch is real in the geometry: every slab owns a HOLED TOP
+    // face (the missing-top-face regression)
+    for (const f of floors) {
+      const tops = f.faces.map(id => m.faces.get(id)).filter(face =>
+        face && (face.holes || []).length >= 4 && Math.abs(m.faceCentroid(face).z - f.params.regions[0].outer[0][2]) < 1e-3);
+      eq(tops.length, 1, f.id + ' owns its holed top face');
     }
-    ok(holed >= 4, 'slab top faces carry the 4 openings (' + holed + ' found)');
   });
 
   test('the building spans footings below grade to the roof above', () => {

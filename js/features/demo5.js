@@ -80,7 +80,18 @@
         const outer = [[-0.3, -0.3, z], [6.3, -0.3, z], [6.3, 5.3, z], [-0.3, 5.3, z]];
         const punches = S.columnHolesForSlab(m,
           { baseLevel: 'lvl_' + (s + 1), thickness: th, _planeZ: z }, { outer, holes: [] });
-        const holes = punches.map(p2 => p2.ring.map(q => [+q.x.toFixed(6), +q.y.toFixed(6), z]));
+        // punch 3 mm OVERSIZE (a construction-joint reveal): a hole exactly
+        // filled by the coplanar column top lets the kernel's arrangement
+        // swallow the slab's holed TOP face — the missing-top-face bug
+        const holes = punches.map(p2 => {
+          const r = p2.ring;
+          const cx = r.reduce((a, q) => a + q.x, 0) / r.length;
+          const cy = r.reduce((a, q) => a + q.y, 0) / r.length;
+          return r.map(q => {
+            const dx = q.x - cx, dy = q.y - cy, l = Math.hypot(dx, dy) || 1;
+            return [+(q.x + dx / l * 0.003).toFixed(6), +(q.y + dy / l * 0.003).toFixed(6), z];
+          });
+        });
         reg('floor', { regions: [{ outer, holes }], thickness: th, baseLevel: 'lvl_' + (s + 1) },
           () => {
             const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
