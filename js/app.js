@@ -6011,6 +6011,12 @@ class App {
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates
+    // STRAY-LINE INVARIANT: a faceless, non-deliberate edge can leak when a
+    // rebuild orphans an edge that was BORN before the current sweep bracket
+    // (the sweep only reaps edges born inside it — e.g. a corner miter
+    // rebuild leaving an old cap edge behind). Reap once here, after every
+    // operation, so no path can keep one.
+    this.model.reapOrphanEdges();
     // ring-edge repair: splits can bear faces whose HOLE rings reference
     // vertex pairs with no edge (validate flags "ring pair has no edge" and
     // the hole reads as a torn face). edgesForRing is idempotent.
