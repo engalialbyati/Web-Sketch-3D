@@ -4004,6 +4004,7 @@ class App {
     const defs = [
       ['File', [
         ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
+        ['Load 5-Story Building', 'demo5', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
       ]],
       ['Edit', [
@@ -4104,6 +4105,34 @@ class App {
   }
   _closeMenus() { document.querySelectorAll('.menu.open').forEach(m => m.classList.remove('open')); }
 
+  // File ▸ Load 5-Story Building: fresh model (confirm when there is work),
+  // then the demo5 scene — footings, 20 columns, 20 beams, punched slabs
+  // 2-5, flat roof (the scene test/building5.test.js proves)
+  loadDemo5Building() {
+    const go = () => {
+      const ModelCls = Model;
+      this.bindModel(new ModelCls());
+      this.undoStack = []; this.redoStack = [];
+      this.exitGroup(); this.clearSelection();
+      let counts = null, err = null;
+      try { counts = window.Demo5 && window.Demo5.build(this); }
+      catch (e) { err = e; }
+      this.onLevelsChanged();
+      this.view.rebuild();
+      this.updateInfo();
+      this.refreshGroups();
+      if (this.elements && this.elements.refresh) this.elements.refresh();
+      this.view.zoomExtents();
+      if (err) this.toast('5-story building failed: ' + (err.message || err), true);
+      else this.toast('5-story building loaded — '
+        + Object.entries(counts || {}).map(([k, n]) => n + ' ' + k + 's').join(', '));
+      this._saveAutosave();
+    };
+    const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
+    if (hasWork) this.confirmDialog('Load the 5-story building? Unsaved changes will be lost.', go);
+    else go();
+  }
+
   action(name, arg) {
     const A = this;
     const map = {
@@ -4115,6 +4144,7 @@ class App {
       }),
       open: () => document.getElementById('fileinput').click(),
       openBlend: () => document.getElementById('blendinput').click(),
+      demo5: () => A.loadDemo5Building(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       save: () => A.saveFile(),
       exportPng: () => A.view.exportPNG(),
