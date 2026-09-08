@@ -1554,8 +1554,14 @@ class OpeningTool extends HostedInsertionTool {
         }
       }
     }
-    // raycast fallback (edge-line pixels slip between triangles): the
-    // click's inferred point vs every floor region's boundary
+    return null;   // the plan-containment FALLBACK lives in _hostAt, AFTER
+                   // the wall path — a wall standing over a slab must host
+                   // as a WALL, never be hijacked to the floor beneath
+  }
+  // raycast-gap rescue: the click's plan point vs every floor region's
+  // boundary (edge-line pixels that slip between triangles)
+  _floorHostFallback(ev) {
+    const app = this.app;
     let p = null;
     try { p = app.inferPoint(ev, null).p; } catch (e) { return null; }
     if (!p) return null;
@@ -1574,7 +1580,11 @@ class OpeningTool extends HostedInsertionTool {
     }
     return null;
   }
-  _hostAt(ev) { return this._floorHostAt(ev) || super._hostAt(ev); }
+  _hostAt(ev) {
+    // resolution order: the floor's own face > the WALL/vertical face > the
+    // floor plan-containment fallback (last, so wall pixels keep the wall)
+    return this._floorHostAt(ev) || super._hostAt(ev) || this._floorHostFallback(ev);
+  }
   onMove(ev) {
     const host = this._staged ? (this._liveHost() || this.host) : this._hostAt(ev);
     if (host && host.kind === 'floor') {
