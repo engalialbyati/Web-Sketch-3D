@@ -1209,7 +1209,12 @@ class BimEntityManager {
       m.bimHold = heldD;
       for (const gr of groups) {
         const survivor = gr.members[0];
-        for (const e of gr.members) if (e !== survivor) this.detach(e.id);
+        const gone = [];
+        for (const e of gr.members) if (e !== survivor) { gone.push(e.id); this.detach(e.id); }
+        // absorbed pieces may own corners (the split re-pointed neighbors
+        // at them) — their refs must follow the survivor or the healed
+        // corner's miter rebuild dangles the same way
+        if (gone.length) this._repointJoinRefs(new Set(gone), survivor.id);
         const whole = groups.length === 1 && gr.a <= 1e-6 && gr.b >= L0 - 1e-6;
         survivor.params.baseline = [[A2(gr.a)[0], A2(gr.a)[1], oa[2]], [A2(gr.b)[0], A2(gr.b)[1], oa[2]]];
         if (whole) delete survivor.params.merge;
@@ -1239,6 +1244,32 @@ class BimEntityManager {
       if (this.planTrimWall(w.id, { pending: [{ type: 'beam', params: beamParams }] })) n++;
     }
     return n;
+  }
+  // JOIN RE-TARGETING: a neighbor's join record names the element that owns
+  // the shared corner. Splits can move that corner onto a NEW piece (piece 0
+  // keeps the id but may be the far end), and heals merge pieces back into
+  // the survivor — without re-pointing, the next miter rebuild computes
+  // against a wall that no longer touches this one: garbage ring, invalid
+  // geometry, and the 90° corner visibly comes apart. Handles both record
+  // shapes (plain id string and {id, mode}). `nearPt` limits the re-point to
+  // refs whose neighbor endpoint coincides with it (a split moves only ONE
+  // corner to a new piece; refs to the untouched corner must stay).
+  _repointJoinRefs(fromIds, toId, nearPt = null) {
+    if (!fromIds || !fromIds.size || !toId) return;
+    for (const nb of this.entities) {
+      if (nb.type !== 'wall' || !nb.params || !nb.params.joins) continue;
+      const j = nb.params.joins;
+      for (const side of ['start', 'end']) {
+        const rec = j[side];
+        const rid = rec == null ? null : typeof rec === 'object' ? rec.id : rec;
+        if (rid == null || !fromIds.has(rid)) continue;
+        if (nearPt) {
+          const pt = side === 'start' ? nb.params.base : nb.params.end;
+          if (!pt || Math.hypot(pt[0] - nearPt[0], pt[1] - nearPt[1]) > 1e-3) continue;
+        }
+        j[side] = typeof rec === 'object' ? { ...rec, id: toId } : toId;
+      }
+    }
   }
   preSplitWallsForColumn(colParams) {
     if (!window.app || !window.app.structural) return 0;
@@ -1395,6 +1426,15 @@ class BimEntityManager {
         }
         if (!this._extrudeWallSpan(target, A, B, atStart, atEnd)) ok = false;
         pieces.push(target);
+      }
+      // neighbors' joins referenced THIS element's endpoints; after the
+      // split the END corner may live on a new piece (piece 0 keeps the id
+      // and the start corner) — re-point only the refs that share that
+      // corner, so the next miter rebuild finds the wall that touches it
+      if (pieces.length > 1) {
+        const last = pieces[pieces.length - 1];
+        if (last.id !== ent.id)
+          this._repointJoinRefs(new Set([ent.id]), last.id, oe);
       }
       // hosted openings: re-anchor to the piece whose slot holds them
       const tHost0 = tOf([g.ax, g.ay]);
@@ -1555,7 +1595,12 @@ class BimEntityManager {
       m.bimHold = heldD;
       for (const gr of groups) {
         const survivor = gr.members[0];
-        for (const e of gr.members) if (e !== survivor) this.detach(e.id);
+        const gone = [];
+        for (const e of gr.members) if (e !== survivor) { gone.push(e.id); this.detach(e.id); }
+        // absorbed pieces may own corners (the split re-pointed neighbors
+        // at them) — their refs must follow the survivor or the healed
+        // corner's miter rebuild dangles the same way
+        if (gone.length) this._repointJoinRefs(new Set(gone), survivor.id);
         const whole = groups.length === 1 && gr.a <= 1e-6 && gr.b >= L0 - 1e-6;
         survivor.params.base = A2(gr.a); survivor.params.end = A2(gr.b);
         survivor.params.joins = { start: gr.a <= 1e-6 ? jo.start : undefined, end: gr.b >= L0 - 1e-6 ? jo.end : undefined };

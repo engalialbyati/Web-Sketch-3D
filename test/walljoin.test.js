@@ -18,7 +18,7 @@ module.exports = h => {
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
   const sandbox = { window: {}, console };
   const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
+  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
     vm.runInContext(read(f), ctx, { filename: f });
   }
   // BimEntityManager lives in app.js between its class line and `class App`
@@ -28,7 +28,7 @@ module.exports = h => {
   if (start < 0 || end < 0 || end <= start) throw new Error('could not slice BimEntityManager from app.js');
   vm.runInContext(appSrc.slice(start, end), ctx, { filename: 'app.js#BimEntityManager' });
 
-  const { G, Model, BimTools } = sandbox.window;
+  const { G, Model, BimTools, StructuralManager } = sandbox.window;
   const WallTool = BimTools.WallTool;
   const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
   const v = (x, y, z = 0) => G.v(x, y, z);
@@ -60,7 +60,9 @@ module.exports = h => {
     bim.entities.length >= 0; // registry lives on model.bimEntities (getter)
     // bim.js's commit path reaches for the GLOBAL app (the browser's
     // window.app) — the sandbox global must point at this test's world
+    app.structural = new StructuralManager(() => m.levels, () => m.bimEntities);
     sandbox.app = app;
+    sandbox.window.app = app; // planTrimWall/preSplit reach the app via window.app
     const tool = Object.create(WallTool.prototype);
     tool.app = app;
     tool.engine = { lastPickGrid: null };
@@ -88,6 +90,65 @@ module.exports = h => {
   };
 
   const commit = (w, a, b) => w.tool._commitInner({ kind: 'line', closed: false, pts: [v(...a), v(...b)] }, 3);
+
+  // a standing column prism, registered like the Column tool registers it
+  const buildColumn = (w, x, y) => {
+    const hw = 0.15, hd = 0.15;
+    const ring = [v(x - hw, y - hd, 0), v(x + hw, y - hd, 0), v(x + hw, y + hd, 0), v(x - hw, y + hd, 0)];
+    const before = new Set(w.m.faces.keys());
+    const f = w.m.addFaceFromRings(ring);
+    w.m.pushPull(f, 3);
+    const faces = [...w.m.faces.keys()].filter(id => !before.has(id));
+    const roles = {};
+    for (const fid of faces) {
+      const c = w.m.faceCentroid(w.m.faces.get(fid));
+      roles[fid] = Math.abs(c.z - 3) < 1e-6 ? 'top' : Math.abs(c.z) < 1e-6 ? 'bottom' : 'side';
+    }
+    return w.bim.create('column', { base: [x, y, 0], width: 0.3, depth: 0.3, height: 3 }, roles, []);
+  };
+  const runDirty = w => {
+    if (!w.bim._hostsDirty || !w.bim._hostsDirty.size) return;
+    const dirty = [...w.bim._hostsDirty];
+    w.bim._hostsDirty.clear();
+    const order = { column: 0, beam: 1, wall: 2 };
+    dirty.sort((a, b) => (order[(w.bim.getEntityById(a) || {}).type] ?? 3)
+      - (order[(w.bim.getEntityById(b) || {}).type] ?? 3));
+    for (const id of dirty) {
+      const ent = w.bim.getEntityById(id);
+      if (ent && ent.type === 'wall') w.bim.planTrimWall(id);
+    }
+  };
+
+  // ------------------------------------------------- split-vs-join interplay
+  test('splitting a joined wall re-points the neighbor miter at the corner piece (the 90° bug)', () => {
+    const w = makeWorld();
+    const h = buildWall(w, [0, 1, 0], [3, 1, 0]);   // wall_1: horizontal
+    commit(w, [3, 1, 0], [3, -2, 0]);               // wall_2: vertical, miter at (3,1)
+    const vert = w.bim.entities.find(e => e.id !== h.id);
+    eq(vert.params.joins.start, h.id, 'miter recorded before the split');
+    // a column mid-span of the HORIZONTAL wall splits it; the corner (3,1)
+    // moves onto the second piece — the vertical wall's miter reference
+    // must follow, or its next rebuild computes against a non-touching wall
+    buildColumn(w, 1.5, 1);
+    runDirty(w);
+    const pieces = w.bim.entities.filter(e => e.type === 'wall');
+    eq(pieces.length, 3, 'horizontal split in two + vertical');
+    const cornerPiece = pieces.find(e => e.params.end
+      && Math.abs(e.params.end[0] - 3) < 1e-6 && Math.abs(e.params.end[1] - 1) < 1e-6);
+    ok(cornerPiece && cornerPiece.id !== h.id, 'the corner lives on the NEW piece');
+    eq(vert.params.joins.start, cornerPiece.id, 'neighbor miter re-pointed at the corner piece');
+    ok(cornerPiece.params.joins.end === vert.id, 'corner piece still joins the vertical wall');
+    ok(w.m.validate().ok, 'model valid after the split');
+    // the column leaves: the horizontal wall heals — the ref follows back
+    const col = w.bim.entities.find(e => e.type === 'column');
+    w.bim.detach(col.id);
+    runDirty(w);
+    const after = w.bim.entities.filter(e => e.type === 'wall');
+    eq(after.length, 2, 'healed back to two walls');
+    eq(vert.params.joins.start, h.id, 'neighbor miter re-pointed back at the healed survivor');
+    ok(h.params.joins.end === vert.id, 'survivor still joins the vertical wall');
+    ok(w.m.validate().ok, 'model valid after the heal');
+  });
 
   // ------------------------------------------------------------ sane joins
   test('a perpendicular chained corner commits cleanly with miters', () => {
