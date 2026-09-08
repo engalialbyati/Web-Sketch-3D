@@ -94,7 +94,9 @@
     if (run === 'u') {
       const n1 = Math.ceil(nRisers / 2), n2 = nRisers - n1;
       const midS = tread * n1, midZ = riser * n1;
-      const landingDepth = Math.max(0.9, width); // a landing is never shorter than its flight
+      // the landing ("resting platform") depth is EDITABLE — default: never
+      // shorter than its flight (the code minimum is the flight width)
+      const landingDepth = Math.max(0.9, width, num(params.landingDepth, 0));
       flightRec(n1, 0, 0, 1, 0);                          // flight 1 up the +run side
       landingRect = { s0: midS, s1: midS + landingDepth, off0: 0, off1: 2 * width + uGap, z: midZ };
       flightRec(n2, midS + landingDepth, midZ, -1, width + uGap); // flight 2 back alongside
@@ -188,6 +190,78 @@
       landing(plan.landingRect);
       if (Object.keys(roles).length === n1) return { error: 'landing build failed' };
     }
+
+    // ---------------------------------------------------------- handrail
+    // The owner's reference look: a GLASS balustrade — thin sloped panels
+    // under a metal handrail, posts at the ends and along the run. On by
+    // default (params.handrail !== false); Entity Info's checkbox toggles
+    // it and the stair regenerates.
+    // PERFORMANCE: every part is separated by 5–10 mm (the floating-glass
+    // modern detail) so NOTHING overlaps — no welds, no sweep explosions;
+    // the whole rail builds in milliseconds instead of seconds.
+    const RAIL_H = Math.max(0.6, num(params.railHeight, 0.9));
+    const railRun = (pA, pB) => {
+      // one sloped balustrade line from pA to pB (both at RAIL height)
+      const b0 = before();
+      // rail bar — the metal handrail along the nosing-parallel line
+      const rail = [
+        at(pA.s, pA.off, pA.z - 0.025), at(pA.s, pA.off, pA.z + 0.025),
+        at(pB.s, pB.off, pB.z + 0.025), at(pB.s, pB.off, pB.z - 0.025),
+      ];
+      if (G.dot(G.loopNormal(rail), L) < 0) rail.reverse();
+      const rf = m.addFaceFromRings(rail.map(p => G.clone(p)));
+      if (rf) m.pushPull(rf, 0.045, true);
+      // glass pane — floating just inside the posts, 5 mm clear of the rail
+      const glass = [
+        at(pA.s, pA.off - 0.045, pA.z - RAIL_H + 0.02), at(pA.s, pA.off - 0.045, pA.z - 0.035),
+        at(pB.s, pB.off - 0.045, pB.z - 0.035), at(pB.s, pB.off - 0.045, pB.z - RAIL_H + 0.02),
+      ];
+      if (G.dot(G.loopNormal(glass), L) < 0) glass.reverse();
+      const gf = m.addFaceFromRings(glass.map(p => G.clone(p)));
+      if (gf) m.pushPull(gf, 0.012, true);
+      // posts — ends + mid, 8 mm clear above the walking line and below the
+      // rail bar: zero contact, zero welds
+      const span = Math.hypot(pB.s - pA.s, pB.z - pA.z);
+      const nPosts = Math.max(2, Math.min(5, Math.ceil(span / 1.5) + 1));
+      for (let i = 0; i < nPosts; i++) {
+        const t = i / (nPosts - 1);
+        const s = pA.s + (pB.s - pA.s) * t;
+        const zr = pA.z + (pB.z - pA.z) * t;
+        const zTop = zr - 0.033;                     // just under the rail bar
+        const zBot = zr - RAIL_H + 0.008;            // just above the walking line
+        const post = [
+          at(s - 0.02, pA.off, zBot), at(s + 0.02, pA.off, zBot),
+          at(s + 0.02, pA.off, zTop), at(s - 0.02, pA.off, zTop),
+        ];
+        if (G.dot(G.loopNormal(post), L) < 0) post.reverse();
+        const pf = m.addFaceFromRings(post.map(p => G.clone(p)));
+        if (pf) m.pushPull(pf, 0.045, true);
+      }
+      for (const g of created(b0)) roles[g.id] = 'rail';
+    };
+    if (params.handrail !== false) {
+      for (const fl of plan.flights) {
+        const sA = fl.s0 + fl.ds * plan.tread, sB = fl.s0 + fl.ds * plan.tread * fl.count;
+        const zA = fl.z0 + plan.riser + RAIL_H, zB = fl.z0 + plan.riser * fl.count + RAIL_H;
+        railRun({ s: sA, off: fl.off + 0.06, z: zA }, { s: sB, off: fl.off + 0.06, z: zB });
+        railRun({ s: sA, off: fl.off + plan.width - 0.06, z: zA }, { s: sB, off: fl.off + plan.width - 0.06, z: zB });
+      }
+      if (plan.landingRect) {
+        const lr = plan.landingRect;
+        const z = lr.z + RAIL_H;
+        railRun({ s: lr.s0, off: lr.off0 + 0.06, z }, { s: lr.s1, off: lr.off0 + 0.06, z });
+        railRun({ s: lr.s0, off: lr.off1 - 0.06, z }, { s: lr.s1, off: lr.off1 - 0.06, z });
+        railRun({ s: lr.s1 - 0.06, off: lr.off0 + 0.06, z }, { s: lr.s1 - 0.06, off: lr.off1 - 0.06, z });
+      }
+    }
+
+    // rail posts/rails/glass deliberately overlap — repair the ring edges
+    // the welds repartitioned (the sweep-bracket contract every builder runs)
+    for (const f of m.faces.values()) {
+      m.edgesForRing(f.loop, true);
+      for (const h of (f.holes || [])) m.edgesForRing(h, true);
+    }
+
     const faces = Object.keys(roles).map(Number).map(id => m.faces.get(id)).filter(Boolean);
     if (!faces.length) return { error: 'the stair created no geometry' };
     // unstamped ring edges join the entity (gridplace's beam contract)
@@ -439,6 +513,9 @@
         riser: Math.max(0.1, num(s.riser, 0.175)),
         tread: Math.max(0.05, num(s.tread, 0.28)),
         uGap: Math.max(0, num(s.uGap, 0.1)),
+        landingDepth: s.landingDepth > 0 ? +s.landingDepth : undefined,
+        handrail: s.handrail !== false,
+        railHeight: Math.max(0.6, num(s.railHeight, 0.9)),
         storyH: this.host.storyH,
         base: [this.base.x, this.base.y, this.host.zBase],
         dir: [this.dir.x, this.dir.y],
@@ -615,9 +692,12 @@
         { key: 'riser', type: 'number', label: 'Riser', step: 0.005, default: 0.175 },
         { key: 'tread', type: 'number', label: 'Tread', step: 0.01, default: 0.28 },
         { key: 'uGap', type: 'number', label: 'U Gap', step: 0.05, default: 0.1 },
+        { key: 'landingDepth', type: 'number', label: 'Landing', step: 0.05, default: 1.2 },
+        { key: 'railHeight', type: 'number', label: 'Rail H', step: 0.05, default: 0.9 },
+        { key: 'handrail', type: 'checkbox', label: 'Handrail', default: true },
       ],
       tool: StairTool,
-      state: { run: 'straight', width: 1.2, riser: 0.175, tread: 0.28, uGap: 0.1 },
+      state: { run: 'straight', width: 1.2, riser: 0.175, tread: 0.28, uGap: 0.1, landingDepth: 1.2, railHeight: 0.9, handrail: true },
       onOption() {
         // live ghost follows the typed size / run type
         const t = window.app && window.app.tool;

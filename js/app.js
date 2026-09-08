@@ -5678,6 +5678,17 @@ class App {
           : q.area.toFixed(2) + ' m²'}${q.volume != null ? ' · ' + q.volume.toFixed(3) + ' m³' : ''}</div>
         ${q.bbox ? `<div class="stats dim">Bounding box ${q.bbox.size.map(x => x.toFixed(2)).join(' × ')} m</div>` : ''}
         ${rows.length ? `<div class="gi-params">${rows.map(r => `<div class="gi-prow"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}</div>` : ''}
+        ${ent.type === 'stairs' && window.StairsFeature ? `
+          <div class="gi-params" id="gi-stair">
+            <div class="gi-prow"><span>Width m</span><input data-st="width" type="number" step="0.05" value="${(+p.width || 1.2).toFixed(2)}"></div>
+            <div class="gi-prow"><span>Riser m</span><input data-st="riser" type="number" step="0.005" value="${(+p.riser || 0.175).toFixed(3)}"></div>
+            <div class="gi-prow"><span>Tread m</span><input data-st="tread" type="number" step="0.01" value="${(+p.tread || 0.28).toFixed(2)}"></div>
+            ${p.run === 'u' ? `<div class="gi-prow"><span>Landing m</span><input data-st="landingDepth" type="number" step="0.05" value="${(+p.landingDepth || 1.2).toFixed(2)}"></div>
+            <div class="gi-prow"><span>U Gap m</span><input data-st="uGap" type="number" step="0.05" value="${(+p.uGap || 0.1).toFixed(2)}"></div>` : ''}
+            <div class="gi-prow"><span>Rail Height m</span><input data-st="railHeight" type="number" step="0.05" value="${(+p.railHeight || 0.9).toFixed(2)}"></div>
+            <div class="gi-prow"><span>Handrail</span><input data-st="handrail" type="checkbox" ${p.handrail !== false ? 'checked' : ''}></div>
+            <div class="dim" style="margin-top:2px">Edit a value — the stair (and its host opening) regenerate</div>
+          </div>` : ''}
         <button class="mini-btn primary" id="gi-eip">✏ Edit In Place</button>
         <button class="mini-btn" id="gi-del">Delete</button>
         <div class="dim" style="margin-top:4px">Hold <b>Ctrl</b> (or <b>Tab</b>) to query individual faces (m²) and edges (m)</div>`;
@@ -5685,6 +5696,26 @@ class App {
       if (tsel) tsel.addEventListener('change', () => {
         const t = siblings.find(x => x.id === tsel.value);
         if (t) this.applyElementType(ent, t);
+      });
+      // STAIRS: editable dimensions + the Handrail checkbox — every edit
+      // regenerates the stair and re-cuts its host opening
+      const stairBox = el.querySelector('#gi-stair');
+      if (stairBox) stairBox.querySelectorAll('[data-st]').forEach(inp => {
+        const apply = () => {
+          const key = inp.dataset.st;
+          let v = inp.type === 'checkbox' ? inp.checked : parseFloat(inp.value);
+          if (inp.type !== 'checkbox' && (!isFinite(v) || v <= 0)) return;
+          const patch = { [key]: v };
+          const res = this.transaction.run('edit stairs', () =>
+            window.StairsFeature.rebuildStairEntity(this, ent.id, patch));
+          if (res) {
+            this.selectElement(ent.id);
+            this.updateInfo();
+            this.toast(`Stairs ${key} → ${inp.type === 'checkbox' ? (v ? 'on' : 'off') : v}`
+              + (res.warnings && res.warnings.length ? ' (⚠ ' + res.warnings.join('; ') + ')' : ''));
+          }
+        };
+        inp.addEventListener(inp.type === 'checkbox' ? 'change' : 'change', apply);
       });
       el.querySelector('#gi-eip').addEventListener('click', () => this.enterEditInPlace(ent.id));
       el.querySelector('#gi-del').addEventListener('click', () => {
