@@ -187,6 +187,40 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
+  // the re-split: a SECOND column lands on an already-split piece. Slots
+  // must stay in original-run coordinates and sibling slots must survive
+  // the re-split, or the next derive kicks every piece out of the merge
+  // group and the beam can never reunite.
+  test('a second column re-splitting a piece: the group survives, both leaving restores ONE beam', () => {
+    const w = makeWorld();
+    buildBeam(w, 0, 8);
+    const c1 = placeColumn(w, 4, 3.5);
+    runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'beam').length, 2, 'split at 4 first');
+    const c2 = placeColumn(w, 6, 3.5); // lands on piece [4,8]
+    runDirty(w);
+    const three = w.bim.entities.filter(e => e.type === 'beam');
+    eq(three.length, 3, 're-split into three pieces');
+    for (const b of three)
+      ok(b.params.merge && b.params.merge.group === three[0].params.merge.group,
+        'every piece still holds the shared merge group');
+    w.bim.detach(c2.id);
+    runDirty(w);
+    const two = w.bim.entities.filter(e => e.type === 'beam');
+    eq(two.length, 2, 'the second column leaving reunites its neighbors only');
+    const near45 = two.find(b => Math.abs(b.params.baseline[0][0] - 4) < 1e-6);
+    near(near45.params.baseline[1][0], 8, 1e-9, 'the reunited piece spans [4,8]');
+    w.bim.detach(c1.id);
+    runDirty(w);
+    const one = w.bim.entities.filter(e => e.type === 'beam');
+    eq(one.length, 1, 'both columns gone: ONE whole beam');
+    ok(!one[0].params.merge, 'merge record cleared');
+    const xs = allBeamXs(w);
+    near(xs[0], -0.125, 5e-3, 'geometry whole again (welded start)');
+    near(xs[xs.length - 1], 8.125, 5e-3, 'geometry whole again (welded end)');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
   return summary_stub();
   function summary_stub() { }
 };

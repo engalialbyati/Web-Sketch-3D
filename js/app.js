@@ -1008,7 +1008,25 @@ class BimEntityManager {
     const orig = prev
       ? { group: prev.group, a: prev.a, b: prev.b }
       : { group: ent.id, a: [g.A[0], g.A[1], z], b: [at(g.L)[0], at(g.L)[1], z] };
-    const slots = spans.map(([t0, t1]) => [t0, t1]);
+    // slots in ORIGINAL-run coordinates — a piece re-split later carries a
+    // baseline offset along the run, so piece-local t values would not match
+    // what _deriveGroupSpansBeam compares against (tOf on the original run)
+    const oa = orig.a, ob = orig.b;
+    const oL = Math.hypot(ob[0] - oa[0], ob[1] - oa[1]) || 1;
+    const ox = (ob[0] - oa[0]) / oL, oy = (ob[1] - oa[1]) / oL;
+    const tOf = q => (q[0] - oa[0]) * ox + (q[1] - oa[1]) * oy;
+    const conv = spans.map(([t0, t1]) => [tOf(at(t0)), tOf(at(t1))]);
+    let slots = conv;
+    if (prev && Array.isArray(prev.slots)) {
+      // re-split of an existing piece: sibling slots still guard their own
+      // ground — replace only THIS piece's slot with the new spans, or the
+      // next derive kicks every sibling out of the merge group
+      const myA = tOf(g.A), myB = tOf(at(g.L));
+      slots = prev.slots
+        .filter(s => !(s[0] < myB - 1e-6 && s[1] > myA + 1e-6))
+        .concat(conv)
+        .sort((a, b) => a[0] - b[0]);
+    }
     m.beginEdgeSweep();
     const held = m.bimHold;
     let ok = true;
@@ -1312,8 +1330,19 @@ class BimEntityManager {
     const L0 = Math.hypot(oe[0] - ob[0], oe[1] - ob[1]) || 1;
     const ox = (oe[0] - ob[0]) / L0, oy = (oe[1] - ob[1]) / L0;
     const tOf = q => (q[0] - ob[0]) * ox + (q[1] - ob[1]) * oy;
-    // slots in ORIGINAL-run coordinates — the map the heal derives from
-    const slots = spans.map(([t0, t1]) => { const A = at(t0), B = at(t1); return [tOf(A), tOf(B)]; });
+    // slots in ORIGINAL-run coordinates — the map the heal derives from.
+    // Re-split of an existing piece: sibling slots still guard their own
+    // ground — replace only THIS piece's slot with the new spans, or the
+    // next derive kicks every sibling out of the merge group
+    const conv = spans.map(([t0, t1]) => { const A = at(t0), B = at(t1); return [tOf(A), tOf(B)]; });
+    let slots = conv;
+    if (prev && Array.isArray(prev.slots)) {
+      const myA = tOf([g.ax, g.ay]), myB = tOf(at(g.L));
+      slots = prev.slots
+        .filter(s => !(s[0] < myB - 1e-6 && s[1] > myA + 1e-6))
+        .concat(conv)
+        .sort((a, b) => a[0] - b[0]);
+    }
     m.beginEdgeSweep();
     let ok = true;
     const held = m.bimHold; // hold-transparent: a caller's hold survives us

@@ -13,7 +13,7 @@ module.exports = h => {
   const fs = require('node:fs');
   const path = require('node:path');
   const vm = require('node:vm');
-  const { test, ok, eq } = h;
+  const { test, ok, eq, near } = h;
 
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
   const sandbox = { window: {}, console };
@@ -156,5 +156,82 @@ module.exports = h => {
     ok(walls.every(e => e.faces.some(id => w.m.faces.has(id))), 'no geometry-less ghost walls remain');
     ok(!w.toasts.some(t => t.isErr && /rolled back/i.test(t.msg)), 'no tx-guard rollback: ' + JSON.stringify(w.toasts.map(t => t.msg)));
     void stray;
+  });
+
+  // ------------------------------------------------------------- T-joins
+  // a 90° wall drawn off the SIDE of another wall merges with it: the new
+  // wall's cap retreats onto the host's near face (no overlap, no gap) and
+  // the host keeps its geometry and join records untouched.
+  test('a perpendicular wall off the side joins as a one-sided T', () => {
+    const w = makeWorld();
+    const host = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    const hostJoinsBefore = JSON.stringify(host.params.joins);
+    commit(w, [2, 0, 0], [2, 4, 0]); // starts ON the host's run, far from both ends
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 2, 'both walls alive');
+    ok(w.m.validate().ok, 'model valid');
+    const t = walls.find(x => x !== host);
+    const j = t.params.joins.start;
+    ok(j && typeof j === 'object' && j.id === host.id && j.mode === 'buttTrim',
+      'the T records a one-sided buttTrim onto the host: ' + JSON.stringify(t.params.joins));
+    eq(JSON.stringify(host.params.joins), hostJoinsBefore, 'host join records untouched');
+    // geometry: the T's start cap sits ON the host's near face (y = +0.1),
+    // never inside the host band — no overlap, no exposed gap
+    const ring = w.bim.wallRing(t.params);
+    const ys = ring.map(p => +p.y.toFixed(4));
+    near(Math.min(...ys), 0.1, 1e-6, 'cap retreats onto the host near face');
+    const xs = ring.map(p => +p.x.toFixed(4));
+    near(Math.min(...xs), 1.9, 1e-6, 'no sideways wrap past the host faces');
+    ok(t.faces.some(id => w.m.faces.has(id)), 'T wall owns live geometry');
+    ok(!w.toasts.some(x => x.isErr), 'no error toasts: ' + JSON.stringify(w.toasts.map(x => x.msg)));
+  });
+
+  test('a perpendicular wall ENDING on the side joins as a T too', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [8, 0, 0]);
+    commit(w, [2, 4, 0], [2, 0, 0]); // drawn downward, its END lands mid-band
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    ok(w.m.validate().ok, 'model valid');
+    const t = walls.find(x => x.params.base[1] > 1); // the T's base is up at y=4
+    const j = t.params.joins.end;
+    ok(j && typeof j === 'object' && j.mode === 'buttTrim', 'end-side T recorded: ' + JSON.stringify(t.params.joins));
+    const ring = w.bim.wallRing(t.params);
+    const ys = ring.map(p => +p.y.toFixed(4));
+    near(Math.min(...ys), 0.1, 1e-6, 'cap retreats onto the host near face');
+  });
+
+  test('a shallow-angle landing inside the band stays unjoined (not a T)', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [8, 0, 0]);
+    // ~10° to the host run: riding the band, not crossing it
+    commit(w, [2, 0, 0], [5, 0.55, 0]);
+    const t = w.bim.entities.filter(e => e.type === 'wall').find(x => x.params.base[0] > 1);
+    eq(t.params.joins.start, 0, 'no T for a shallow merge: ' + JSON.stringify(t.params.joins));
+    ok(w.m.validate().ok, 'model valid');
+  });
+
+  // ---------------------------------------------- wall endpoint live snaps
+  // the wall tool must feed its walls' BASELINE endpoints as live snap
+  // candidates: they are analytical points (params.base/end), not B-Rep
+  // vertices, so without them a corner aim snaps to a band edge and the
+  // miter join never fires.
+  test('the wall tool offers wall baseline endpoints as snaps', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [4, 0, 0]);
+    let captured = null;
+    const realInfer = w.app.inferPoint;
+    w.app.inferPoint = (ev, anchor) => {
+      captured = { snaps: (w.app._liveSnaps || []).slice(), anchor: anchor && [anchor.x, anchor.y] };
+      return { p: G.v(0, 0, 0) };
+    };
+    try {
+      w.tool.engine = { stage: 0, chainStart: null, lastPickGrid: null };
+      w.tool._pt({ clientX: 0, clientY: 0 });
+    } finally { w.app.inferPoint = realInfer; }
+    ok(captured, 'inferPoint was consulted');
+    const pts = captured.snaps.filter(s => s.kind === 'endpoint' && s.label === 'Wall End')
+      .map(s => [+s.p.x.toFixed(3), +s.p.y.toFixed(3), +s.p.z.toFixed(3)]);
+    ok(pts.some(p => p[0] === 0 && p[1] === 0), 'base endpoint offered: ' + JSON.stringify(pts));
+    ok(pts.some(p => p[0] === 4 && p[1] === 0), 'end endpoint offered: ' + JSON.stringify(pts));
   });
 };

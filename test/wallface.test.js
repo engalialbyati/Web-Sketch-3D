@@ -417,6 +417,38 @@ module.exports = h => {
     near(xs[xs.length - 1], 8, 1e-9, 'end intact');
   });
 
+  // the re-split: a SECOND column lands on an already-split piece. The
+  // piece's slot map must keep the sibling slots (their ground stays
+  // guarded), or the next heal kicks the sibling out of the merge group —
+  // deleting both columns then leaves TWO overlapping walls.
+  test('a second column re-splitting a piece: both leaving restores ONE wall', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [8, 0, 0]);
+    const c1 = buildColumn(w, 4, 0, 0);
+    runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'split at 4 first');
+    const c2 = buildColumn(w, 6, 0, 0); // lands on piece [4.151, 8]
+    runDirty(w);
+    const three = w.bim.entities.filter(e => e.type === 'wall');
+    eq(three.length, 3, 're-split into three pieces');
+    for (const p of three)
+      ok(p.params.merge && p.params.merge.group === three[0].params.merge.group,
+        'every piece still holds the shared merge group');
+    w.bim.detach(c2.id);
+    runDirty(w);
+    const two = w.bim.entities.filter(e => e.type === 'wall');
+    eq(two.length, 2, 'the second column leaving reunites its neighbors only');
+    w.bim.detach(c1.id);
+    runDirty(w);
+    const one = w.bim.entities.filter(e => e.type === 'wall');
+    eq(one.length, 1, 'both columns gone: ONE whole wall');
+    ok(!one[0].params.merge, 'merge record cleared');
+    const xs = allWallXs(w);
+    near(xs[0], 0, 1e-9, 'healed from the original start');
+    near(xs[xs.length - 1], 8, 1e-9, 'healed to the original end');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
   return summary_if_needed;
   function summary_if_needed() { }
 };

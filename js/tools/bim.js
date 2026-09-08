@@ -212,9 +212,26 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
   }
   _pt(ev) {
     const anchor = this.engine.stage === 1 ? this.engine.p1 : this.engine.chainStart;
+    // WALL ENDPOINTS are the join anchors, but they are analytical points
+    // (params.base/end) — the band's B-Rep vertices sit half a thickness
+    // away, so aiming at a corner snaps to a band EDGE instead and the miter
+    // never fires. Feed the endpoints as live snaps (they win within the
+    // inference radius), exactly like FloorTool feeds its sketch boundaries.
+    const snaps = [];
+    for (const e of this.app.bim.entities) {
+      if (e.type !== 'wall' || e.params.closed || !e.params.base || !e.params.end) continue;
+      snaps.push({ p: G.v(e.params.base[0], e.params.base[1], e.params.base[2]), kind: 'endpoint', label: 'Wall End' });
+      snaps.push({ p: G.v(e.params.end[0], e.params.end[1], e.params.end[2]), kind: 'endpoint', label: 'Wall End' });
+    }
+    if (this.engine.chainStart) snaps.push({ p: this.engine.chainStart, kind: 'endpoint', label: 'Chain Start' });
+    this.app._liveSnaps = snaps;
     const p = this.app.inferPoint(ev, anchor).p;
     const z = this.app.levelManager.getElevation(this.app.bimOptions.baseLevel);
     return G.v(p.x, p.y, z);
+  }
+  deactivate() {
+    this.app._liveSnaps = []; // wall-end snaps belong to this tool only
+    super.deactivate();
   }
   _height() {
     const o = this.app.bimOptions;
@@ -257,11 +274,16 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
   //     to the neighbor's FAR face (exterior runs corner-to-corner) and the
   //     neighbor's near end retreats to the new wall's near face (its end
   //     cap hides inside the joint — nothing exposed on the facade)
-  // Deep mid-band crossings (T-joins far from both ends) stay untouched.
-  _jointAt(P, myBaseZ, myThickness) {
+  //  3. P lands on the neighbor's band FAR from both ends and the new wall
+  //     CROSSES the band (myDir supplied, >= ~25° to the run) -> T-JOIN:
+  //     only the new wall's cap retreats onto the host's near face — the
+  //     host keeps its geometry and join records (a mid-band cap would
+  //     corrupt its end caps). Without this, a 90° wall drawn off another
+  //     wall's side simply overlaps it with no join at all.
+  _jointAt(P, myBaseZ, myThickness, myDir = null) {
     const app = this.app;
     const tF = myThickness || app.bimOptions.thickness;
-    let bestMiter = null, bestButt = null;
+    let bestMiter = null, bestButt = null, bestT = null;
     for (const ent of app.bim.entities) {
       if (ent.type !== 'wall' || ent.params.closed || !ent.params.base || !ent.params.end) continue;
       const A2 = G.v(...ent.params.base), B2 = G.v(...ent.params.end);
@@ -283,12 +305,23 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
       const tProj = G.dot(q, dir);
       const s = Math.abs(G.dot(q, n));
       const reach = Math.max(ent.params.thickness, tF) + 0.5;
-      if (s <= ent.params.thickness / 2 + 0.02 && tProj > -0.05 && tProj < L + 0.05 && dMin <= reach) {
+      const inBand = s <= ent.params.thickness / 2 + 0.02 && tProj > -0.05 && tProj < L + 0.05;
+      if (inBand && dMin <= reach) {
         if (!bestButt || dMin < bestButt.d)
           bestButt = { ent, side: dEnd <= dStart ? 'end' : 'start', mode: 'butt', d: dMin };
+        continue;
+      }
+      // 3) mid-band crossing far from both ends -> T-join (one-sided)
+      if (myDir && inBand && tProj > 0.02 && tProj < L - 0.02 && dMin > reach) {
+        const cross = Math.abs(-myDir.x * dir.y + myDir.y * dir.x); // |sin| between the runs
+        if (cross > 0.42) {
+          const d = s; // how deep into the band the endpoint sits
+          if (!bestT || d < bestT.d)
+            bestT = { ent, side: dEnd <= dStart ? 'end' : 'start', mode: 'buttTrim', midBand: true, d };
+        }
       }
     }
-    return bestMiter || bestButt || null;
+    return bestMiter || bestButt || bestT || null;
   }
   _commit(r) {
     const app = this.app;
@@ -338,8 +371,9 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
     const joins = { start: null, end: null };
     if (!r.closed && r.kind === 'line') {
       const A = r.pts[0], B = r.pts[r.pts.length - 1];
-      joins.start = this._jointAt(A, A.z, app.bimOptions.thickness);
-      joins.end = this._jointAt(B, A.z, app.bimOptions.thickness);
+      const run = G.norm(G.sub(G.v(B.x, B.y, 0), G.v(A.x, A.y, 0)));
+      joins.start = this._jointAt(A, A.z, app.bimOptions.thickness, run);
+      joins.end = this._jointAt(B, A.z, app.bimOptions.thickness, run);
       if (joins.start || joins.end) {
         const jv = j => j ? { id: j.ent.id, mode: j.mode } : 0;
         const previewParams = {
@@ -407,6 +441,16 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
       for (const side of ['start', 'end']) {
         const j = joins[side];
         if (!j) continue;
+        // T-JOIN (mid-band): ONE-SIDED — only this wall's cap retreats onto
+        // the host's near face. The host's joins stay untouched (a mid-band
+        // entry would corrupt its end caps) and so does its geometry, so
+        // there is nothing to dry-run or rebuild on its side.
+        if (j.midBand) {
+          const snapMine = JSON.stringify(ent.params.joins || 0);
+          ent.params.joins[side] = { id: j.ent.id, mode: 'buttTrim' };
+          undo.push(() => { ent.params.joins = JSON.parse(snapMine); });
+          continue;
+        }
         // butt on the wrapping wall's side, buttTrim on the trimmed one;
         // miter is symmetric
         const myMode = j.mode;
@@ -430,7 +474,7 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
       }
       for (const side of ['start', 'end']) {
         const j = joins[side];
-        if (!j) continue;
+        if (!j || j.midBand) continue;
         app.transaction.run('wall join', () => app.bim.rebuildWallWithHosts(j.ent.id, false));
       }
     }
