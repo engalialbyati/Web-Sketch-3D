@@ -399,6 +399,9 @@ class Viewport {
   }
   setEdges(on) { this.edgeLines.visible = on; this.selEdges.visible = on; }
   setGrid(on) { this.grid.visible = on; this.ground.visible = on; }
+  // the 1 m reference grid follows the ACTIVE BASE LEVEL — the plane being
+  // drawn on. Level 0 remains the world ground (terrain veil + shadows).
+  setGridLevel(z) { this.grid.position.z = +z || 0; }
   setAxes(on) { this.axesGroup.visible = on; }
 
   // Vertical level reference planes (Precise Drawing mode). Each level gets a

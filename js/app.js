@@ -2468,13 +2468,21 @@ class App {
       this.levelManager.levels.map(l => opt(l.id, `Up to ${l.name} (${l.elevation.toFixed(2)} m)`, l.id === this.bimOptions.topConstraint)).join('');
     if (!base.dataset.bound) {
       base.dataset.bound = '1';
-      base.addEventListener('change', () => { this.bimOptions.baseLevel = base.value; });
+      base.addEventListener('change', () => {
+        this.bimOptions.baseLevel = base.value;
+        // the 1 m reference grid lives at the ACTIVE base level
+        if (this.view && this.view.setGridLevel)
+          this.view.setGridLevel(this.levelManager.getElevation(base.value));
+      });
       top.addEventListener('change', () => {
         this.bimOptions.topConstraint = top.value;
         el('opt-height').disabled = top.value !== 'unconnected';
       });
     }
     el('opt-height').disabled = this.bimOptions.topConstraint !== 'unconnected';
+    // level edits (rename/elevation/undo/model load) re-seat the grid too
+    if (this.view && this.view.setGridLevel)
+      this.view.setGridLevel(this.levelManager.getElevation(this.bimOptions.baseLevel));
   }
   onLevelsChanged() {
     this._refreshLevelDropdowns();
