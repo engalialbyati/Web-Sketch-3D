@@ -396,13 +396,24 @@ class LevelManager {
 // the model (model.bimEntities) for undo/save round-trips.
 // ---------------------------------------------------------------------------
 class BimEntityManager {
-  constructor(model) { this.model = model; }
+  constructor(model) { this.model = model; this._idHwm = {}; }
   get entities() { return this.model.bimEntities; }
   _nextId(type) {
-    let n = 1;
+    // MONOTONIC — ids are never recycled. Split pieces carry the ORIGINAL
+    // element's id as their merge lineage (p.merge.group), so a recycled id
+    // would let a NEW element inherit a dead element's split pieces — the
+    // "my wall merged with a random element" bug class. The scan re-seeds
+    // the high-water mark for loaded models; the floor keeps it rising.
     const prefix = type + '_';
-    while (this.entities.some(e => e.id === prefix + n)) n++;
-    return prefix + n;
+    let max = this._idHwm[type] || 0;
+    for (const e of this.entities) {
+      if (typeof e.id === 'string' && e.id.startsWith(prefix)) {
+        const n = parseInt(e.id.slice(prefix.length), 10);
+        if (Number.isFinite(n) && n > max) max = n;
+      }
+    }
+    this._idHwm[type] = max + 1;
+    return prefix + (max + 1);
   }
   // Registers a parametric entity and stamps metadata on its B-Rep.
   // roles: map faceId -> 'top'|'exterior'|'interior'|'start_cap'|'end_cap'|'bottom'
@@ -1438,6 +1449,11 @@ class BimEntityManager {
       Math.abs(t0 - s[0]) < 1e-6 && Math.abs(t1 - s[1]) < 1e-6);
     const members = [];
     for (const e of [...this.entities]) {
+      // LINEAGE ISOLATION: merge.group is the ORIGINAL element's id, and
+      // only pieces of that one lineage may ever fuse or heal with each
+      // other. Different elements may JOIN (parametric joins records) but
+      // never merge — and because ids are monotonic (never recycled), a
+      // lineage id can never collide with a foreign element's id.
       if (e.type !== 'wall' || !e.params || !e.params.merge || e.params.merge.group !== mg.group) continue;
       const q = e.params;
       if (!q.base || !q.end) continue;
@@ -5335,6 +5351,10 @@ class App {
         : `<span>${(info && info.typeName) || '—'}</span>`;
       const lvl = ent.params && ent.params.baseLevel ? this.levelManager.getLevel(ent.params.baseLevel) : null;
       const p = ent.params || {};
+      // lineage badge: this element is a PIECE of a split original — it
+      // fuses/heals only within its own lineage (pieces of wall_7 never
+      // merge with wall_9, however perfectly they touch)
+      const lineage = p.merge && p.merge.group ? p.merge.group : null;
       const rows = [];
       if (lvl) rows.push(['Base Level', lvl.name]);
       if (p.height != null && ent.type !== 'door' && ent.type !== 'window') rows.push(['Height', fmtLen(p.height)]);
@@ -5343,6 +5363,7 @@ class App {
       if (p.locationLine) rows.push(['Location Line', { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face' }[p.locationLine] || p.locationLine]);
       el.innerHTML = `
         <div class="gi-name"><span class="gi-cat">${(info && info.categoryName) || ent.type}</span> <span class="gi-eid">${ent.id}</span></div>
+        ${lineage ? `<div class="stats dim">Piece of ${lineage} — heals only within this lineage</div>` : ''}
         <div class="stats">${fam}</div>
         <div class="gi-typerow"><span class="gi-tylab">Type</span>${typeOpts}</div>
         <div class="stats">${q.faces} faces · ${q.openings > 0.0005

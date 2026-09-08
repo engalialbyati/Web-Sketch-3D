@@ -262,6 +262,45 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
+  // ------------------------------------------- lineage isolation (unique IDs)
+  test('element ids are NEVER recycled after a delete', () => {
+    const w = makeWorld();
+    const a = buildWall(w, [0, 0, 0], [4, 0, 0]);
+    const b = buildWall(w, [10, 0, 0], [14, 0, 0]);
+    eq(a.id, 'wall_1', 'first wall');
+    eq(b.id, 'wall_2', 'second wall');
+    w.bim.detach(b.id);
+    const c = buildWall(w, [20, 0, 0], [24, 0, 0]);
+    eq(c.id, 'wall_3', 'the deleted wall_2\'s id is never handed out again '
+      + '(a recycled id would let a new element inherit a dead lineage\'s split pieces)');
+  });
+
+  test('two touching collinear walls never cross-merge — each heals within its own lineage', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [4, 0, 0]);   // wall_1
+    buildWall(w, [4, 0, 0], [8, 0, 0]);  // wall_2 — end meets wall_1's end
+    runDirty(w);
+    // a column lands exactly on the seam: BOTH walls get bitten at the
+    // crossing — each into its own lineage's piece(s)
+    const col = buildColumn(w, 4, 0, 0);
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    ok(walls.length >= 2, 'walls alive after the bite');
+    const groups = new Set(walls.map(e => e.params.merge && e.params.merge.group));
+    ok(groups.has('wall_1') && groups.has('wall_2'), 'each wall keeps its own lineage: ' + [...groups]);
+    eq(groups.size, 2, 'exactly two lineages — never one shared group');
+    // the column leaves: each lineage heals WITHIN itself — still two walls,
+    // never one fused [0,8] element (the "merged with a random element" bug)
+    w.bim.detach(col.id);
+    runDirty(w);
+    const after = w.bim.entities.filter(e => e.type === 'wall');
+    eq(after.length, 2, 'still exactly two walls after the heal');
+    const spans = after.map(e => [+e.params.base[0].toFixed(2), +e.params.end[0].toFixed(2)]).sort();
+    eq(JSON.stringify(spans), JSON.stringify([[0, 4], [4, 8]]), 'each healed to its own original span');
+    ok(!after.some(e => e.params.merge), 'healed walls are whole again (no merge records)');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
   test('three pieces: removing ONE column merges only its neighbors', () => {
     const w = makeWorld();
     buildWall(w, [0, 0, 0], [8, 0, 0]);
