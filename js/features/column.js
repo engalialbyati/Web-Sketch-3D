@@ -48,7 +48,7 @@
       const top = app.bimOptions.topConstraint !== 'unconnected'
         ? (app.levelManager.getLevel(app.bimOptions.topConstraint) || {}).name
         : `+${(app.bimOptions.unconnectedHeight || s.height || 3).toFixed(1)} m (unconnected)`;
-      return `Column${fam ? ' (' + fam.name + ')' : ''}: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere to place it freely. Snapping a wall/beam CENTERLINE rotates the column to run parallel with it; type an angle (e.g. 45) for an explicit rotation (Esc clears it). Family + size on the Options Bar, more designs in the Families panel.`;
+      return `Column${fam ? ' (' + fam.name + ')' : ''}: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere freely. ANGLE on the options bar sets an explicit rotation; PARALLEL (checked) aligns a snapped column with its host wall/beam. Family + size on the Options Bar, more designs in the Families panel.`;
     }
     /** Family params (normalized) carried in feature state; the Options Bar
      *  edits width/depth/height, the Families panel fills the extras. */
@@ -130,12 +130,16 @@
       view.stickyLabel(G.v(p.x, p.y, z1),
         `${fam ? fam.name + ' ' : ''}${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${(z1 - z0).toFixed(1)} m${rotDeg ? ` · ${rotDeg.toFixed(0)}°` : ''} (Z ${z0.toFixed(2)}…${z1.toFixed(2)})${under ? ' — head under slab' : ''}`, '#0a5f61', 0, 0);
     }
-    // PLAN ROTATION: an explicit typed angle wins; otherwise a centerline
-    // snap aligns the column WITH the host wall/beam axis (parallel
-    // placement — square cuts, no wedge slivers); free clicks stay at 0°
+    // PLAN ROTATION — the Options Bar is the source of truth:
+    //   Angle box  : an explicit rotation for every placement (empty = auto)
+    //   Parallel ✓ : snapped placements align with the host wall/beam axis
+    // Free clicks with no angle stay at 0°. (Measurements-box typing and
+    // Esc write into the same Angle box.)
     _rotAt(inf) {
-      if (this.state && this.state.rotationDeg != null) return this.state.rotationDeg * Math.PI / 180;
-      if (inf && inf.kind === 'centerline' && inf.dir) return Math.atan2(inf.dir.y, inf.dir.x);
+      const o = this.app.bimOptions || {};
+      if (o.rotationDeg != null && isFinite(o.rotationDeg)) return o.rotationDeg * Math.PI / 180;
+      if (o.parallel !== false && inf && inf.kind === 'centerline' && inf.dir)
+        return Math.atan2(inf.dir.y, inf.dir.x);
       return 0;
     }
     onDown(ev) {
@@ -208,21 +212,23 @@
         + (params.gridRef ? ` at grid ${inf.a.name}-${inf.b.name} — moves with the grids` : ''));
     }
     onVCB(text) {
-      // typed angle = explicit rotation override for the next placement
-      // (parseAngle returns RADIANS — normalize to signed degrees here)
+      // typing an angle arms the Options Bar's Angle box (single source)
       const aRad = (typeof parseAngle === 'function') ? parseAngle(text) : parseFloat(text) * Math.PI / 180;
       if (aRad == null || !isFinite(aRad)) return false;
       let d = ((aRad * 180 / Math.PI) % 360 + 360) % 360;
       if (d > 180) d -= 360;
-      this.state = this.state || {};
-      this.state.rotationDeg = d;
-      this.app.setStatus(`Column rotation ${d.toFixed(0)}° — click to place. Esc = back to auto (parallel to the snapped element)`);
+      const box = document.getElementById('opt-rotation');
+      if (box) { box.value = d; }
+      this.app.bimOptions.rotationDeg = d;
+      this.app.setStatus(`Column rotation ${d.toFixed(0)}° — click to place. Esc = back to automatic`);
       return true;
     }
     onKey(ev) {
-      if (ev.key === 'Escape' && this.state && this.state.rotationDeg != null) {
-        this.state.rotationDeg = null;
-        this.app.setStatus('Column rotation: AUTO — snapping a wall/beam centerline aligns with it');
+      if (ev.key === 'Escape' && this.app.bimOptions && this.app.bimOptions.rotationDeg != null) {
+        this.app.bimOptions.rotationDeg = null;
+        const box = document.getElementById('opt-rotation');
+        if (box) box.value = '';
+        this.app.setStatus('Column rotation: automatic — Parallel snaps align with the host element');
         return true;
       }
       return false;

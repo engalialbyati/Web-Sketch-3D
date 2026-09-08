@@ -2147,6 +2147,8 @@ class App {
       thickness: 0.20,
       locationLine: 'centerline',   // 'centerline' | 'exterior' | 'interior'
       chain: true,
+      rotationDeg: null,            // explicit element angle (°) — null = automatic
+      parallel: true,               // snapped placements align with the host element
       // contextual Draw palette (DrawPrimitiveEngine)
       primitive: 'line',            // line|rect|polygon|circle|arc_ser|arc_ce|fillet|pick
       convertMode: 'slab',          // Free->BIM conversion: 'slab' | 'wall'
@@ -2287,6 +2289,16 @@ class App {
     });
     el('opt-thickness').addEventListener('change', () => {
       this.bimOptions.thickness = parseFloat(el('opt-thickness').value) || 0.20;
+    });
+    // element rotation: a typed angle wins everywhere; empty = automatic
+    // (Parallel checked: snapped placements follow the host element's axis)
+    el('opt-rotation').addEventListener('input', () => {
+      const raw = el('opt-rotation').value.trim();
+      const v = raw === '' ? null : parseFloat(raw);
+      this.bimOptions.rotationDeg = (v != null && isFinite(v)) ? v : null;
+    });
+    el('opt-parallel').addEventListener('change', () => {
+      this.bimOptions.parallel = el('opt-parallel').checked;
     });
     el('opt-locline').addEventListener('change', () => {
       this.bimOptions.locationLine = el('opt-locline').value;
