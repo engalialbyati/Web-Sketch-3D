@@ -500,8 +500,13 @@ class BimEntityManager {
     }
     return { faces: nf, edges: ne };
   }
-  create(type, params, faceRoles, edgeIds = []) {
+  create(type, params, faceRoles, edgeIds = [], opts = {}) {
     const ent = this._createInner(type, params, faceRoles, edgeIds);
+    // joined-wall PRE-REGISTRATION opts in before anything below can run:
+    // this create fires app.opDone at its end, whose empty-faces reap would
+    // detach the not-yet-extruded entity on the spot (the 90° corner wall
+    // that rendered but never appeared in the browser — an orphan)
+    if (ent && opts.pending) ent._pending = true;
     if (ent) this._markHostsDirty(ent);
     // a NEW wall must respect the face rule from birth: drawn through a
     // standing column/beam, opDone plan-trims it immediately (a wall
@@ -5857,15 +5862,21 @@ class App {
       dirty.sort((a, b) => (order[(this.bim.getEntityById(a) || {}).type] ?? 3)
         - (order[(this.bim.getEntityById(b) || {}).type] ?? 3));
       let failed = 0;
+      const deferred = [];
       for (const wid of dirty) {
         const ent = this.bim.getEntityById(wid);
         if (!ent) continue;
+        // mid-commit (joined wall pre-registration): its own tool is still
+        // building — queue it for the NEXT opDone instead of trimming a
+        // half-born wall against structure
+        if (ent._pending) { deferred.push(wid); continue; }
         let ok = true;
         if (ent.type === 'wall') ok = this.bim.planTrimWall(wid);
         else if (ent.type === 'beam') ok = this.bim.planTrimBeam(wid);
         else if (ent.type === 'column') ok = this.bim.rebuildColumnEntity(wid);
         if (!ok) failed++;
       }
+      for (const wid of deferred) this.bim._hostsDirty.add(wid);
       // a failed regeneration already deleted the entity's faces — the
       // parametric rebuild is the guaranteed recovery (params are truth)
       if (failed) {

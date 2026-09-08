@@ -428,7 +428,10 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
     // no wedge gap, no overlap, no exposed end caps.
     let ent = null;
     if (joins.start || joins.end) {
-      ent = app.bim.create('wall', wallParams, {}, []);
+      // {pending}: flagged INSIDE create, before its own closing opDone —
+      // the empty-faces reap there used to detach the pre-registration on
+      // the spot (corner walls rendered but never became elements)
+      ent = app.bim.create('wall', wallParams, {}, [], { pending: true });
       // the join transaction fires opDone BEFORE this wall is extruded —
       // the empty-faces sweep there would reap the pre-registration
       ent._pending = true;

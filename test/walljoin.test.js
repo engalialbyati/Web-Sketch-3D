@@ -105,6 +105,30 @@ module.exports = h => {
     ok(!w.toasts.some(t => t.isErr), 'no error toasts: ' + JSON.stringify(w.toasts.map(t => t.msg)));
   });
 
+  test('a 90° corner wall survives create-time opDone (the orphan-faces regression)', () => {
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [4, 0, 0]);
+    // the REAL app: BimEntityManager.create fires app.opDone at its end, and
+    // App.opDone reaps entities whose faces are all dead. The joined wall
+    // PRE-REGISTERS empty (it extrudes a few statements later) — before the
+    // {pending} flag, create's own opDone reaped it on the spot: the corner
+    // wall rendered but never entered the registry (orphan wall_2 faces).
+    sandbox.window.app = w.app;
+    w.app.opDone = () => {
+      for (const e of [...w.bim.entities]) {
+        if (e._pending) continue; // mid-commit pre-registration
+        if (!e.faces.some(id => w.m.faces.has(id))) w.bim.detach(e.id);
+      }
+    };
+    const n = w.bim.entities.length;
+    commit(w, [4, 0, 0], [4, 3, 0]); // chained 90° corner
+    eq(w.bim.entities.length, n + 1, 'corner wall STAYED registered through create-time opDone');
+    const last = w.bim.entities[w.bim.entities.length - 1];
+    ok(last.faces.length > 0 && last.faces.every(id => w.m.faces.has(id)), 'corner wall owns live geometry');
+    ok(w.m.validate().ok, 'model valid');
+    ok(!w.toasts.some(t => t.isErr), 'no error toasts');
+  });
+
   test('closing a square loop of four walls commits with all corners joined', () => {
     const w = makeWorld();
     buildWall(w, [0, 0, 0], [4, 0, 0]);
