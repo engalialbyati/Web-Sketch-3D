@@ -9,7 +9,9 @@ class SelectTool extends Tool {
   get hint() {
     if (this._awaitLen) return 'Wall length: type the new length + Enter (Esc cancels).';
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
-    return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : `Select: click an edge or face. Drag = window select. Shift adds. Double-click a face selects its border too.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`;
+    return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : (this.app.mode === 'bim'
+      ? `Select: click selects whole ELEMENTS. Drag = window select (elements too). Faces and edges are selectable in Free Drawing — Measure Area still picks faces.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`
+      : `Select: click an edge or face. Drag = window select. Shift adds. Double-click a face selects its border too.`);
   }
   // ---- Revit shape handles for selected parametric walls -------------------
   _wallSel() {
@@ -362,6 +364,24 @@ class SelectTool extends Tool {
       const crossing = q.x < this._bandStart.x;
       const picked = this._collect(x0, y0, x1, y1, crossing);
       app.bandGroupMerge(picked, crossing, (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
+      if (app.mode === 'bim' && !app._eip) {
+        // PRECISE DRAWING: the window resolves to whole ELEMENTS — stamped
+        // faces expand to their element's full face set; unstamped faces
+        // and raw edges drop out (sub-geometry lives in Free mode)
+        const ids = new Set();
+        for (const fid of picked.faces) {
+          const f2 = app.model.faces.get(fid);
+          const ent2 = f2 && app.bim.getEntityForFace(f2);
+          if (ent2) ids.add(ent2.id);
+        }
+        const faces = new Set();
+        for (const id2 of ids) {
+          const ent3 = app.bim.getEntityById(id2);
+          if (ent3) for (const fid of ent3.faces) if (app.model.faces.has(fid)) faces.add(fid);
+        }
+        picked.faces = faces;
+        picked.edges = new Set();
+      }
       if (this._mod) app.toggleEntities(picked);
       else { app.sel = picked; app.onSelectionChanged(); }
       // grid lines join the window selection: fully inside (window) or
@@ -388,12 +408,23 @@ class SelectTool extends Tool {
           if (this._mod) app.selectElement(ent.id, 'toggle');
           else {
             app.selectElement(ent.id);
-            app.setStatus(`${ent.type} ${ent.id} selected — hold Ctrl (or Tab) to query its faces (m²) and edges (m)`);
+            app.setStatus(`${ent.type} ${ent.id} selected${app.mode === 'bim'
+              ? ' — faces and edges are selectable in Free Drawing (Measure Area still picks faces)'
+              : ' — hold Ctrl (or Tab) to query its faces (m²) and edges (m)'}`);
           }
+        } else if (app.mode === 'bim' && !app._eip) {
+          // PRECISE DRAWING: never a raw face — an unstamped face (or a
+          // Ctrl/Tab query) is empty space here. Faces and edges are
+          // selectable in FREE mode; Measure Area picks faces through its
+          // own tool; Edit In Place keeps sub-element access while open.
+          if (!this._mod) app.clearSelection();
         } else if (this._mod) app.toggleEntities({ edges: new Set(), faces: new Set([pick.face]) });
         else { app.sel = { edges: new Set(), faces: new Set([pick.face]) }; app.onSelectionChanged(); }
       } else if (pick.edges && pick.edges.length) {
-        if (this._mod) app.toggleEntities({ edges: new Set(pick.edges), faces: new Set() });
+        if (app.mode === 'bim' && !app._eip) {
+          // PRECISE DRAWING: edges are Free-mode targets — never selected here
+          if (!this._mod) app.clearSelection();
+        } else if (this._mod) app.toggleEntities({ edges: new Set(pick.edges), faces: new Set() });
         else { app.sel = { edges: new Set(pick.edges), faces: new Set() }; app.onSelectionChanged(); }
       } else if (!this._mod) {
         app.clearSelection();
@@ -435,6 +466,7 @@ class SelectTool extends Tool {
       const ent = f && app.bim.getEntityForFace(f);
       // double-clicking a BIM element opens the in-place Edit Mode sandbox
       if (ent && !ev.ctrlKey && !app._eip) { app.enterEditInPlace(ent.id); return; }
+      if (app.mode === 'bim' && !app._eip) return; // Precise Drawing: no raw faces (border-select lives in Free mode)
       const edges = new Set();
       for (const ring of app.model.rings(f)) {
         for (let i = 0; i < ring.length; i++) {
