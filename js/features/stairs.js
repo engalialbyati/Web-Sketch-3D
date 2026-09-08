@@ -241,7 +241,9 @@
     };
     if (params.handrail !== false) {
       for (const fl of plan.flights) {
-        const sA = fl.s0 + fl.ds * plan.tread, sB = fl.s0 + fl.ds * plan.tread * fl.count;
+        // rail endpoints pulled 2 cm inside the flight — an end exactly ON a
+        // step vertex welds the stringer ring into a self-touching loop
+        const sA = fl.s0 + fl.ds * (plan.tread + 0.02), sB = fl.s0 + fl.ds * (plan.tread * fl.count - 0.02);
         const zA = fl.z0 + plan.riser + RAIL_H, zB = fl.z0 + plan.riser * fl.count + RAIL_H;
         railRun({ s: sA, off: fl.off + 0.06, z: zA }, { s: sB, off: fl.off + 0.06, z: zB });
         railRun({ s: sA, off: fl.off + plan.width - 0.06, z: zA }, { s: sB, off: fl.off + plan.width - 0.06, z: zB });
@@ -249,9 +251,9 @@
       if (plan.landingRect) {
         const lr = plan.landingRect;
         const z = lr.z + RAIL_H;
-        railRun({ s: lr.s0, off: lr.off0 + 0.06, z }, { s: lr.s1, off: lr.off0 + 0.06, z });
-        railRun({ s: lr.s0, off: lr.off1 - 0.06, z }, { s: lr.s1, off: lr.off1 - 0.06, z });
-        railRun({ s: lr.s1 - 0.06, off: lr.off0 + 0.06, z }, { s: lr.s1 - 0.06, off: lr.off1 - 0.06, z });
+        railRun({ s: lr.s0 + 0.02, off: lr.off0 + 0.06, z }, { s: lr.s1 - 0.02, off: lr.off0 + 0.06, z });
+        railRun({ s: lr.s0 + 0.02, off: lr.off1 - 0.06, z }, { s: lr.s1 - 0.02, off: lr.off1 - 0.06, z });
+        railRun({ s: lr.s1 - 0.08, off: lr.off0 + 0.06, z }, { s: lr.s1 - 0.08, off: lr.off1 - 0.06, z });
       }
     }
 
@@ -465,44 +467,68 @@
     }
     get hint() {
       const s = this.state || {};
-      if (!this.host)
-        return `Stairs (${s.run === 'u' ? 'Dog-Leg U' : 'Straight Run'}): click the floor or slab the stair arrives at — the app cuts the opening in it and the flight rises the story from the level below. Width, riser and tread on the Options Bar; types in the Element Browser.`;
-      return `Stairs: drag to set the run direction, click to place — ${(num(s.width, 1.2)).toFixed(2)} m flight, ${s.run === 'u' ? 'dog-leg with landing' : 'straight run'}. Esc restarts.`;
+      return `Stairs (${s.run === 'u' ? 'Dog-Leg U' : 'Straight Run'}): click the stair's START point at the Base Level — the wireframe rises to the Top Constraint level and the stairwell is cut in that level's floor. Base Level and Top Constraint on the Options Bar; width, riser, tread, handrail too.`;
     }
-    // the host floor under the cursor (object pick: only BIM elements)
-    _hostAt(ev) {
-      const app = this.app;
-      if (!app.view.pickElementAt) { this._refusal = 'element picking unavailable'; return null; }
-      const ep = app.view.pickElementAt(app.view.eventPt(ev));
-      if (!ep) { this._refusal = 'no element under the cursor — click a floor or slab'; return null; }
-      const ent = app.bim.getEntityById(ep.entityId);
-      if (!ent || (ent.type !== 'floor' && ent.type !== 'slab')) {
-        this._refusal = `that is a ${ent ? ent.type : 'element'} — stairs host on floors and slabs`;
-        return null;
-      }
-      if (!Array.isArray(ent.params && ent.params.regions) || !ent.params.regions.length) {
-        this._refusal = 'that floor has no sketch regions to cut';
+    // the story comes from the OPTIONS BAR — Base Level → Top Constraint
+    // (the Revit flow). The old behavior derived the story from whatever
+    // floor was clicked, which silently ignored the Top Constraint.
+    _levelsFor() {
+      const app = this.app, lm = app.levelManager;
+      const bo = app.bimOptions || {};
+      const baseId = bo.baseLevel != null ? bo.baseLevel : null;
+      const topC = bo.topConstraint;
+      const zBase = baseId != null && lm ? lm.getElevation(baseId) : 0;
+      const zTop = topC && topC !== 'unconnected' && lm ? lm.getElevation(topC)
+        : zBase + Math.max(0.5, num(bo.unconnectedHeight, 3));
+      if (zTop - zBase < 0.5) {
+        this._refusal = 'Top Constraint must be ABOVE the Base Level';
         return null;
       }
       this._refusal = null;
-      return ent;
+      return {
+        topLevelId: topC && topC !== 'unconnected' ? topC : null,
+        baseLevelId: baseId,
+        zTop, zBase, storyH: zTop - zBase,
+      };
     }
-    // the story the stair rises: from the level below the host's level up to
-    // the host's plane (slabs hang DOWN from their level — its top IS the
-    // level plane the stair arrives at). Without a lower level the options
-    // bar's Unconnected Height stands in.
-    _levelsFor(host) {
+    // the HOST floor — the slab AT the Top Constraint level whose outline
+    // contains the clicked plan point (the stairwell is cut in it)
+    _hostFloorAt(p, zTop) {
       const app = this.app, lm = app.levelManager;
-      const topId = host.params.baseLevel || host.params.levelId || null;
-      const zTop = topId != null && lm ? lm.getElevation(topId)
-        : num(host.params.regions[0].outer[0] && host.params.regions[0].outer[0][2], 0);
-      const below = ((lm && lm.levels) || [])
-        .filter(l => l.elevation < zTop - 1e-6)
-        .sort((a, b) => b.elevation - a.elevation)[0] || null;
-      if (below)
-        return { topLevelId: topId, baseLevelId: below.id, zTop, zBase: below.elevation, storyH: zTop - below.elevation };
-      const h = Math.max(0.5, num(app.bimOptions && app.bimOptions.unconnectedHeight, 3));
-      return { topLevelId: topId, baseLevelId: null, zTop, zBase: zTop - h, storyH: h };
+      const name = l => (lm && lm.getLevel ? (lm.getLevel(l) || {}).name : '') || '';
+      for (const e of app.bim.entities) {
+        if ((e.type !== 'floor' && e.type !== 'slab') || !Array.isArray(e.params && e.params.regions)) continue;
+        const lvlId = e.params.baseLevel || e.params.levelId || null;
+        const z = lvlId != null && lm ? lm.getElevation(lvlId)
+          : num(e.params.regions[0].outer[0] && e.params.regions[0].outer[0][2], NaN);
+        if (!isFinite(z) || Math.abs(z - zTop) > 1e-3) continue;   // only the arrival level's slab
+        for (const r of e.params.regions)
+          if (pointInRing2D(p.x, p.y, r.outer)) { this._refusal = null; return e; }
+      }
+      this._refusal = `no floor at the Top Constraint level (+${zTop.toFixed(2)} m) covers this point — draw the arrival slab there first, move the click onto it, or fix Top Constraint`;
+      return null;
+    }
+    onDown(ev) {
+      if (ev.button !== 0) return;
+      const app = this.app, view = app.view;
+      if (!this.host) {
+        const lv = this._levelsFor();
+        if (!lv) { app.toast(this._refusal || 'Fix the levels on the Options Bar', true); return; }
+        const p = app.inferPoint(ev, null).p;
+        const hostEnt = this._hostFloorAt(p, lv.zTop);
+        if (!hostEnt) { app.toast(this._refusal, true); return; }
+        this.host = { ent: hostEnt, ...lv };
+        this.base = { x: p.x, y: p.y };
+        this.dir = { x: 1, y: 0 };
+        view.setHoverFace(null);
+        view.clearPreview();
+        const from = lv.baseLevelId && app.levelManager.getLevel(lv.baseLevelId);
+        const to = lv.topLevelId && app.levelManager.getLevel(lv.topLevelId);
+        app.setStatus(`Start pinned at ${fmtLen(lv.storyH)} below ${hostEnt.id} — the flight rises from ${from ? from.name : '+' + lv.zBase.toFixed(2)} to ${to ? to.name : '+' + lv.zTop.toFixed(2)} and the opening is cut in the arrival floor. Drag the run direction, click to place (Esc restarts).`);
+        return;
+      }
+      this._setDir(app.inferPoint(ev, null).p);
+      this._commit();
     }
     // the placement params the preview and the commit share
     _params() {
@@ -531,15 +557,18 @@
       const app = this.app, view = app.view;
       view.clearPreview();
       if (!this.host) {
-        const ent = this._hostAt(ev);
-        if (!ent) {
-          const q = view.eventPt(ev);
-          view.hudLabel(q.x, q.y - 18, '⛔  ' + this._refusal, '#b91c1c');
-          view.setHoverFace(null);
-          return;
-        }
-        const ep = view.pickElementAt(view.eventPt(ev));
-        view.setHoverFace(ep && ep.faceId != null ? ep.faceId : null);
+        // idle: invite the base-level start click — the story comes from the
+        // Options Bar (Base Level → Top Constraint), no host pick yet
+        const q = view.eventPt(ev);
+        const lv = this._levelsFor();
+        const lm = app.levelManager;
+        const from = lv && lv.baseLevelId && lm.getLevel ? (lm.getLevel(lv.baseLevelId) || {}).name : '';
+        const to = lv && lv.topLevelId && lm.getLevel ? (lm.getLevel(lv.topLevelId) || {}).name : '';
+        view.hudLabel(q.x, q.y - 18,
+          lv ? `🪜  click the stair START at ${from || '+' + lv.zBase.toFixed(2)} — rises ${fmtLen(lv.storyH)} to ${to || '+' + lv.zTop.toFixed(2)}`
+             : '⛔  ' + (this._refusal || 'fix Base Level / Top Constraint'),
+          lv ? '#0a5f61' : '#b91c1c');
+        view.setHoverFace(null);
         return;
       }
       view.setHoverFace(null);
@@ -566,27 +595,6 @@
         plan.warnings.length ? '#b45309' : '#0a5f61', 0, -14);
       if (plan.warnings.length)
         view.stickyLabel(G.v(cx, cy, zTop), '⚠ ' + plan.warnings.join(' · '), '#b45309', 0, -34);
-    }
-    onDown(ev) {
-      if (ev.button !== 0) return;
-      const app = this.app, view = app.view;
-      if (!this.host) {
-        const ent = this._hostAt(ev);
-        if (!ent) { app.toast(this._refusal || 'Click a floor or slab to host the stair', true); return; }
-        const lv = this._levelsFor(ent);
-        const p = app.inferPoint(ev, null).p;
-        this.host = { ent, ...lv };
-        this.base = { x: p.x, y: p.y };
-        this.dir = { x: 1, y: 0 };
-        view.setHoverFace(null);
-        view.clearPreview();
-        const from = lv.baseLevelId && app.levelManager.getLevel(lv.baseLevelId);
-        const to = lv.topLevelId && app.levelManager.getLevel(lv.topLevelId);
-        app.setStatus(`Host: ${ent.id} — the opening will be cut in it; the flight rises ${fmtLen(lv.storyH)} from ${from ? from.name : 'below'} to ${to ? to.name : 'the host plane'}. Drag the run direction, click to place (Esc restarts).`);
-        return;
-      }
-      this._setDir(app.inferPoint(ev, null).p);
-      this._commit();
     }
     onKey(ev) {
       if ((ev.key || '').toLowerCase() === 'escape' && this.host) {
