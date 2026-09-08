@@ -183,7 +183,7 @@ const TOOL_DEFS = {
     'sep',
     { id: 'door', label: 'Door', key: '' },
     { id: 'window', label: 'Window', key: '' },
-    { id: 'opening', label: 'Wall Opening', key: '' },
+    { id: 'opening', label: 'Opening', key: '' },
     'sep',
     { id: 'pushpull', label: 'Push/Pull', key: 'P' },
     { id: 'move', label: 'Move', key: 'M' },
@@ -1791,6 +1791,81 @@ class BimEntityManager {
     return true;
   }
 
+  // ------------------------------------------------------ floor openings
+  // Regenerate a floor/slab FROM ITS PARAMS (regions with holes — params
+  // are truth). Used when an opening is cut or removed.
+  rebuildFloorEntity(id) {
+    const ent = this.getEntityById(id);
+    if (!ent || (ent.type !== 'floor' && ent.type !== 'slab') || !ent.params.regions) return false;
+    const m = this.model;
+    m.bimHold = true;
+    for (const fid of [...ent.faces]) m.faces.delete(fid);
+    for (const eid of [...ent.edges]) m.edges.delete(eid);
+    m.gc();
+    m.reapOrphanEdges();
+    for (const f2 of m.faces.values()) {
+      m.edgesForRing(f2.loop, true);
+      for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
+    }
+    const th = ent.params.thickness || 0.2;
+    const before = new Set(m.faces.keys());
+    for (const r of ent.params.regions) {
+      const f = m.addFaceFromRings(r.outer.map(q => G.v(q[0], q[1], q[2])),
+        (r.holes || []).map(h => h.map(q => G.v(q[0], q[1], q[2]))));
+      if (f) m.pushPull(f, -th);
+    }
+    const made = [...m.faces.keys()].filter(fid => !before.has(fid)).map(fid => m.faces.get(fid));
+    ent.faces = made.map(f => f.id);
+    ent.edges = [];
+    for (const f of made) f.userData = { bimEntityId: id, bimType: ent.type, role: 'body' };
+    m.bimHold = false;
+    return ent.faces.length > 0;
+  }
+  // Cut a rectangular plan opening in a floor/slab: the ring is recorded in
+  // the host's params.regions[].holes (the parametric truth — rebuilds,
+  // saves and loads keep it) and the geometry regenerates with the hole.
+  placeFloorOpening(hostId, cx, cy, w, h) {
+    const host = this.getEntityById(hostId);
+    if (!host || !host.params || !Array.isArray(host.params.regions)) return null;
+    // which region contains the point? (ray-cast point-in-polygon)
+    let idx = -1;
+    host.params.regions.forEach((r, i) => {
+      if (idx >= 0 || !r.outer || r.outer.length < 3) return;
+      let inside = false;
+      for (let a = 0, b = r.outer.length - 1; a < r.outer.length; b = a++) {
+        const pa = r.outer[a], pb = r.outer[b];
+        if ((pa[1] > cy) !== (pb[1] > cy)
+          && cx < (pb[0] - pa[0]) * (cy - pa[1]) / (pb[1] - pa[1]) + pa[0]) inside = !inside;
+      }
+      if (inside) idx = i;
+    });
+    if (idx < 0) return null; // clicked outside every region
+    const r = host.params.regions[idx];
+    r.holes = r.holes || [];
+    const z = r.outer[0][2] || 0;
+    r.holes.push([[cx - w / 2, cy - h / 2, z], [cx + w / 2, cy - h / 2, z],
+      [cx + w / 2, cy + h / 2, z], [cx - w / 2, cy + h / 2, z]]);
+    if (!this.rebuildFloorEntity(hostId)) return null;
+    // the opening owns NO faces — the hole belongs to the slab (same
+    // convention as wall openings)
+    return this._createInner('opening', { hostFloorId: hostId, center: [cx, cy, z], width: w, height: h }, {}, []);
+  }
+  // Remove one floor opening's ring from its host and regenerate. Called by
+  // detach for any removal path (Delete key, Eraser, session cleanup).
+  _removeFloorOpeningRing(openEnt) {
+    const host = this.getEntityById(openEnt.params.hostFloorId);
+    if (!host || !Array.isArray(host.params.regions) || !openEnt.params.center) return;
+    const [cx, cy] = openEnt.params.center;
+    for (const r of host.params.regions) {
+      r.holes = (r.holes || []).filter(ring => {
+        const mx = ring.reduce((s, q) => s + q[0], 0) / ring.length;
+        const my = ring.reduce((s, q) => s + q[1], 0) / ring.length;
+        return Math.hypot(mx - cx, my - cy) > 1e-3; // keep the holes that are not ours
+      });
+    }
+    this.rebuildFloorEntity(host.id);
+  }
+
   // Regenerate a column FROM ITS PARAMS — a deleted/moved beam leaves its
   // notch behind otherwise (the beam's sweep cut the column's faces; the
   // column rebuilds whole from base/width/depth/height).
@@ -2095,6 +2170,14 @@ class BimEntityManager {
   detach(id) {
     const ent0 = this.entities.find(e => e.id === id);
     if (ent0) this._markHostsDirty(ent0);
+    // FLOOR OPENINGS: deleting the opening removes its hole from the host
+    // (the slab heals whole); deleting the FLOOR takes its openings along
+    if (ent0 && ent0.type === 'opening' && ent0.params && ent0.params.hostFloorId)
+      this._removeFloorOpeningRing(ent0);
+    if (ent0 && (ent0.type === 'floor' || ent0.type === 'slab')) {
+      for (const h of this.entities.filter(e => e.params && e.params.hostFloorId === id))
+        this.detach(h.id);
+    }
     const i = this.entities.findIndex(e => e.id === id);
     if (i < 0) return false;
     const ent = this.entities[i];
@@ -6060,6 +6143,9 @@ class App {
     for (const ent of [...this.bim.entities]) {
       if (this._eip && ent === this._eip.ent) continue;
       if (ent._pending) continue; // mid-commit pre-registration (joined walls register before extruding)
+      // a FLOOR opening is a pure parametric record — the hole lives in the
+      // host slab's params.regions; the entity owns no B-Rep of its own
+      if (ent.type === 'opening' && ent.params && ent.params.hostFloorId) continue;
       if (!ent.faces.some(id => this.model.faces.has(id))) {
         this.bim.detach(ent.id);
         if (this.db) this.db.deleteElement(ent.id).catch(() => { }); // row follows the entity

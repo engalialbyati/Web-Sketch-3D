@@ -369,7 +369,7 @@
       return {
         typeId: null, familyId: null, categoryId: null,
         typeName: null, familyName: null,
-        categoryName: { wall: 'Wall', slab: 'Slab', floor: 'Floor', door: 'Door', window: 'Window', opening: 'Wall Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation', roof: 'Roof', stairs: 'Stairs' }[ent.type] || ent.type,
+        categoryName: { wall: 'Wall', slab: 'Slab', floor: 'Floor', door: 'Door', window: 'Window', opening: 'Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation', roof: 'Roof', stairs: 'Stairs' }[ent.type] || ent.type,
       };
     }
 

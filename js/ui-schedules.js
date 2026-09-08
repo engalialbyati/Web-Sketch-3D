@@ -33,7 +33,7 @@
   // the first five are the priority-takeoff order (structural first).
   const CAT_NAMES = {
     wall: 'Wall', slab: 'Slab', floor: 'Floor', door: 'Door', window: 'Window',
-    opening: 'Wall Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation',
+    opening: 'Opening', column: 'Column', beam: 'Beam', foundation: 'Foundation',
   };
   const CAT_ORDER = ['column', 'beam', 'slab', 'wall', 'foundation'];
   const catName = t => CAT_NAMES[t] || t;

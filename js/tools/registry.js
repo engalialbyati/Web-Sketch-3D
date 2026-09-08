@@ -16,7 +16,7 @@ const TOOLS = {
   // tools/bim/*
   draw: BimTools.DrawTool, wall: BimTools.WallTool, floor: BimTools.FloorTool,
   convert: BimTools.ConvertTool,
-  door: BimTools.DoorTool, window: BimTools.WindowTool, opening: BimTools.WallOpeningTool,
+  door: BimTools.DoorTool, window: BimTools.WindowTool, opening: BimTools.OpeningTool,
   measurearea: BimTools.MeasureAreaTool,
   // downloaded BlenderKit element types (armed from the Element Browser)
   assetplace: AssetTools.AssetPlaceTool, assetdoor: AssetTools.AssetDoorTool,

@@ -1176,7 +1176,7 @@ class HostedInsertionTool extends Tool {
   static kinds = {
     door: { width: 0.9, height: 2.1, sill: 0.0, label: 'Door' },
     window: { width: 1.2, height: 1.5, sill: 0.9, label: 'Window' },
-    opening: { width: 1.0, height: 2.1, sill: 0.0, label: 'Wall Opening' },
+    opening: { width: 1.0, height: 2.1, sill: 0.0, label: 'Opening' },
   };
   constructor(app, kind) { super(app); this.kind = kind; }
   activate() {
@@ -1532,7 +1532,94 @@ class HostedInsertionTool extends Tool {
 }
 class DoorTool extends HostedInsertionTool { static id = 'door'; constructor(app) { super(app, 'door'); } }
 class WindowTool extends HostedInsertionTool { static id = 'window'; constructor(app) { super(app, 'window'); } }
-class WallOpeningTool extends HostedInsertionTool { static id = 'opening'; constructor(app) { super(app, 'opening'); } }
+// OPENING — the hosted cut generalized: hover a WALL for a wall opening,
+// or a FLOOR/slab for a PLAN opening (stairwell, shaft) — a rectangular
+// hole cut into the slab, recorded in its params.regions[].holes.
+class OpeningTool extends HostedInsertionTool {
+  static id = 'opening';
+  constructor(app) { super(app, 'opening'); }
+  get hint() {
+    return 'Opening: hover a WALL to cut a wall opening, or a FLOOR/slab to cut a plan opening (stairwell, shaft). Type size/sill here or on the Options Bar; Enter places at the hover spot.';
+  }
+  _floorHostAt(ev) {
+    const app = this.app;
+    const fid = app.view.pickFaceAt(app.view.eventPt(ev));
+    if (fid != null) {
+      const f = app.model.faces.get(fid);
+      if (f) {
+        const ent = app.bim.getEntityForFace(f);
+        if (ent && (ent.type === 'floor' || ent.type === 'slab') && Array.isArray(ent.params.regions)) {
+          const n = G.loopNormal(app.model.pts(f.loop));
+          if (!G.isZero(n) && Math.abs(n.z) >= 0.7) return { kind: 'floor', id: ent.id, ent };
+        }
+      }
+    }
+    // raycast fallback (edge-line pixels slip between triangles): the
+    // click's inferred point vs every floor region's boundary
+    let p = null;
+    try { p = app.inferPoint(ev, null).p; } catch (e) { return null; }
+    if (!p) return null;
+    for (const ent of app.bim.entities) {
+      if ((ent.type !== 'floor' && ent.type !== 'slab') || !Array.isArray(ent.params.regions)) continue;
+      for (const r of ent.params.regions) {
+        if (!r.outer || r.outer.length < 3) continue;
+        let inside = false;
+        for (let a = 0, b = r.outer.length - 1; a < r.outer.length; b = a++) {
+          const pa = r.outer[a], pb = r.outer[b];
+          if ((pa[1] > p.y) !== (pb[1] > p.y)
+            && p.x < (pb[0] - pa[0]) * (p.y - pa[1]) / (pb[1] - pa[1]) + pa[0]) inside = !inside;
+        }
+        if (inside) return { kind: 'floor', id: ent.id, ent };
+      }
+    }
+    return null;
+  }
+  _hostAt(ev) { return this._floorHostAt(ev) || super._hostAt(ev); }
+  onMove(ev) {
+    const host = this._staged ? (this._liveHost() || this.host) : this._hostAt(ev);
+    if (host && host.kind === 'floor') {
+      this.host = host;
+      this._staged = false;
+      this._lastEv = ev;
+      const app = this.app, view = app.view;
+      view.clearPreview();
+      view.setHoverFace(null);
+      const inf = app.inferPoint(ev, null);
+      const c = inf.p;
+      const w = this.spec.width, d = this.spec.height; // plan W × D
+      const z = c.z + 0.005;
+      const ring = [
+        G.v(c.x - w / 2, c.y - d / 2, z), G.v(c.x + w / 2, c.y - d / 2, z),
+        G.v(c.x + w / 2, c.y + d / 2, z), G.v(c.x - w / 2, c.y + d / 2, z),
+      ];
+      view.previewLoop(ring, 0x0e8385);
+      view.previewFill([{ outer: ring }], 0x0e8385, 0.3);
+      view.stickyLabel(G.v(c.x, c.y, z), `${fmtLen(w)} × ${fmtLen(d)} plan opening — click to cut`, '#0a5f61', 0, -14);
+      return;
+    }
+    return super.onMove(ev);
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const host = this._hostAt(ev);
+    if (host && host.kind === 'floor') {
+      const app = this.app;
+      const inf = app.inferPoint(ev, null);
+      const c = inf.p;
+      const w = this.spec.width, d = this.spec.height;
+      let ok = false;
+      app.transaction.run('floor opening', () => {
+        const ent = app.bim.placeFloorOpening(host.id, c.x, c.y, w, d);
+        if (!ent) throw new Error('click INSIDE the floor boundary to cut the opening');
+        ok = true;
+      });
+      app.view.clearPreview();
+      if (ok) app.toast(`Floor opening ${fmtLen(w)} × ${fmtLen(d)} cut — select it and press Del to heal the slab`);
+      return;
+    }
+    return super.onDown(ev);
+  }
+}
 
 // Measure Area (Revit's measure panel, Precise Drawing): hover any face —
 // element or free — to read its planar area in m²; click to PIN the
@@ -1606,4 +1693,4 @@ class MeasureAreaTool extends Tool {
   onVCB() { return false; }
 }
 
-window.BimTools = Object.assign(window.BimTools || {}, { WallTool, FloorTool, ConvertTool, DoorTool, WindowTool, WallOpeningTool, HostedCut, HostedInsertionTool, MeasureAreaTool });
+window.BimTools = Object.assign(window.BimTools || {}, { WallTool, FloorTool, ConvertTool, DoorTool, WindowTool, OpeningTool, HostedCut, HostedInsertionTool, MeasureAreaTool });

@@ -209,7 +209,7 @@
   }
 
   function entLabel(ent) {
-    const names = { wall: 'Wall', slab: 'Slab', door: 'Door', window: 'Window', opening: 'Wall Opening', column: 'Column' };
+    const names = { wall: 'Wall', slab: 'Slab', door: 'Door', window: 'Window', opening: 'Opening', column: 'Column' };
     return (names[ent.type] || ent.type) + ' ' + String(ent.id).replace(/^[a-z]+_/, '');
   }
 
