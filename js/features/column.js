@@ -22,16 +22,17 @@
   // pure geometry — unit-testable, no app dependency. Legacy direct builder
   // (extrudes UP from the picked plane); the level-driven path is
   // StructuralManager.buildColumn, used by the tool below.
-  function placeColumn(G, m, p, w, d, h) {
-    const f = m.addFaceFromRings([
-      G.v(p.x - w / 2, p.y - d / 2, p.z), G.v(p.x + w / 2, p.y - d / 2, p.z),
-      G.v(p.x + w / 2, p.y + d / 2, p.z), G.v(p.x - w / 2, p.y + d / 2, p.z),
-    ]);
+  function placeColumn(G, m, p, w, d, h, rot = 0) {
+    // plan rotation about the column center — aligned columns cut walls square
+    const cs = Math.cos(rot), sn = Math.sin(rot);
+    const pc = (lx, ly) => G.v(p.x + lx * cs - ly * sn, p.y + lx * sn + ly * cs, p.z);
+    const f = m.addFaceFromRings([pc(-w / 2, -d / 2), pc(w / 2, -d / 2), pc(w / 2, d / 2), pc(-w / 2, d / 2)]);
     if (!f) return null;
     if (!m.pushPull(f, h)) return null;
+    const R = Math.hypot(w, d); // circumscribed half-extent (rotation-proof filter)
     return [...m.faces.values()].filter(g => {
       const c = m.faceCentroid(g);
-      return c.x > p.x - w && c.x < p.x + w && c.y > p.y - d && c.y < p.y + d
+      return c.x > p.x - R && c.x < p.x + R && c.y > p.y - R && c.y < p.y + R
         && c.z >= p.z - 1e-6 && c.z <= p.z + h + 1e-6;
     });
   }
@@ -47,7 +48,7 @@
       const top = app.bimOptions.topConstraint !== 'unconnected'
         ? (app.levelManager.getLevel(app.bimOptions.topConstraint) || {}).name
         : `+${(app.bimOptions.unconnectedHeight || s.height || 3).toFixed(1)} m (unconnected)`;
-      return `Column${fam ? ' (' + fam.name + ')' : ''}: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere to place it freely. Family + size on the Options Bar, more designs in the Families panel.`;
+      return `Column${fam ? ' (' + fam.name + ')' : ''}: click to place a ${(s.width || 0.3).toFixed(2)} x ${(s.depth || 0.3).toFixed(2)} m column, ${lvl ? lvl.name : 'base level'} → ${top}. Snap a grid intersection (A-1) to bind it to the grids, or click anywhere to place it freely. Snapping a wall/beam CENTERLINE rotates the column to run parallel with it; type an angle (e.g. 45) for an explicit rotation (Esc clears it). Family + size on the Options Bar, more designs in the Families panel.`;
     }
     /** Family params (normalized) carried in feature state; the Options Bar
      *  edits width/depth/height, the Families panel fills the extras. */
@@ -111,9 +112,12 @@
           if (s.z1 - s.z0 > 0.05) view.previewQuadsBetween(up, dn);
         }
       } else {
+        const rot = this._rotAt(inf);
+        const cs = Math.cos(rot), sn = Math.sin(rot);
+        const pc = (lx, ly, z) => G.v(p.x + lx * cs - ly * sn, p.y + lx * sn + ly * cs, z);
         const ring = [
-          G.v(p.x - params.width / 2, p.y - params.depth / 2, z1), G.v(p.x + params.width / 2, p.y - params.depth / 2, z1),
-          G.v(p.x + params.width / 2, p.y + params.depth / 2, z1), G.v(p.x - params.width / 2, p.y + params.depth / 2, z1),
+          pc(-params.width / 2, -params.depth / 2, z1), pc(params.width / 2, -params.depth / 2, z1),
+          pc(params.width / 2, params.depth / 2, z1), pc(-params.width / 2, params.depth / 2, z1),
         ];
         const bottom = ring.map(q => G.v(q.x, q.y, z0));
         view.previewLoop(ring, 0x0e8385);
@@ -122,8 +126,17 @@
       }
       const fam = CF && CF.get(params.family);
       const under = bounds.solidTop != null && bounds.solidTop < bounds.zEnd - 1e-3;
+      const rotDeg = (this._rotAt(inf) * 180 / Math.PI);
       view.stickyLabel(G.v(p.x, p.y, z1),
-        `${fam ? fam.name + ' ' : ''}${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${(z1 - z0).toFixed(1)} m (Z ${z0.toFixed(2)}…${z1.toFixed(2)})${under ? ' — head under slab' : ''}`, '#0a5f61', 0, 0);
+        `${fam ? fam.name + ' ' : ''}${(params.width || 0.3).toFixed(2)} x ${(params.depth || 0.3).toFixed(2)} x ${(z1 - z0).toFixed(1)} m${rotDeg ? ` · ${rotDeg.toFixed(0)}°` : ''} (Z ${z0.toFixed(2)}…${z1.toFixed(2)})${under ? ' — head under slab' : ''}`, '#0a5f61', 0, 0);
+    }
+    // PLAN ROTATION: an explicit typed angle wins; otherwise a centerline
+    // snap aligns the column WITH the host wall/beam axis (parallel
+    // placement — square cuts, no wedge slivers); free clicks stay at 0°
+    _rotAt(inf) {
+      if (this.state && this.state.rotationDeg != null) return this.state.rotationDeg * Math.PI / 180;
+      if (inf && inf.kind === 'centerline' && inf.dir) return Math.atan2(inf.dir.y, inf.dir.x);
+      return 0;
     }
     onDown(ev) {
       if (ev.button !== 0) return;
@@ -131,6 +144,7 @@
       const inf = app.inferPoint(ev, null);
       const p = inf.p;
       const { params } = this._boundsAt(p, inf.kind);
+      params.rotation = this._rotAt(inf);
       const facesBefore = new Set(app.model.faces.keys());
       const edgesBefore = new Set(app.model.edges.keys());
       let ok = false;
@@ -193,7 +207,26 @@
         + (under ? ' — head hangs under the slab' : '')
         + (params.gridRef ? ` at grid ${inf.a.name}-${inf.b.name} — moves with the grids` : ''));
     }
-    onVCB() { return false; }
+    onVCB(text) {
+      // typed angle = explicit rotation override for the next placement
+      // (parseAngle returns RADIANS — normalize to signed degrees here)
+      const aRad = (typeof parseAngle === 'function') ? parseAngle(text) : parseFloat(text) * Math.PI / 180;
+      if (aRad == null || !isFinite(aRad)) return false;
+      let d = ((aRad * 180 / Math.PI) % 360 + 360) % 360;
+      if (d > 180) d -= 360;
+      this.state = this.state || {};
+      this.state.rotationDeg = d;
+      this.app.setStatus(`Column rotation ${d.toFixed(0)}° — click to place. Esc = back to auto (parallel to the snapped element)`);
+      return true;
+    }
+    onKey(ev) {
+      if (ev.key === 'Escape' && this.state && this.state.rotationDeg != null) {
+        this.state.rotationDeg = null;
+        this.app.setStatus('Column rotation: AUTO — snapping a wall/beam centerline aligns with it');
+        return true;
+      }
+      return false;
+    }
   }
 
   if (window.Engine) {

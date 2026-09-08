@@ -394,10 +394,14 @@
       for (const ent of pool) {
         if (ent.id === p.id) continue;
         let cx = 0, cy = 0, hw = 0, hd = 0, z0 = 0, z1 = 0;
+        // plan rotation of the intruder's box (columns align with host walls)
+        let rcs = 1, rsn = 0;
         if (ent.type === 'column' && ent.params && ent.params.base) {
           cx = ent.params.base[0]; cy = ent.params.base[1];
           hw = (ent.params.width || 0.3) / 2; hd = (ent.params.depth || 0.3) / 2;
           z0 = ent.params.base[2]; z1 = z0 + (ent.params.height || 3);
+          const rot = +ent.params.rotation || 0;
+          rcs = Math.cos(rot); rsn = Math.sin(rot);
         } else if (ent.type === 'beam' && ent.params && ent.params.baseline) {
           const bl = ent.params.baseline;
           const A2 = bl[0], B2 = bl[bl.length - 1];
@@ -439,9 +443,12 @@
         const rx = cx - ax, ry = cy - ay;
         const tAlong = rx * ux + ry * uy;
         const sCross = Math.abs(-rx * uy + ry * ux);
-        // does the intruder's plan box overlap the wall band?
-        const crossReach = Math.abs(ux) * hw + Math.abs(uy) * hd; // half-extent along run
-        const bandReach = Math.abs(-uy) * hw + Math.abs(ux) * hd; // half-extent across run
+        // does the intruder's plan box overlap the wall band? (support
+        // function of the ROTATED box: e1/e2 are its local axes)
+        const uE1 = Math.abs(ux * rcs + uy * rsn);       // |u · e1|
+        const uE2 = Math.abs(-ux * rsn + uy * rcs);      // |u · e2|
+        const crossReach = uE1 * hw + uE2 * hd;          // half-extent along run
+        const bandReach = uE2 * hw + uE1 * hd;           // half-extent across run
         if (sCross > bandReach + half) continue;      // misses the band
         // the blocked interval, CLAMPED to the span: an intruder at (or
         // past) an end bites that end back to its face — the rule covers
@@ -682,10 +689,13 @@
       if (b.height < 0.02) throw new Error('column height below minimum');
       const c = p.base || p.center;
       const w = Math.max(0.02, +p.width || 0.3) / 2, d = Math.max(0.02, +p.depth || 0.3) / 2;
-      const ring = [
-        G.v(c[0] - w, c[1] - d, b.zEnd), G.v(c[0] + w, c[1] - d, b.zEnd),
-        G.v(c[0] + w, c[1] + d, b.zEnd), G.v(c[0] - w, c[1] + d, b.zEnd),
-      ];
+      // ROTATION about the column center (plan, radians): a column aligned
+      // with its host wall cuts the wall square — no wedge slivers at the
+      // junction of an axis-fixed box and an angled run
+      const rot = +p.rotation || 0;
+      const rcs = Math.cos(rot), rsn = Math.sin(rot);
+      const pc = (lx, ly, z) => G.v(c[0] + lx * rcs - ly * rsn, c[1] + lx * rsn + ly * rcs, z);
+      const ring = [pc(-w, -d, b.zEnd), pc(w, -d, b.zEnd), pc(w, d, b.zEnd), pc(-w, d, b.zEnd)];
       const before = new Set(model.faces.keys());
       const f = model.addFaceFromRings(ring.map(q => G.clone(q)));
       if (!f) throw new Error('column footprint is degenerate');

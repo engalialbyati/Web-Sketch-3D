@@ -1280,11 +1280,11 @@ class BimEntityManager {
   _centerlineSnap(q, ro, rd, view) {
     const PX = 10;
     let best = null, bestD = PX;
-    const consider = (p, label, axis) => {
+    const consider = (p, label, axis, dir) => {
       const sp = view.worldToScreenPixels(p);
       if (!sp.visible) return;
       const d = Math.hypot(sp.x - q.x, sp.y - q.y);
-      if (d < bestD) { bestD = d; best = { p: G.clone(p), kind: 'centerline', label, axis }; }
+      if (d < bestD) { bestD = d; best = { p: G.clone(p), kind: 'centerline', label, axis, dir }; }
     };
     for (const ent of this.entities) {
       const p = ent.params;
@@ -1303,7 +1303,10 @@ class BimEntityManager {
       const axis = { a, b, half: (p.thickness || p.width || 0.3) / 2 + 0.02 };
       const vec = G.sub(b, a);
       const L = G.len(vec);
-      if (L < 1e-6) { consider(a, label, axis); continue; }
+      // the run's unit direction — carries to the tool so a column landing
+      // on the axis can ALIGN with the host element (parallel placement)
+      const dir = { x: vec.x / (L || 1), y: vec.y / (L || 1) };
+      if (L < 1e-6) { consider(a, label, axis, dir); continue; }
       vec.x /= L; vec.y /= L; vec.z /= L;
       // closest point between the cursor ray and the axis segment (same
       // ray/line math as the on-edge tracker)
@@ -1313,7 +1316,7 @@ class BimEntityManager {
       if (Math.abs(den) < 1e-9) continue; // cursor ray parallel to the axis
       const s = (G.dot(vec, r) - bDot * G.dot(rd, r)) / den;
       const t = Math.max(0, Math.min(L, s)); // clamped: never past the ends
-      consider(G.add(a, G.mul(vec, t)), label, axis);
+      consider(G.add(a, G.mul(vec, t)), label, axis, dir);
     }
     return best;
   }
@@ -1808,7 +1811,7 @@ class BimEntityManager {
     let made = [];
     try {
       made = window.ColumnFeature
-        ? ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height)
+        ? ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0)
         : [];
     } catch (e) { m.bimHold = false; return false; }
     if (!made || !made.length) { m.bimHold = false; return false; }
@@ -2448,7 +2451,7 @@ class App {
                 return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
             } else if (d.type === 'column') {
               const b = d.params.base;
-              ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height);
+              ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0);
               adopt(ent, (f) => { const c = mm.faceCentroid(f);
                 return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
             } else if (d.type === 'wall' && d.params.base && d.params.end) {
@@ -5568,6 +5571,7 @@ class App {
       if (p.height != null && ent.type !== 'door' && ent.type !== 'window') rows.push(['Height', fmtLen(p.height)]);
       if (p.thickness != null) rows.push(['Thickness', fmtLen(p.thickness)]);
       if (p.width != null) rows.push(['Width', fmtLen(p.width)]);
+      if (p.rotation) rows.push(['Rotation', (p.rotation * 180 / Math.PI).toFixed(1) + '°']);
       if (p.locationLine) rows.push(['Location Line', { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face' }[p.locationLine] || p.locationLine]);
       el.innerHTML = `
         <div class="gi-name"><span class="gi-cat">${(info && info.categoryName) || ent.type}</span> <span class="gi-eid">${ent.id}</span></div>
