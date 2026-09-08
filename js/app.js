@@ -1330,6 +1330,56 @@ class BimEntityManager {
     const d = Math.hypot(pt.x - (ax + dx * t), pt.y - (ay + dy * t));
     return d > 1e-3 && d <= half; // off the axis but inside the band
   }
+  // OWNERSHIP RE-STAMP (rebuild settlement): rebuilding walls one-by-one
+  // means each later wall's miter weld repartitions earlier walls' faces
+  // (new face ids) — the per-wall adopt ran before that churn, so earlier
+  // lists go stale and the empty-faces reap would detach LIVE walls (the
+  // 'rebuild from parameters loses walls' bug). After the whole rebuild,
+  // re-attribute every wall-stamped or unstamped face by GEOMETRY: the
+  // centroid must sit in the wall's plan band and z-range. Corner wedges
+  // fall in two bands — first match wins (either owner is correct).
+  _restampWallFaces() {
+    const m = this.model;
+    const walls = this.entities.filter(e => e.type === 'wall' && e.params
+      && e.params.base && e.params.end && !e.params.closed);
+    if (!walls.length) return 0;
+    const inBand = (c, b) => {
+      const rx = c.x - b.ax, ry = c.y - b.ay;
+      const s = rx * b.ux + ry * b.uy;
+      const d = Math.abs(-rx * b.uy + ry * b.ux);
+      return s >= -0.05 && s <= b.L + 0.05 && d <= b.half
+        && c.z >= b.z0 - 0.05 && c.z <= b.z1 + 0.05;
+    };
+    const bands = walls.map(w => {
+      const b = w.params.base, e2 = w.params.end;
+      const dx = e2[0] - b[0], dy = e2[1] - b[1];
+      const L = Math.hypot(dx, dy) || 1;
+      return { w, ax: b[0], ay: b[1], ux: dx / L, uy: dy / L, L,
+        half: (w.params.thickness || 0.2) / 2 + 0.05, z0: b[2], z1: b[2] + (w.params.height || 3) };
+    });
+    let moved = 0;
+    for (const [, f] of m.faces) {
+      const uid = f.userData && f.userData.bimEntityId;
+      const owner = uid ? this.getEntityById(uid) : null;
+      if (owner && owner.type !== 'wall') continue;          // non-wall stamps stay
+      if (owner && owner.faces.includes(f.id)) {
+        const b = bands.find(x => x.w.id === owner.id);
+        const c = m.faceCentroid(f);
+        if (c && b && inBand(c, b)) continue;                // correct already
+      }
+      const c = m.faceCentroid(f);
+      if (!c) continue;
+      const band = bands.find(bd => inBand(c, bd));
+      if (band) {
+        f.userData = { bimEntityId: band.w.id, bimType: 'wall',
+          role: (f.userData && f.userData.role) || 'exterior' };
+        moved++;
+      }
+    }
+    for (const w of walls) w.faces = [];
+    this.syncEntityLists();
+    return moved;
+  }
   preSplitWallsForColumn(colParams) {
     if (!window.app || !window.app.structural) return 0;
     let n = 0;
@@ -2448,6 +2498,11 @@ class App {
             counts[d.type] = (counts[d.type] || 0) + 1;
           } catch (e) { /* one bad element never kills the repair */ }
         }
+        // OWNERSHIP SETTLEMENT: later walls' miter welds repartitioned
+        // earlier walls' faces (their lists now hold dead ids) — without
+        // this re-stamp the empty-faces reap would detach every welded
+        // neighbor ('rebuild from parameters loses walls')
+        this.bim._restampWallFaces();
       } finally { mm.bimHold = false; }
     });
     // the wall-face rule survives parametric rebuilds: the wall branch
@@ -2463,11 +2518,14 @@ class App {
       if (ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
       if (this.structural && this.structural.beamPlanTrims(ent.params)) this.bim.planTrimBeam(ent.id);
     }
+    // FINAL settlement: the post-loop re-trims can churn wall face lists
+    // again — re-stamp + resync once more so no wall leaves faceless
+    this.bim._restampWallFaces();
     this.view.rebuild(); this.updateInfo();
     const v = this.model.validate();
     this.toast(`Rebuilt from parameters: ${Object.entries(counts).map(([k, n]) => n + ' ' + k + 's').join(', ')}` +
       (skipped.length ? ` (skipped ${skipped.length} unsupported)` : '') +
-      (v.ok ? ' — model valid' : ' — validate still flags issues', !v.ok));
+      (v.ok ? ' — model valid' : ' — validate still flags issues'), !v.ok);
     return { counts, skipped, valid: v.ok };
   }
 
