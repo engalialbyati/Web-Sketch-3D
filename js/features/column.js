@@ -96,7 +96,7 @@
       this._lastEv = ev;
       view.clearPreview();
       const inf = this.app.inferPoint(ev, null);
-      const pl = this._placementRot(inf, inf.p);
+      const pl = this._placementRot(inf, inf.p, ev);
       const p = pl.p;
       const { params, bounds } = this._boundsAt(p, inf.kind);
       const z0 = bounds.zStart, z1 = bounds.solidTop != null ? bounds.solidTop : bounds.zEnd;
@@ -104,10 +104,13 @@
       const spec = CF && CF.get(params.family) ? CF.parts(params.family, params, z1 - z0) : null;
       if (spec && spec.segments.length) {
         // family ghost: every tier's plan ring at its true height, walls on
-        // matching rings (taper slices and prisms line up point-for-point)
+        // matching rings (taper slices and prisms line up point-for-point) —
+        // rotated by the resolved placement rotation like the real build
+        const rcs = Math.cos(pl.rot), rsn = Math.sin(pl.rot);
+        const rp = q => ({ x: q.x * rcs - q.y * rsn, y: q.x * rsn + q.y * rcs });
         for (const s of spec.segments) {
-          const up = s.ring.map(q => G.v(p.x + q.x, p.y + q.y, z0 + s.z1));
-          const dn = s.ring.map(q => G.v(p.x + q.x, p.y + q.y, z0 + s.z0));
+          const up = s.ring.map(q => { const w = rp(q); return G.v(p.x + w.x, p.y + w.y, z0 + s.z1); });
+          const dn = s.ring.map(q => { const w = rp(q); return G.v(p.x + w.x, p.y + w.y, z0 + s.z0); });
           view.previewLoop(up, 0x0e8385);
           view.previewLoop(dn, 0x0e8385);
           if (s.z1 - s.z0 > 0.05) view.previewQuadsBetween(up, dn);
@@ -138,7 +141,7 @@
     //                the owning wall/beam just like a centerline snap, and
     //                the column centers itself on that axis
     // Returns { rot, p }: the rotation and the (possibly axis-centered) point.
-    _placementRot(inf, p) {
+    _placementRot(inf, p, ev) {
       const app = this.app, o = app.bimOptions || {};
       if (o.rotationDeg != null && isFinite(o.rotationDeg))
         return { rot: o.rotationDeg * Math.PI / 180, p };
@@ -157,6 +160,42 @@
           const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
           ax = { x: A[0], y: A[1], dir: { x: dx / L, y: dy / L }, len: L };
         }
+      }
+      // FALLBACK 1: a grid snap (or ground pick) can steal the click while the
+      // cursor is visually ON a wall — probe the face under the cursor and
+      // resolve its owning element anyway
+      if (!ax && ev && app.view && app.view.pickFaceAt && app.view.eventPt) {
+        try {
+          const q = app.view.eventPt(ev);
+          const fid = app.view.pickFaceAt(q);
+          if (fid != null) ax = this._axisOfFace(fid);
+        } catch (e) { /* view not ready — stay unrotated */ }
+      }
+      // FALLBACK 2: endpoint/midpoint snaps on the wall's own ring (its top
+      // corners etc.) leave no face id and miss the face raycast — resolve
+      // by PLAN PROXIMITY: the click's position against every wall/beam
+      // axis; the nearest one inside its band owns the alignment
+      if (!ax) {
+        let best = null;
+        for (const e of app.bim.entities) {
+          let A = null, B = null;
+          if (e.type === 'wall' && !e.params.closed && e.params.base && e.params.end) { A = e.params.base; B = e.params.end; }
+          else if (e.type === 'beam' && Array.isArray(e.params.baseline) && e.params.baseline.length >= 2) {
+            A = e.params.baseline[0]; B = e.params.baseline[e.params.baseline.length - 1];
+          }
+          if (!A) continue;
+          const dx = B[0] - A[0], dy = B[1] - A[1];
+          const L = Math.hypot(dx, dy);
+          if (L < 1e-6) continue;
+          const ux = dx / L, uy = dy / L;
+          const rx = p.x - A[0], ry = p.y - A[1];
+          Math.max(0, Math.min(L, rx * ux + ry * uy));
+          const d = Math.abs(-rx * uy + ry * ux);
+          const reach = ((e.params.thickness || e.params.width || 0.3) / 2) + 0.08;
+          if (d <= reach && (!best || d < best.d))
+            best = { d, ax: { x: A[0], y: A[1], dir: { x: ux, y: uy }, len: L } };
+        }
+        if (best) ax = best.ax;
       }
       if (!ax) return { rot: 0, p };
       const rot = Math.atan2(ax.dir.y, ax.dir.x);
@@ -186,7 +225,7 @@
       const inf = app.inferPoint(ev, null);
       // parallel resolution: rotation from the host element (clicks on its
       // body resolve the owner), and the point slides onto the host axis
-      const pl = this._placementRot(inf, inf.p);
+      const pl = this._placementRot(inf, inf.p, ev);
       const p = pl.p;
       const { params } = this._boundsAt(p, inf.kind);
       params.rotation = pl.rot;

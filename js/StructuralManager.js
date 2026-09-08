@@ -292,10 +292,10 @@
     columnFootprint(p) {
       const c = p.base || p.center || [0, 0, 0];
       const w = (+p.width || 0.3) / 2, d = (+p.depth || 0.3) / 2;
-      return [
-        { x: c[0] - w, y: c[1] - d }, { x: c[0] + w, y: c[1] - d },
-        { x: c[0] + w, y: c[1] + d }, { x: c[0] - w, y: c[1] + d },
-      ];
+      const rot = +p.rotation || 0;
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      const pc = (lx, ly) => ({ x: c[0] + lx * cs - ly * sn, y: c[1] + lx * sn + ly * cs });
+      return [pc(-w, -d), pc(w, -d), pc(w, d), pc(-w, d)];
     }
     /** Slab plan regions from entity params (sketch source); falls back to
      *  the entity's own B-Rep top faces (convert / legacy source). */
@@ -736,7 +736,9 @@
       const spec = root.ColumnFamilies.parts(p.family, p, zTop - b.zStart);
       if (!spec || !spec.segments.length) throw new Error('column family produced no segments');
       const c = p.base || p.center;
-      const ringAt = (seg, z) => seg.ring.map(q => G.v(c[0] + q.x, c[1] + q.y, b.zStart + z));
+      const rot = +p.rotation || 0;   // plan rotation — families align with host walls too
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      const ringAt = (seg, z) => seg.ring.map(q => G.v(c[0] + q.x * cs - q.y * sn, c[1] + q.x * sn + q.y * cs, b.zStart + z));
       const before = new Set(model.faces.keys());
       const segs = [...spec.segments].sort((s, t) => t.z1 - s.z1); // top-down
       const top = segs[0];
@@ -779,7 +781,9 @@
       const spec = CF.parts(p.family, p, b.height);
       if (!spec || !spec.punch) return this.columnFootprint(p);
       const c = p.base || p.center || [0, 0, 0];
-      return spec.punch.map(q => ({ x: c[0] + q.x, y: c[1] + q.y }));
+      const rot = +p.rotation || 0;
+      const cs = Math.cos(rot), sn = Math.sin(rot);
+      return spec.punch.map(q => ({ x: c[0] + q.x * cs - q.y * sn, y: c[1] + q.x * sn + q.y * cs }));
     }
     /** Isolated footing pad (plus optional pedestal) hanging below a level. */
     buildFooting(G, model, p) {
