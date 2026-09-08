@@ -3533,6 +3533,28 @@ class App {
         if (hostId && this.bim.getEntityById(hostId)) this.bim.rebuildWallWithHosts(hostId);
       });
       this.toast(`${cat || ent.type} type: ${typeRec.name}`);
+    } else if (ent.type === 'column' && (p.width > 0 || p.depth > 0)) {
+      this.run('change type', () => {
+        if (p.width > 0) ent.params.width = p.width;
+        if (p.depth > 0) ent.params.depth = p.depth;
+        if (p.family) ent.params.family = p.family;
+        if (p.defaultHeight > 0 && (ent.params.topConstraint || 'unconnected') === 'unconnected')
+          ent.params.height = p.defaultHeight;
+        if (!this.bim.rebuildColumnEntity(ent.id)) throw new Error('column rebuild failed');
+        this.bim._markHostsDirty(ent); // walls re-split to the new footprint
+      });
+      this.toast(`Column type: ${typeRec.name}`);
+    } else if (p.thickness > 0 || p.height > 0 || p.webWidth > 0 || p.width > 0 || p.pitch != null) {
+      // every other element kind (beams, floors, slabs, foundations, roofs):
+      // copy the type's dimensional parameters and regenerate — params are
+      // truth, so the whole model re-derives with the new section
+      this.run('change type', () => {
+        const keys = ['kind', 'profile', 'family', 'thickness', 'width', 'depth', 'height',
+          'diameter', 'pitch', 'overhang', 'webWidth', 'flangeWidth', 'flangeThickness'];
+        for (const k of keys) if (p[k] != null && p[k] !== '') ent.params[k] = p[k];
+        this.rebuildFromParams();
+      });
+      this.toast(`${cat || ent.type} type: ${typeRec.name}`);
     } else {
       this.toast(`${typeRec.name} applies to new placements`);
       return;
