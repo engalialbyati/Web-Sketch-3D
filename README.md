@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-251%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-307%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -22,6 +22,20 @@ incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
 models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
+
+### The 5-story demo building
+
+**File ▸ Load 5-Story Building** constructs a full RC apartment block through
+the app's own tool API — 292 elements: foundations, 60 columns, 85 beams,
+70 walls (floor-to-beam-soffit), slabs with hosted stair-shaft openings,
+doors/windows cut into their hosts, and IBC-compliant dog-leg stairs.
+Full gallery + project write-up: **[docs/portfolio](docs/portfolio/README.md)**.
+
+| | |
+|---|---|
+| ![Hero isometric](docs/portfolio/01-hero-iso.png) | ![Front elevation](docs/portfolio/02-front-elevation.png) |
+| ![Corner detail](docs/portfolio/03-corner-detail.png) | ![Entity Info](docs/portfolio/04-ui-element-info.png) |
+| ![Plan view](docs/portfolio/05-plan-view.png) | ![Stair cutaway](docs/portfolio/06-stair-cutaway.png) |
 
 > Deep dive: **[Architecture & Drawing Engine](docs/ARCHITECTURE.md)** —
 > layering, the B-Rep kernel, healing/push-pull flowcharts, the parametric
@@ -366,7 +380,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 251 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 307 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and
