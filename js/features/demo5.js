@@ -118,7 +118,9 @@
         // corridor wall on grid 2 (x 0..12) + the stair shaft (bay D/2-3)
         for (let s = 0; s < LEVELS - 1; s++) {
           const z = +(s * STORY).toFixed(4);
-          const h = s === 0 ? 2.595 : +(STORY - 0.75).toFixed(3);  // under beam+slab
+          // wall runs floor -> the SOFFIT of the beam above (the beam hangs
+          // below its level, slab above it): story - beam depth - 5 mm reveal
+          const h = +(STORY - BEAM_H - 0.005).toFixed(3);
           const wz = s === 0 ? 0.005 : z;   // ground walls: 5 mm above the footing tops
           for (const [a, b] of xSpans) {
             walls.south.push(wall(a, 0, b, 0, wz, h, 0.2));
