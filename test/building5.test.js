@@ -103,9 +103,10 @@ module.exports = h => {
       for (let s = 1; s < LEVELS; s++) {
         const z = s * STORY - 0.25;           // section center: top at the level
         for (const [A, B] of EDGES) {
-          const p = { baseline: [[A[0], A[1], z], [B[0], B[1], z]], profile: 'rectangular', webWidth: 0.3, height: 0.5 };
-          const r = reg('beam', p, () => app.structural.buildBeam(G, m, p), () => 'body');
-          void r;
+          const p = { baseline: [[A[0], A[1], z], [B[0], B[1], z]],
+            referenceLevelId: 'lvl_' + (s + 1), baseLevel: 'lvl_' + (s + 1), zJustification: 'Top',
+            profile: 'rectangular', webWidth: 0.3, height: 0.5 };
+          reg('beam', p, () => app.structural.buildBeam(G, m, p), () => 'body');
         }
       }
 
@@ -210,6 +211,26 @@ module.exports = h => {
     }
     ok(zMin <= -0.4 && zMin >= -0.6, 'footings below grade (zMin ' + zMin.toFixed(3) + ')');
     ok(zMax >= 5 * STORY - 1e-6 && zMax <= 5 * STORY + 0.25, 'roof at the top level (zMax ' + zMin.toFixed(2) + '..' + zMax.toFixed(2) + ')');
+  });
+
+  test('beams hang under their level at every story', () => {
+    const STORY2 = 3.2;
+    for (let s = 1; s <= 5; s++) {
+      const zTop = s * STORY2;
+      const beams = bim.entities.filter(e => e.type === 'beam'
+        && (e.params.referenceLevelId || e.params.baseLevel) === 'lvl_' + (s + 1));
+      eq(beams.length, 4, 'level ' + (s + 1) + ' has its 4 beams');
+      for (const b of beams) {
+        let zMin = Infinity, zMax = -Infinity;
+        for (const id of b.faces) {
+          const f = m.faces.get(id);
+          if (!f) continue;
+          for (const v of f.loop) { const p = m.vp(v); zMin = Math.min(zMin, p.z); zMax = Math.max(zMax, p.z); }
+        }
+        near(zMax, zTop, 2e-3, b.id + ' top at the level plane');
+        near(zMin, zTop - 0.5, 2e-3, b.id + ' hangs 0.5 m below');
+      }
+    }
   });
 
   test('every level carries its story: columns stack story by story', () => {

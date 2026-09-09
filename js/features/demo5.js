@@ -261,7 +261,11 @@
       for (let s = 1; s < LEVELS; s++) stage('beams — L' + (s + 1), () => {
         const z = +(s * STORY - BEAM_H / 2).toFixed(4);
         const mk = (A, B) => {
+          // buildBeam anchors the section at the LEVEL (beamBounds), not the
+          // baseline's z — the level id is what places the beam; Top
+          // justification hangs it [level - h, level] under the slab
           const p = { baseline: [[A[0], A[1], z], [B[0], B[1], z]],
+            referenceLevelId: lvl(s + 1), baseLevel: lvl(s + 1), zJustification: 'Top',
             profile: 'rectangular', webWidth: BEAM_W, height: BEAM_H };
           reg('beam', p, () => S.buildBeam(G, m, p), () => 'body');
         };
