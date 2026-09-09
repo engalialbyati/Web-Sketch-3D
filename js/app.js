@@ -196,6 +196,11 @@ const TOOL_DEFS = {
     { id: 'orbit', label: 'Orbit', key: 'O' },
     { id: 'pan', label: 'Pan', key: 'H' },
   ],
+  // Structural design ribbon — calculators over the same model. Empty for
+  // now: the owner walks the contents in step by step (column design first)
+  design: [
+    { id: 'select', label: 'Select', key: 'Space' },
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -2258,7 +2263,7 @@ class App {
     this.hintEl = document.getElementById('hint');
     this.vcbEl = document.getElementById('vcb');
 
-    this.mode = 'free';         // 'free' (SketchUp-style) | 'bim' (Revit-style)
+    this.mode = 'free';         // 'free' (SketchUp-style) | 'bim' (Revit-style) | 'design' (structural design)
     this._initTools();
     this._initModes();
     this._initBimOptions();
@@ -3751,12 +3756,16 @@ class App {
     document.querySelectorAll('#modetabs .mtab').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
+    document.body.classList.toggle('mode-design', mode === 'design');
     document.getElementById('bimoptions').classList.toggle('hidden', mode !== 'bim');
+    document.getElementById('designpanel').classList.toggle('hidden', mode !== 'design');
     this.view.showLevels(mode === 'bim');
     this.view.showGrids(mode === 'bim' && this.gridManager.grids.length > 0);
     this._buildToolbar();
     this.setTool(TOOL_DEFS[mode][0].id);
-    this.setStatus(`Mode: ${mode === 'bim' ? 'Precise Drawing (BIM)' : 'Free Drawing'} — camera, selection, and model are preserved.`);
+    const modeName = mode === 'bim' ? 'Precise Drawing (BIM)'
+      : mode === 'design' ? 'Design' : 'Free Drawing';
+    this.setStatus(`Mode: ${modeName} — camera, selection, and model are preserved.`);
   }
   // The drawing plane spanned by a two-axis lock (V + X/Z etc.) through the
   // anchor — vertical and angled sketch planes for the line/arc/circle tools.
@@ -4114,19 +4123,28 @@ class App {
       this.bindModel(new ModelCls());
       this.undoStack = []; this.redoStack = [];
       this.exitGroup(); this.clearSelection();
-      let counts = null, err = null;
-      try { counts = window.Demo5 && window.Demo5.build(this); }
-      catch (e) { err = e; }
-      this.onLevelsChanged();
-      this.view.rebuild();
-      this.updateInfo();
-      this.refreshGroups();
-      if (this.elements && this.elements.refresh) this.elements.refresh();
-      this.view.zoomExtents();
-      if (err) this.toast('5-story building failed: ' + (err.message || err), true);
-      else this.toast('5-story building loaded — '
-        + Object.entries(counts || {}).map(([k, n]) => n + ' ' + k + 's').join(', '));
-      this._saveAutosave();
+      if (!window.Demo5) { this.toast('demo5 feature not loaded', true); return; }
+      const done = counts => {
+        this.onLevelsChanged();
+        this.view.rebuild();
+        this.updateInfo();
+        this.refreshGroups();
+        if (this.elements && this.elements.refresh) this.elements.refresh();
+        this.view.zoomExtents();
+        this.toast('5-story building loaded — '
+          + Object.entries(counts || {}).map(([k, n]) => n + ' ' + k + 's').join(', '));
+        this._saveAutosave();
+      };
+      const fail = e => this.toast('5-story building failed: ' + (e.message || e), true);
+      if (window.Demo5.buildAsync) {
+        // staged: the UI paints progress between stages instead of freezing
+        this.toast('Building the 5-story building — about a minute…');
+        window.Demo5.buildAsync(this, (label, i, n) => {
+          this.setStatus('Building 5-story building — ' + label + ' (' + (i + 1) + '/' + n + ')');
+        }).then(done, fail);
+      } else {
+        try { done(window.Demo5.build(this)); } catch (e) { fail(e); }
+      }
     };
     const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
     if (hasWork) this.confirmDialog('Load the 5-story building? Unsaved changes will be lost.', go);
