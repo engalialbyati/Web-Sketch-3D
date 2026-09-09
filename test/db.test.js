@@ -176,6 +176,27 @@ module.exports = async h => {
     eq(cat2.types.filter(t2 => t2.familyId === 'fam_col_roman_doric').length, 1);
   });
 
+  await t('shear wall family seeds with structural types and migrates into older databases', async () => {
+    const db = await fresh();
+    const cat = await db.getCatalog();
+    const fam = cat.families.find(f => f.id === 'fam_wall_shear');
+    ok(fam && fam.categoryId === 'cat_wall' && fam.name === 'Shear Wall', 'family under the Wall category');
+    const types = cat.types.filter(t => t.familyId === 'fam_wall_shear');
+    eq(types.length, 3, '250 / 300 / 400 mm types');
+    for (const ty of types) {
+      ok(ty.defaultParameters.shear === true, ty.name + ' carries the shear flag (the bracing marker)');
+      ok(ty.defaultParameters.thickness > 0.2 && ty.defaultParameters.thickness <= 0.4, ty.name + ' structural thickness');
+    }
+    // an OLDER database (seeded before shear walls existed) receives the new
+    // rows through the incremental migration — existing user rows untouched
+    await db.store.delete('types', 'typ_wallshear_300');
+    await db.putType({ id: 'typ_user_custom', familyId: 'fam_wall_basic', name: 'User Custom', defaultParameters: {} });
+    await db.seedDefaults(); // no force — migration path
+    const cat2 = await db.getCatalog();
+    ok(cat2.types.some(t => t.id === 'typ_wallshear_300'), 'missing shear type restored');
+    ok(cat2.types.some(t => t.id === 'typ_user_custom'), 'user rows never touched by migration');
+  });
+
   await t('replaceAllElements swaps the whole element set', async () => {
     const db = await fresh();
     await db.createElement({ id: 'old1', typeId: 'typ_wall_200' });

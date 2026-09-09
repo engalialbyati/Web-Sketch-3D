@@ -125,6 +125,7 @@
       { id: 'fam_wall_basic', categoryId: 'cat_wall', name: 'Basic Wall' },
       { id: 'fam_wall_interior', categoryId: 'cat_wall', name: 'Basic Interior Wall' },
       { id: 'fam_wall_brick', categoryId: 'cat_wall', name: 'Exterior Brick Wall' },
+      { id: 'fam_wall_shear', categoryId: 'cat_wall', name: 'Shear Wall' },
       { id: 'fam_wall_opening', categoryId: 'cat_wall', name: 'Wall Opening' },
       { id: 'fam_floor_generic', categoryId: 'cat_floor', name: 'Generic Floor' },
       { id: 'fam_slab_structural', categoryId: 'cat_slab', name: 'Structural Slab' },
@@ -148,6 +149,12 @@
       { id: 'typ_wall_250', familyId: 'fam_wall_basic', name: 'Generic — 250 mm', defaultParameters: { thickness: 0.25, defaultHeight: 3.0, material: 'Concrete' } },
       { id: 'typ_wall_300', familyId: 'fam_wall_basic', name: 'Generic — 300 mm', defaultParameters: { thickness: 0.30, defaultHeight: 3.0, material: 'Concrete' } },
       { id: 'typ_wall_400', familyId: 'fam_wall_brick', name: 'Brick — 400 mm', defaultParameters: { thickness: 0.40, defaultHeight: 3.0, material: 'Brick' } },
+      // structural bracing walls — the `shear` flag marks the type as a
+      // designed lateral element (the sway/stability check the Design
+      // section will query for counts only these, not every long wall)
+      { id: 'typ_wallshear_250', familyId: 'fam_wall_shear', name: 'Shear Wall — 250 mm', defaultParameters: { thickness: 0.25, defaultHeight: 3.0, material: 'Concrete', shear: true } },
+      { id: 'typ_wallshear_300', familyId: 'fam_wall_shear', name: 'Shear Wall — 300 mm', defaultParameters: { thickness: 0.30, defaultHeight: 3.0, material: 'Concrete', shear: true } },
+      { id: 'typ_wallshear_400', familyId: 'fam_wall_shear', name: 'Shear Wall — 400 mm', defaultParameters: { thickness: 0.40, defaultHeight: 3.0, material: 'Concrete', shear: true } },
       { id: 'typ_walli_100', familyId: 'fam_wall_interior', name: 'Interior Partition — 100 mm', defaultParameters: { thickness: 0.10, defaultHeight: 2.7, material: 'Gypsum' } },
       { id: 'typ_walli_150', familyId: 'fam_wall_interior', name: 'Interior Partition — 150 mm', defaultParameters: { thickness: 0.15, defaultHeight: 2.7, material: 'Gypsum' } },
       { id: 'typ_opening_void', familyId: 'fam_wall_opening', name: 'Rectangular Cut', defaultParameters: { width: 1.0, height: 2.1, sill: 0.0 } },

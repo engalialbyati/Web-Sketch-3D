@@ -727,6 +727,36 @@ body.mode-bim #hint { color: #1f4e79; }
 #eipbanner #eip-cancel { color: #c5221f; border-color: #dd7a76; }
 #eipbanner #eip-cancel:hover { background: #fdecec; }
 
+/* ============ Design mode (structural design calculators) ============ */
+/* Left overlay card over the viewport — mirrors the standalone
+   Design/column-designer.html layout (inputs left, shared 3D view). */
+#designpanel {
+  position: absolute; top: 10px; left: 10px; bottom: 10px;
+  width: 340px;
+  z-index: 30;
+  display: flex; flex-direction: column;
+  background: #fbfdfd;
+  border: 1px solid #b9cfd0;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(18, 48, 46, .16);
+  overflow: hidden;
+}
+#designpanel.hidden { display: none; } /* ID display:flex would out-rank .hidden */
+#designpanel .panel-h { flex: none; color: #0a5c55; background: #e6f2ef; }
+#columnDesignBody {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 10px 12px;
+}
+/* teal accents — distinct from free blue and bim indigo */
+body.mode-design .mtab.active { color: #0e7c72; box-shadow: inset 0 2px 0 #0e7c72; }
+body.mode-design #toolbar { background: #eef7f5; border-bottom-color: #c4ded9; }
+body.mode-design .tbtn.active { background: #d3ece7; color: #0a5c55; box-shadow: inset 0 0 0 1px #a8d4cc; }
+body.mode-design .tbtn.toggle.on { background: #d3ece7; color: #0a5c55; }
+body.mode-design .tbtn:hover { background: #dcefe9; }
+body.mode-design #statusbar { border-top: 2px solid #0e7c72; }
+body.mode-design #hint { color: #0a5c55; }
+#gearmenu .gm-dot.design { background: #0e8a7d; }
+
 /* ============ Element Browser palette (floating & dockable) ============ */
 /* #layerpanel (Layers palette, ui-layers.js) and #fampanel (Families palette,
    ui-families.js) share this chrome exactly. */

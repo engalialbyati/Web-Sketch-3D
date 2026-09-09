@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WebSketch 3D — a SketchUp-style modeler</title>
-<link rel="stylesheet" href="css/style.css?v=14">
+<link rel="stylesheet" href="css/style.css?v=15dsgn">
 </head>
 <body>
 <div id="app">
@@ -12,6 +12,7 @@
   <div id="modetabs">
     <button class="mtab active" data-mode="free">Free Drawing</button>
     <button class="mtab" data-mode="bim">Precise Drawing</button>
+    <button class="mtab" data-mode="design">Design</button>
   </div>
   <div id="bimoptions" class="hidden">
     <label>Base Level <select id="opt-baselevel"></select></label>
@@ -62,6 +63,10 @@
   <div id="main">
     <div id="viewport">
       <div id="selband"></div>
+      <div id="designpanel" class="hidden">
+        <div class="panel-h">Column Design</div>
+        <div id="columnDesignBody"></div>
+      </div>
       <div id="eipbanner" class="hidden">
         <span class="eip-ic">✏</span>
         <span id="eip-title">Edit In Place</span>
@@ -116,7 +121,7 @@
 <script src="js/GridManager.js?v=9"></script>
 <script src="js/SnapSystem.js?v=2"></script>
 <script src="js/model.js?v=56"></script>
-<script src="js/db.js?v=4"></script>
+<script src="js/db.js?v=5dsgn"></script>
 <script src="js/BimElement.js?v=12"></script>
 <script src="js/render.js?v=43"></script>
 <script src="js/assets.js?v=2"></script>
@@ -142,10 +147,10 @@
 <script src="js/features/measure-area.js?v=2"></script>
 <script src="js/edit-inplace.js?v=1"></script>
 <script src="js/StructuralManager.js?v=11"></script>
-<script src="js/app.js?v=110wb-slotmap"></script>
+<script src="js/app.js?v=111wb-design"></script>
     <script src="js/families.js?v=2"></script>
     <script src="js/families-loader.js?v=1"></script>
-    <script src="js/ui-cad.js?v=22"></script>
+    <script src="js/ui-cad.js?v=23"></script>
     <script src="js/ui-browser.js?v=13"></script>
     <script src="js/ui-layers.js?v=3"></script>
 <script src="js/ui-families.js?v=4"></script>

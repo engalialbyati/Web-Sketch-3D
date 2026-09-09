@@ -303,6 +303,7 @@
     if (cmd === 'gltf' || cmd === 'export') { app.action('exportGltf'); return; }
     if (cmd === 'free') { app.setMode('free'); app.setTool('select'); return; }
     if (cmd === 'bim' || cmd === 'precise') { app.setMode('bim'); app.setTool('select'); return; }
+    if (cmd === 'design') { app.setMode('design'); app.setTool('select'); return; }
     if (cmd === 'rebuild') { app.rebuildFromParams(); return; }
     if (cmd === 'sched' || cmd === 'schedules') {
       if (window.SchedulesUI) SchedulesUI.open();
@@ -354,7 +355,8 @@
     menu.id = 'gearmenu'; menu.className = 'hidden';
     menu.innerHTML = '<div class="gm-title">Drawing Mode</div>'
       + '<button data-mode="bim"><span class="gm-dot bim"></span>Precise Drawing <span class="gm-k">Revit-style</span></button>'
-      + '<button data-mode="free"><span class="gm-dot free"></span>Free Drawing <span class="gm-k">SketchUp-style</span></button>';
+      + '<button data-mode="free"><span class="gm-dot free"></span>Free Drawing <span class="gm-k">SketchUp-style</span></button>'
+      + '<button data-mode="design"><span class="gm-dot design"></span>Design <span class="gm-k">structural design</span></button>';
     document.body.appendChild(gear); document.body.appendChild(menu);
     gear.addEventListener('click', () => {
       const r = gear.getBoundingClientRect();
