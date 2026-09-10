@@ -138,6 +138,27 @@
     list() { return [...this._byId.values()]; }
     get size() { return this._byId.size; }
 
+    /** Geometry-aware dirty signature for one entity: face ids PLUS each
+     *  face's loop and hole rings (vertex ids and a coordinate checksum).
+     *  Any edit — a hosted cut notching the loop, a punch adding a hole,
+     *  EIP moving a ring vertex — changes it; unchanged geometry keeps the
+     *  incremental fast path. */
+    static faceSig(model, ent) {
+      const ringSig = r => {
+        let h = r.length + ':';
+        for (const vid of r) {
+          const p = model.vp(vid);
+          h += vid + '@' + (p ? Math.round(p.x * 1e4) + ',' + Math.round(p.y * 1e4) + ',' + Math.round(p.z * 1e4) : '?') + ' ';
+        }
+        return h;
+      };
+      return ent.faces.map(fid => {
+        const f = model.faces.get(fid);
+        if (!f) return fid + '>gone';
+        return fid + '>' + ringSig(f.loop) + '#' + f.holes.map(ringSig).join(';');
+      }).join(',');
+    }
+
     /** Sync Groups with the model's entities. Returns the set of face ids
      *  owned by elements (the merged mesh skips those). */
     rebuild() {
@@ -152,21 +173,25 @@
       // INCREMENTAL: an element whose face signature is unchanged keeps its
       // Group (no dispose, no re-triangulation) — only dirty entities rebuild.
       // This is the per-element half of the performance path: a commit that
-      // touches one beam costs that beam, not the whole model.
+      // touches one beam costs that beam, not the whole model. The signature
+      // must cover GEOMETRY, not just face ids: hosted cuts (door/window/
+      // opening) rewrite the host face's loop/holes IN PLACE, keeping the
+      // same face id — an id-only signature would leave the pre-cut mesh.
+      const sig = BimElementRegistry.faceSig;
       const live = new Set();
       for (const ent of app.bim.entities) {
         ent.faces = ent.faces.filter(id => model.faces.has(id));
         if (!ent.faces.length) continue;
         live.add(ent.id);
-        const sig = ent.faces.join(',');
+        const s = sig(model, ent);
         let el = this._byId.get(ent.id);
-        if (el && el._sig === sig && el.group) {
+        if (el && el._sig === s && el.group) {
           // unchanged — but hidden/lock display state must still track
           if (el.group.parent) el.group.visible = !ent.hidden;
         } else {
           if (el) el.dispose();
           el = new BimElement(ent);
-          el._sig = sig;
+          el._sig = s;
           view.elementsRoot.add(el.build(model, view.faceMat, layerColor(ent)));
           this._byId.set(ent.id, el);
         }

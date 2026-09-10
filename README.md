@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-320%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-330%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -391,7 +391,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 320 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 330 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and

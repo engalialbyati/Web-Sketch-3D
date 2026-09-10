@@ -853,6 +853,10 @@ class BimEntityManager {
       m.edgesForRing(f2.loop, true);
       for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
     }
+    // edges born from HOSTED CUTS (the notch splits in the wall's old loops)
+    // die with their faces — reap them or the fresh re-extrusion welds the
+    // stale notch lines back in and fragments into split pieces
+    m.reapOrphanEdges();
     return hosted;
   }
   // phase 2: re-extrude one wall from its (dynamically solved) ring against
@@ -887,9 +891,12 @@ class BimEntityManager {
     // re-cut every hosted element at its parametric position
     for (const h of hosted) {
       const spec = { distanceFromStart: h.params.distanceFromStart, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
+      // snapshot BEFORE the cut: the reveal band born from the cut itself
+      // stamps to the hosted element as 'lining' — the same ownership the
+      // original placement records, so deleting the element heals cleanly
+      const hb = new Set(m.faces.keys());
       const info = window.BimTools.HostedCut.cut(G, m, ent.params, spec);
       if (info.error) continue;
-      const hb = new Set(m.faces.keys());
       const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
       h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
       for (const fid of h.faces) {
@@ -6172,6 +6179,29 @@ class App {
       if (names.length) this.toast(`Grid ${names.join(', ')} deleted`);
       if (refused.length) this.toast(refused[0].err, true); // stays selected so the user can act
       this.onSelectionChanged();
+      return;
+    }
+    // a selection that IS exactly one hosted element (door / window / wall
+    // opening) deletes the element and HEALS its host wall: the opening
+    // closes up and every other hosted element re-cuts at its parametric
+    // position. Without this the raw face-delete below would leave the
+    // notch behind — and the door's edge stamps (shared with the wall's
+    // cut loops) would cascade-delete the wall's faces entirely.
+    const hostedOne = this.singleElementSelection();
+    if (hostedOne && (hostedOne.type === 'door' || hostedOne.type === 'window' || hostedOne.type === 'opening')
+      && hostedOne.params && hostedOne.params.hostWallId
+      && this.bim.getEntityById(hostedOne.params.hostWallId)) {
+      const kind = hostedOne.type, hostId = hostedOne.params.hostWallId;
+      const faces = [...hostedOne.faces];
+      this.run('delete ' + kind, () => {
+        this.bim.detach(hostedOne.id);          // leaves the hosted list first
+        for (const fid of faces) this.model.faces.delete(fid);
+        this.model.gc();
+        this.bim.rebuildWallWithHosts(hostId);  // re-extrude + re-cut the rest
+      });
+      this.sel = { edges: new Set(), faces: new Set() };
+      this.onSelectionChanged();
+      this.toast(kind.charAt(0).toUpperCase() + kind.slice(1) + ' deleted — wall healed');
       return;
     }
     if (!this.sel.faces.size && !this.sel.edges.size) return;

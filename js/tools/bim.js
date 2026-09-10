@@ -1598,6 +1598,18 @@ class HostedInsertionTool extends Tool {
       roles[f.id] = fi >= 0 ? (this.kind === 'door' && fi === frameFaces.length - 1 ? 'leaf' : 'frame') : 'lining';
     }
     const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id));
+    // edges SHARED with the host wall (the notch borders born when the cut
+    // split the wall's own loops) must NOT stamp to this element — deleting
+    // the element later would cascade-delete the wall faces that reference
+    // them. An edge belongs to the element only when every face using it is
+    // a face of the element.
+    const ownFaceIds = new Set(newFaces.map(f => f.id));
+    const elementEdges = newEdges.filter(id => {
+      const e = m.edges.get(id);
+      if (!e) return false;
+      const adj = m.facesAdjacentToEdge(e);
+      return adj.length > 0 && adj.every(f => ownFaceIds.has(f.id));
+    });
     // wall hosts keep the parametric link (resize/stretch re-cuts them); a
     // free-face host stores its own wall-like descriptor so flips, dims and
     // later edits still work without a wall entity
@@ -1608,7 +1620,7 @@ class HostedInsertionTool extends Tool {
           base: hp.base, end: hp.end, thickness: depth, into: hp.into, locationLine: 'face',
           distanceFromStart: info.t, sillHeight: spec.sillHeight,
           width: spec.width, height: spec.height, facing: 1, hand: 1 };
-    app.bim.create(this.kind, entParams, roles, newEdges);
+    app.bim.create(this.kind, entParams, roles, elementEdges);
     app.view.clearPreview();
     app.toast(HostedInsertionTool.kinds[this.kind].label + ' placed at ' + fmtLen(info.t) + ' from the left edge' + (info.partial ? ` — pocket ${fmtLen(depth)} deep` : ''));
     return true;
