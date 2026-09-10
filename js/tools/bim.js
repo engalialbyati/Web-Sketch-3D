@@ -246,12 +246,12 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
   // is what gets built.
   _clearedHeight(A, B, hNominal) {
     const app = this.app;
-    if (!app.structural || app.bimOptions.topConstraint === 'unconnected')
-      return { h: hNominal, deductions: [] };
+    if (!app.structural) return { h: hNominal, deductions: [] };
     const baseZ = app.levelManager.getElevation(app.bimOptions.baseLevel);
     const cl = app.structural.wallClearance({
       base: [A.x, A.y, A.z], end: [B.x, B.y, B.z],
       thickness: app.bimOptions.thickness, topConstraint: app.bimOptions.topConstraint,
+      height: hNominal, // unconnected walls: the nominal top is base + this
     }, { model: app.model });
     if (cl.topZ < baseZ + hNominal - 1e-4)
       return { h: Math.max(0.05, cl.topZ - baseZ), deductions: cl.deductions };

@@ -401,7 +401,7 @@ module.exports = h => {
     return w.bim.create('beam', bp, roles, []);
   };
 
-  test('beam resting ON the wall top splits it at the beam faces', () => {
+  test('beam resting ON the wall top RIDES it — the wall stays whole', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
     runDirty(w);
@@ -410,22 +410,25 @@ module.exports = h => {
       referenceLevelId: 'lvl3', zJustification: 'Bottom' }); // z 3..3.5, touching the top
     ok(beam, 'beam built');
     runDirty(w);
+    // BEARING, NOT INTRUDING: a beam whose soffit sits at/above the wall's
+    // top rides ON the wall (the old rule split the wall around it — the
+    // "beam over wall deletes/mangles the wall" bug). The wall keeps its run.
     const walls = w.bim.entities.filter(e => e.type === 'wall');
-    eq(walls.length, 2, 'wall split into two pieces around the beam');
+    eq(walls.length, 1, 'wall NOT split around the resting beam');
     const xs = allWallXs(w);
-    ok(xs.some(x => Math.abs(x - 3.874) < 5e-3), 'piece ends at the beam face');
-    ok(xs.some(x => Math.abs(x - 4.126) < 5e-3), 'piece resumes past the beam face');
+    near(xs[0], 0, 1e-9, 'wall keeps its original start');
+    near(xs[xs.length - 1], 8, 1e-9, 'wall keeps its original end');
     ok(w.m.validate().ok, 'model valid');
-    // heal: delete the beam -> one whole wall again
+    // delete the beam -> still one whole wall
     w.bim.detach(beam.id);
     runDirty(w);
-    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'healed to one wall');
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'still one wall');
     const hx = allWallXs(w);
-    near(hx[0], 0, 1e-9, 'healed from the original start');
-    near(hx[hx.length - 1], 8, 1e-9, 'healed to the original end');
+    near(hx[0], 0, 1e-9, 'start unchanged');
+    near(hx[hx.length - 1], 8, 1e-9, 'end unchanged');
   });
 
-  test('a parallel beam riding the wall ends it at the beam near face', () => {
+  test('a parallel beam riding the wall keeps the wall under it (spandrel)', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
     runDirty(w);
@@ -434,10 +437,12 @@ module.exports = h => {
       referenceLevelId: 'lvl3', zJustification: 'Bottom' });
     ok(beam, 'spandrel built');
     runDirty(w);
+    // the spandrel RIDES the wall's end portion — the wall continues under
+    // it (the old rule bit the wall back to the beam's near face)
     const walls = w.bim.entities.filter(e => e.type === 'wall');
     eq(walls.length, 1, 'one wall piece remains');
     const xs = allWallXs(w);
-    near(xs[xs.length - 1], 4.999, 5e-3, 'wall ends 1mm off the beam near face');
+    near(xs[xs.length - 1], 8, 5e-3, 'wall runs under the spandrel to its end');
     ok(w.m.validate().ok, 'model valid');
   });
 

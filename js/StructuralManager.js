@@ -413,7 +413,13 @@
           const bb = this.beamBounds(ent.params);
           z0 = bb.zBottom; z1 = bb.zBottom + (bb.height || 0.5);
           const wz0a = p.base[2], wz1a = wz0a + (p.height || 3);
-          if (z1 < wz0a - 1e-3 || z0 > wz1a + 1e-3) continue; // TOUCHING counts
+          // BEARING GATE: a beam whose soffit sits at (or above) the wall's
+          // top RIDES ON the wall — the wall keeps its run and terminates
+          // under the soffit (the clearance fit owns the vertical). Only a
+          // beam EMBEDDED in the wall body (soffit clearly below the wall
+          // top) plan-consumes its along-run extent. Without this gate a
+          // beam drawn over a bearing wall deleted the wall's span outright.
+          if (z1 <= wz0a + 1e-3 || z0 >= wz1a - 0.01) continue;
           if (cross > 0.55) {
             // PARALLEL beam riding the wall (a spandrel on top of it, or an
             // edge beam beside it): the wall's run ends at the beam's END

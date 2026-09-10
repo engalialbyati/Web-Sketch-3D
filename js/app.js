@@ -6262,7 +6262,14 @@ class App {
       for (const ent of this.bim.entities) {
         if (ent.type !== 'wall' || !ent.params || !ent.params.base) continue;
         const p = ent.params;
-        if (!p.topConstraint || p.topConstraint === 'unconnected') continue; // explicit height
+        if (!p.topConstraint || p.topConstraint === 'unconnected') {
+          // explicit height — but structure riding the wall's line still
+          // wins: fit DOWN to the governing soffit (never stretch up), or a
+          // beam drawn over the wall slices its top off in the kernel and
+          // the wall loses its parametric identity instead of trimming
+          if (this._fitWallClearance(ent, pool, true)) n++;
+          continue;
+        }
         if (this._fitWallClearance(ent, pool)) n++;
       }
     } finally { this._syncingWalls = false; }
@@ -6272,7 +6279,7 @@ class App {
   // governing soffit (beams already carry their own 0.5 mm drop, so the
   // stagger keeps any two stacked faces from ever coinciding — no
   // z-fighting, invisible at any zoom).
-  _fitWallClearance(ent, pool = null) {
+  _fitWallClearance(ent, pool = null, downOnly = false) {
     const p = ent.params;
     const cl = this.structural.wallClearance(p, {
       model: this.model,
@@ -6283,6 +6290,9 @@ class App {
     const baseZ = p.base[2];
     const h = Math.max(0.05, topZ - baseZ);
     if (Math.abs(h - (p.height || 0)) < 1e-4) return false;
+    // downOnly (unconnected walls): an explicit height is never STRETCHED —
+    // only structure landing on the wall lowers its top
+    if (downOnly && h > (p.height || 0) + 1e-4) return false;
     const changed = this.transaction.run('wall clearance', () =>
       this.bim.syncWallTop(ent.id, topZ, cl.deductions));
     return changed === true;
