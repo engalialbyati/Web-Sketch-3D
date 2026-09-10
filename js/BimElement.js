@@ -24,6 +24,7 @@
       this.entity = entity;
       this.group = null;   // THREE.Group — the unified selectable object
       this.mesh = null;    // face mesh inside the group
+      this.edgePositions = []; // flat segments for the registry's edge batch
     }
     get id() { return this.entity.id; }
 
@@ -76,8 +77,11 @@
         group.add(mesh);
         this.mesh = mesh;
       }
-      // the element's own edges render INSIDE its Group — per-element edges
-      // are what lets the merged pass skip them and rebuilds stay local
+      // the element's own edge SEGMENTS are stored flat (edgePositions) —
+      // the registry merges every element's segments into ONE LineSegments
+      // batch: N elements used to cost 2N draw calls (mesh + lines each);
+      // the batch costs one. Picking never used the lines (screen-space
+      // math against model edges), so nothing else changes.
       const ep = [];
       for (const fid of this.entity.faces) {
         const f = model.faces.get(fid);
@@ -90,13 +94,7 @@
           }
         }
       }
-      if (ep.length) {
-        const eg = new THREE.BufferGeometry();
-        eg.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
-        const lines = new THREE.LineSegments(eg, model.__edgeMaterial || new THREE.LineBasicMaterial({ color: 0x1b1f23 }));
-        lines.userData.elementId = this.entity.id;
-        group.add(lines);
-      }
+      this.edgePositions = ep;
       this.group = group;
       return group;
     }
@@ -108,6 +106,7 @@
       }
       this.group = null;
       this.mesh = null;
+      this.edgePositions = [];
     }
 
     // ---- sub-element measurement (pure queries against the model) ----
@@ -179,6 +178,7 @@
       // same face id — an id-only signature would leave the pre-cut mesh.
       const sig = BimElementRegistry.faceSig;
       const live = new Set();
+      let anyChanged = false;
       for (const ent of app.bim.entities) {
         ent.faces = ent.faces.filter(id => model.faces.has(id));
         if (!ent.faces.length) continue;
@@ -194,12 +194,48 @@
           el._sig = s;
           view.elementsRoot.add(el.build(model, view.faceMat, layerColor(ent)));
           this._byId.set(ent.id, el);
+          anyChanged = true;
         }
         for (const id of ent.faces) faceIds.add(id);
       }
       for (const [id, el] of [...this._byId])
-        if (!live.has(id)) { el.dispose(); this._byId.delete(id); }
+        if (!live.has(id)) { el.dispose(); this._byId.delete(id); anyChanged = true; }
+      // ONE merged edge batch for every visible element (v0.6 render perf:
+      // was one LineSegments per element — 2N draw calls; now one total).
+      // Hidden elements (or their layer off / Level View filter) drop out
+      // of the batch exactly like their meshes drop out of the scene.
+      this._syncEdgeBatch(view, anyChanged);
       return faceIds;
+    }
+
+    /** Rebuild the shared element-edge LineSegments when any element
+     *  changed or any visibility toggle flipped. */
+    _syncEdgeBatch(view, force) {
+      const app = this.app, model = app.model;
+      const elf = view.elementFilter || null;
+      // same visibility rule render.js applies to the meshes
+      const isVisible = el => {
+        if (app.isEntityHidden ? app.isEntityHidden(el.entity.id) : el.entity.hidden) return false;
+        return elf ? !!elf(el.entity) : true;
+      };
+      const visKey = [...this._byId.values()].map(el => (isVisible(el) ? '1' : '0')).join('');
+      if (!force && this._edgeVisKey === visKey) return;
+      this._edgeVisKey = visKey;
+      const ep = [];
+      for (const el of this._byId.values()) {
+        if (!el.group || !isVisible(el)) continue;
+        for (let i = 0; i < el.edgePositions.length; i++) ep.push(el.edgePositions[i]);
+      }
+      if (!this._edgeLines) {
+        this._edgeLines = new THREE.LineSegments(
+          new THREE.BufferGeometry(),
+          model.__edgeMaterial || new THREE.LineBasicMaterial({ color: 0x1b1f23 }));
+        view.elementsRoot.add(this._edgeLines);
+      }
+      this._edgeLines.geometry.dispose();
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
+      this._edgeLines.geometry = g;
     }
 
     refreshCatalog() {

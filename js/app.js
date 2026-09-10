@@ -2358,6 +2358,8 @@ class App {
     this.axesOn = true; this.gridOn = true; this.edgesOn = true;
     this.gridSnap = false; // F9: snap drawing points to the 1 m grid
     this.shadowsOn = true; this.fogOn = true; this.xrayOn = false;
+    try { this.perfHudOn = !!localStorage.getItem('websketch3d.perfhud'); } catch (e) { this.perfHudOn = false; }
+    if (this.perfHudOn && this.view) this.view.perfHud = true;
     this.faceStyle = 'shaded';
 
     const vp = document.getElementById('viewport');
@@ -4192,7 +4194,8 @@ class App {
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
-        ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'], '-',
+        ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
+        ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
         ['Face Style: Wireframe', 'styleWire', '', 'fs:wireframe'],
@@ -4402,6 +4405,13 @@ class App {
       toggleGridSnap: () => A.toggleGridSnap(),
       toggleEdges: () => { A.edgesOn = !A.edgesOn; A.view.setEdges(A.edgesOn); },
       toggleShadows: () => { A.shadowsOn = !A.shadowsOn; A.view.setShadows(A.shadowsOn); },
+      togglePerfHud: () => {
+        A.view.perfHud = !A.view.perfHud;
+        A.perfHudOn = A.view.perfHud;
+        try { localStorage.setItem('websketch3d.perfhud', A.view.perfHud ? '1' : ''); } catch (e) { }
+        A.view.invalidate();
+        A.toast('Performance HUD ' + (A.view.perfHud ? 'on — fps, draw calls, triangles' : 'off'));
+      },
       toggleFog: () => { A.fogOn = !A.fogOn; A.view.setFog(A.fogOn); },
       toggleXray: () => { A.xrayOn = !A.xrayOn; A.view.setXray(A.xrayOn); },
       styleShaded: () => A.setFaceStyle('shaded'),
@@ -4486,6 +4496,7 @@ class App {
   _initPointer() {
     const canvas = this.view.canvas;
     canvas.addEventListener('pointerdown', (ev) => {
+      this.view.invalidate();
       try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* capture is optional; some synthetic/stylus pointers have no id */ }
       if (ev.button === 1) {
         this.nav = { mode: ev.shiftKey ? 'pan' : 'orbit', last: this.view.eventPt(ev) };
@@ -4499,6 +4510,7 @@ class App {
       }
     });
     canvas.addEventListener('pointermove', (ev) => {
+      this.view.invalidate();
       if (this.nav) {
         const q = this.view.eventPt(ev);
         if (this.nav.mode === 'orbit') this.view.orbit(q.x - this.nav.last.x, q.y - this.nav.last.y);
@@ -4510,12 +4522,14 @@ class App {
       this.tool.onMove(ev);
     });
     canvas.addEventListener('pointerup', (ev) => {
+      this.view.invalidate();
       if (this.nav && ev.button === 1) { this.nav = null; return; }
       if (ev.button === 0 && this._gridDrag) { this._gridDragEnd(); return; }
       if (ev.button === 0) this.tool.onUp(ev);
     });
-    canvas.addEventListener('dblclick', (ev) => { this.tool.onDoubleClick(ev); });
+    canvas.addEventListener('dblclick', (ev) => { this.view.invalidate(); this.tool.onDoubleClick(ev); });
     canvas.addEventListener('wheel', (ev) => {
+      this.view.invalidate();
       ev.preventDefault();
       this.view.zoomBy(Math.pow(1.1, -ev.deltaY / 100));
     }, { passive: false });

@@ -13,8 +13,23 @@ class Viewport {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // ON-DEMAND SHADOWS: the sun and the model are static between edits —
+    // re-render the (2048²) shadow map only when the scene actually changes
+    // (rebuild() flags it). Re-rendering it every frame was pure GPU waste.
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     container.appendChild(this.renderer.domElement);
     this.canvas = this.renderer.domElement;
+
+    // ON-DEMAND RENDERING: a CAD scene is static while the user thinks.
+    // invalidate() marks the frame dirty (model/preview/overlay change);
+    // camera movement and a short settle window after any interaction also
+    // render. Idle GPU cost drops to ~zero instead of a permanent 60 fps.
+    this._dirty = true;
+    this._settleUntil = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + 500;
+    this._camSig = '';
+    this.perfHud = false;          // View ▸ Performance HUD toggle
+    this._fps = 0; this._fpsLast = 0; this._fpsFrames = 0;
 
     // HUD overlay for text labels near the cursor
     this.hud = document.createElement('canvas');
@@ -293,6 +308,10 @@ class Viewport {
 
   // -------------------------------------------------------------- build model
   rebuild() {
+    // scene geometry changed: re-render this frame AND refresh the cached
+    // shadow map (element shadows track the model, not the camera)
+    this.invalidate();
+    this.renderer.shadowMap.needsUpdate = true;
     const model = this.app.model;
     // unified element Groups first: they claim their faces; the merged mesh
     // renders only the remaining (plain Free Drawing) geometry
@@ -374,22 +393,27 @@ class Viewport {
   }
 
   setFaceStyle(style) { // 'shaded' | 'wireframe' | 'monochrome'
+    this.invalidate();
     this.faceStyle = style;
     this.faceMesh.visible = style !== 'wireframe';
     if (this.elementsRoot) this.elementsRoot.visible = style !== 'wireframe';
     this.faceUniforms.uMono.value = style === 'monochrome' ? 1.0 : 0.0;
   }
-  setXray(on) { this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0; this.xray = on; }
+  setXray(on) { this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0; this.xray = on; this.invalidate(); }
   // Sketch Mode: ghost the model so sketch lines dominate (edges stay crisp)
   setGhost(on) {
+    this.invalidate();
     this.faceUniforms.uAlphaMul.value = on ? 0.22 : (this.xray ? 0.55 : 1.0);
     this.ghosted = on;
   }
   setShadows(on) {
+    this.invalidate();
+    if (on) this.renderer.shadowMap.needsUpdate = true;
     this.sun.castShadow = on;
     this.shadowCatcher.visible = on;
   }
   setFog(on) {
+    this.invalidate();
     this.fogOn = on;
     this.faceUniforms.fogOn.value = on ? 1.0 : 0.0;
     this.ground.material.fog = on;
@@ -397,16 +421,17 @@ class Viewport {
     this.edgeLines.material.fog = on;
     this.ground.material.needsUpdate = true;
   }
-  setEdges(on) { this.edgeLines.visible = on; this.selEdges.visible = on; }
-  setGrid(on) { this.grid.visible = on; this.ground.visible = on; }
+  setEdges(on) { this.edgeLines.visible = on; this.selEdges.visible = on; this.invalidate(); }
+  setGrid(on) { this.grid.visible = on; this.ground.visible = on; this.invalidate(); }
   // the 1 m reference grid follows the ACTIVE BASE LEVEL — the plane being
   // drawn on. Level 0 remains the world ground (terrain veil + shadows).
-  setGridLevel(z) { this.grid.position.z = +z || 0; }
-  setAxes(on) { this.axesGroup.visible = on; }
+  setGridLevel(z) { this.grid.position.z = +z || 0; this.invalidate(); }
+  setAxes(on) { this.axesGroup.visible = on; this.invalidate(); }
 
   // Vertical level reference planes (Precise Drawing mode). Each level gets a
   // subtle wireframe rectangle + an elevation label sprite at its height.
   setLevels(levels, grids) {
+    this.invalidate();
     if (!this.levelsGroup) {
       this.levelsGroup = new THREE.Group();
       this.levelsGroup.visible = false;
@@ -488,6 +513,7 @@ class Viewport {
   // upside down) and drag grips at both ends. `levels` is the sorted list of
   // { elevation } the grids are drawn against.
   setGrids(grids, levels, selGridId = null, selGridZ = null) {
+    this.invalidate();
     if (!this.gridsGroup) {
       this.gridsGroup = new THREE.Group();
       this.gridsGroup.visible = false;
@@ -620,6 +646,7 @@ class Viewport {
   // The grid snap indicator: an "X" (intersection) or dot (on-line) glyph with
   // its tooltip text, drawn on a billboard sprite at the snap point.
   setSnapGlyph(inf) {
+    this.invalidate();
     if (!this._snapGlyph) {
       const cv = document.createElement('canvas');
       cv.width = 256; cv.height = 96;
@@ -656,6 +683,7 @@ class Viewport {
   }
 
   updateSelectionVisuals() {
+    this.invalidate();
     const model = this.app.model, sel = this.app.sel;
     // selected edges
     const ep = [];
@@ -713,6 +741,7 @@ class Viewport {
   }
 
   setHoverFace(faceId, color) {
+    this.invalidate();
     this.hoverFace.material.color.setHex(color != null ? color : 0x8ab4f8); // callers may tint
     if (faceId == null) { this.hoverFace.visible = false; return; }
     const model = this.app.model;
@@ -757,6 +786,7 @@ class Viewport {
 
   // -------------------------------------------------------------- preview helpers
   clearPreview() {
+    this.invalidate();
     for (const ch of [...this.previewGroup.children]) {
       this.previewGroup.remove(ch);
       if (ch.geometry) ch.geometry.dispose();
@@ -765,6 +795,7 @@ class Viewport {
     this.clearSticky(); // sticky labels share the preview lifecycle
   }
   previewLine(pts, color = 0x2b2b2b, dashed = false) {
+    this.invalidate();
     if (!pts || pts.length < 2) return null;
     const g = new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, p.y, p.z)));
     let mat;
@@ -780,10 +811,12 @@ class Viewport {
     return l;
   }
   previewLoop(pts, color = 0x2b2b2b) {
+    this.invalidate();
     if (!pts || pts.length < 2) return;
     this.previewLine(pts.concat([pts[0]]), color);
   }
   previewFill(ringsList, color = 0x2f6fdb, alpha = 0.18) {
+    this.invalidate();
     // ringsList: [{outer:[pts], holes:[[pts]]}]
     const pos = [], nor = [];
     for (const r of ringsList) {
@@ -841,16 +874,18 @@ class Viewport {
     this.hudItems.push({ sx, sy, text, color });
   }
   stickyLabel(p, text, color = '#333', dx = 0, dy = -12) {
+    this.invalidate();
     if (!p || !text || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.z)) return;
     this.hudSticky.push({ x: p.x, y: p.y, z: p.z, text, color, dx, dy });
   }
-  clearSticky() { this.hudSticky.length = 0; }
+  clearSticky() { this.hudSticky.length = 0; this.invalidate(); }
   /**
    * Pin a persistent measurement badge at a world point (Measure Area).
    * faceId (optional) links the pin to the measured face: the face stays
    * filled GREEN until the pins are cleared.
    */
   pinLabel(p, text, color = '#1d4f9c', faceId = null) {
+    this.invalidate();
     if (!p || !text || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.z)) return;
     this.hudPins.push({ x: p.x, y: p.y, z: p.z, text, color, faceId });
     this._syncMeasureFaces();
@@ -861,6 +896,7 @@ class Viewport {
   }
   /** Transient green highlight (fill + outline) of the face being measured. */
   setMeasureHover(faceId) {
+    this.invalidate();
     this._measureHoverFace = faceId;
     this._syncMeasureFaces();
   }
@@ -1180,9 +1216,44 @@ class Viewport {
     ctx.fillStyle = color;
     ctx.fillText(text, sx + 15, sy - 7);
   }
+  /** Mark the frame dirty: something in the scene, a preview, or an
+   *  overlay changed and the next tick must re-render. Also opens a short
+   *  settle window so bursts of small mutations (hover previews, sticky
+   *  labels) keep the frame live without each site remembering to call it. */
+  invalidate() {
+    this._dirty = true;
+    this._settleUntil = (typeof performance !== 'undefined' ? performance.now() : Date.now()) + 250;
+  }
+  /** Cheap camera fingerprint: any orbit/pan/zoom changes it. */
+  _cameraSig() {
+    const c = this.activeCamera();
+    const p = c.position, q = c.quaternion;
+    return p.x.toFixed(3) + ',' + p.y.toFixed(3) + ',' + p.z.toFixed(3) + ','
+      + q.x.toFixed(4) + ',' + q.y.toFixed(4) + ',' + q.z.toFixed(4) + ',' + q.w.toFixed(4);
+  }
   _tick() {
     requestAnimationFrame(this._tick);
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
     this.applyCamera();
+    const camSig = this._cameraSig();
+    const camMoved = camSig !== this._camSig;
+    if (camMoved) this._camSig = camSig;
+    // ON-DEMAND: render only when something changed (or the camera moved,
+    // or we're inside a settle window). A static scene costs one rAF no-op.
+    if (!this._dirty && !camMoved && now >= this._settleUntil) {
+      if (this.hudSticky.length || this.hudPins.length) {
+        // labels are camera-anchored; nothing moved, nothing to redraw
+      }
+      return;
+    }
+    this._dirty = false;
+    // fps EMA over rendered frames
+    this._fpsFrames++;
+    if (now - this._fpsLast > 500) {
+      this._fps = Math.round(this._fpsFrames * 1000 / (now - this._fpsLast));
+      this._fpsLast = now; this._fpsFrames = 0;
+    }
+    this.renderer.render(this.scene, this.activeCamera());
     // HUD
     const ctx = this.hudCtx;
     const w = this.hud.width, h = this.hud.height;
@@ -1214,7 +1285,22 @@ class Viewport {
       ctx.fillText(it.text, x, y - 10);
       ctx.textAlign = prevAlign;
     }
-    this.renderer.render(this.scene, cam);
+    // Performance HUD (View ▸ Performance HUD): the article's diagnosis
+    // numbers at a glance — fps, draw calls, triangles
+    if (this.perfHud) {
+      const info = this.renderer.info;
+      const lines = `${this._fps} fps · ${info.render.calls} draws · ${(info.render.triangles / 1000).toFixed(1)}k tris`
+        + ` · ${this.app.model.faces.size} faces · ${this.app.bim.entities.length} elements`;
+      const t = ctx.measureText(lines);
+      ctx.fillStyle = 'rgba(20, 24, 28, 0.82)';
+      ctx.fillRect(10, 10, t.width + 18, 22);
+      ctx.fillStyle = '#8ab4f8';
+      ctx.textAlign = 'left';
+      ctx.fillText(lines, 19, 25);
+      ctx.textAlign = 'left';
+      // keep the readout live while enabled
+      this._dirty = true;
+    }
   }
   _resize() {
     const w = this.container.clientWidth || 800, h = this.container.clientHeight || 500;
@@ -1224,6 +1310,7 @@ class Viewport {
     this.hud.style.width = w + 'px'; this.hud.style.height = h + 'px';
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
+    this.invalidate();
   }
   exportPNG() {
     const a = document.createElement('a');
