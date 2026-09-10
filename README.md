@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-330%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-334%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -31,6 +31,13 @@ the app's own tool API — 292 elements: foundations, 60 columns, 85 beams,
 70 walls (floor-to-beam-soffit), slabs with hosted stair-shaft openings,
 doors/windows cut into their hosts, and IBC-compliant dog-leg stairs.
 Full gallery + project write-up: **[docs/portfolio](docs/portfolio/README.md)**.
+
+**File ▸ Load Revit Test Building (Grids)** is the Element-Browser pathway
+test: 7 real grid lines (A-D × 1-3) with all 60 columns grid-attached (drag a
+grid in plan and its columns re-center), levels created through the Level
+Manager, pad footings, the full beam grid, column-punched slabs, a flat roof,
+and **six rooms per floor** (partition + dividers) with 21 doors and 50
+windows — 325 live parametric elements in one click.
 
 | | |
 |---|---|
@@ -391,7 +398,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 330 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 334 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and

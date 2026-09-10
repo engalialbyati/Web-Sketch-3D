@@ -4096,6 +4096,7 @@ class App {
       ['File', [
         ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
         ['Load 5-Story Building', 'demo5', ''],
+        ['Load Revit Test Building (Grids)', 'demor5', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
       ]],
       ['Edit', [
@@ -4233,6 +4234,43 @@ class App {
     else go();
   }
 
+  // File ▸ Load Revit Test Building: the Element-Browser pathway test —
+  // grid lines (columns grid-attached), manager-created levels, footings,
+  // columns, beams, punched slabs, roof, six rooms per floor
+  loadRevitTestBuilding() {
+    const go = () => {
+      const ModelCls = Model;
+      this.bindModel(new ModelCls());
+      this.undoStack = []; this.redoStack = [];
+      this.exitGroup(); this.clearSelection();
+      if (!window.DemoR5) { this.toast('demo-r5 feature not loaded', true); return; }
+      const done = counts => {
+        this.onLevelsChanged();
+        if (this.onGridsChanged) this.onGridsChanged();
+        this.view.rebuild();
+        this.updateInfo();
+        this.refreshGroups();
+        if (this.elements && this.elements.refresh) this.elements.refresh();
+        this.view.zoomExtents();
+        this.toast('Revit test building loaded — '
+          + Object.entries(counts || {}).map(([k, n]) => n + ' ' + k + (n === 1 ? '' : 's')).join(', '));
+        this._saveAutosave();
+      };
+      const fail = e => this.toast('Revit test building failed: ' + (e.message || e), true);
+      if (window.DemoR5.buildAsync) {
+        this.toast('Building the Revit test building…');
+        window.DemoR5.buildAsync(this, (label, i, n) => {
+          this.setStatus('Building Revit test building — ' + label + ' (' + (i + 1) + '/' + n + ')');
+        }).then(done, fail);
+      } else {
+        try { done(window.DemoR5.build(this)); } catch (e) { fail(e); }
+      }
+    };
+    const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
+    if (hasWork) this.confirmDialog('Load the Revit test building? Unsaved changes will be lost.', go);
+    else go();
+  }
+
   action(name, arg) {
     const A = this;
     const map = {
@@ -4245,6 +4283,7 @@ class App {
       open: () => document.getElementById('fileinput').click(),
       openBlend: () => document.getElementById('blendinput').click(),
       demo5: () => A.loadDemo5Building(),
+      demor5: () => A.loadRevitTestBuilding(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       save: () => A.saveFile(),
       exportPng: () => A.view.exportPNG(),
