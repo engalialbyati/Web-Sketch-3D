@@ -1799,6 +1799,68 @@ class BimEntityManager {
   // ------------------------------------------------------ floor openings
   // Regenerate a floor/slab FROM ITS PARAMS (regions with holes — params
   // are truth). Used when an opening is cut or removed.
+  // ---- Edit Boundary (the Revit core loop) --------------------------------
+  // The saved sketch of a floor/slab/roof, re-projected onto the CURRENT
+  // level plane (a moved level re-seats the boundary). Column punch holes are
+  // automatic cuts, not sketch lines — excluded here and re-cut fresh on
+  // commit (a deleted column's punch simply disappears: Revit-correct).
+  boundarySketchPaths(ent) {
+    const app = window.app;
+    const m = this.model;
+    const z = app.levelManager.getElevation(ent.params.baseLevel);
+    const proj = q => G.v(q[0], q[1], z);
+    const punches = [];
+    if ((ent.type === 'floor' || ent.type === 'slab') && app.structural
+      && app.structural.columnHolesForSlab) {
+      for (const r of ent.params.regions) {
+        if (!r.outer || r.outer.length < 3) continue;
+        const holes = app.structural.columnHolesForSlab(m,
+          { baseLevel: ent.params.baseLevel, thickness: ent.params.thickness, _planeZ: z },
+          { outer: r.outer.slice(), holes: (r.holes || []).map(h => h.slice()) });
+        for (const h of holes) punches.push(h.ring);
+      }
+    }
+    const rectOf = ring => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const q of ring) {
+        if (q[0] < minX) minX = q[0]; if (q[0] > maxX) maxX = q[0];
+        if (q[1] < minY) minY = q[1]; if (q[1] > maxY) maxY = q[1];
+      }
+      return { minX, maxX, minY, maxY };
+    };
+    const isPunch = ring => punches.some(pr => {
+      const a = rectOf(ring), b = rectOf(pr);
+      return Math.abs(a.minX - b.minX) < 2e-3 && Math.abs(a.maxX - b.maxX) < 2e-3
+        && Math.abs(a.minY - b.minY) < 2e-3 && Math.abs(a.maxY - b.maxY) < 2e-3;
+    });
+    const paths = [];
+    for (const r of ent.params.regions) {
+      if (r.outer && r.outer.length >= 3) paths.push({ pts: r.outer.map(proj), closed: true });
+      for (const h of (r.holes || [])) {
+        if (h.length < 3) continue;
+        if (isPunch(h)) continue; // automatic column cut — regenerated on commit
+        paths.push({ pts: h.map(proj), closed: true });
+      }
+    }
+    return paths;
+  }
+  // Re-open a floor/slab/roof's sketch: seeds the sketch tool with the saved
+  // boundary and switches the Base Level to the element's own level, so the
+  // re-commit lands on the right plane. (App-level method — drives the UI.)
+  editBoundary(id) {
+    const app = window.app;
+    const ent = this.getEntityById(id);
+    if (!ent || !Array.isArray(ent.params.regions) || !ent.params.regions.length
+      || !['floor', 'slab', 'roof'].includes(ent.type)) return false;
+    app._boundaryEdit = { id: ent.id, type: ent.type };
+    if (app.bimOptions && ent.params.baseLevel != null) {
+      app.bimOptions.baseLevel = ent.params.baseLevel;
+      if (typeof app._refreshLevelDropdowns === 'function') app._refreshLevelDropdowns();
+    }
+    app.setTool(ent.type === 'roof' ? 'roof' : 'floor');
+    return true;
+  }
+
   rebuildFloorEntity(id) {
     const ent = this.getEntityById(id);
     if (!ent || (ent.type !== 'floor' && ent.type !== 'slab') || !ent.params.regions) return false;
@@ -1891,7 +1953,7 @@ class BimEntityManager {
     let made = [];
     try {
       made = window.ColumnFeature
-        ? ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0)
+        ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0)
         : [];
     } catch (e) { m.bimHold = false; return false; }
     if (!made || !made.length) { m.bimHold = false; return false; }
@@ -2226,7 +2288,7 @@ class App {
     this.scriptElements = new ScriptElements.Manager(this);
     // Structural elements (columns/beams/slabs/foundations): elevation
     // datums, parametric beam sections, infill-wall clearance, quantities
-    this.structural = window.StructuralManager ? StructuralManager.attach(this) : null;
+    this.structural = window.StructuralManager ? window.StructuralManager.attach(this) : null;
     this.families = new FamilyManager();             // loadable hosted families
     this.bimOptions = {                                // Precise Drawing options bar
       baseLevel: 'lvl_1',
@@ -2293,6 +2355,17 @@ class App {
     this.updateInfo();
     this.refreshGroups();
     this._restoreAutosave();
+    // Revit-method first: boot into Precise Drawing unless the user last
+    // chose another mode (setMode persists every explicit switch). Runs at
+    // the very end — setMode swaps the ribbon/options bar/levels UI and
+    // needs every subsystem initialized.
+    try {
+      const savedMode = localStorage.getItem('websketch3d.mode');
+      const bootMode = TOOL_DEFS[savedMode] ? savedMode : 'bim';
+      if (bootMode !== this.mode) this.setMode(bootMode);
+    } catch (e) {
+      if (this.mode !== 'bim') this.setMode('bim');
+    }
     window.addEventListener('error', (e) => {
       // keep the stack reachable — the toast alone can't say WHERE it broke.
       // Persisted to localStorage so a crash survives the reload the user
@@ -3753,6 +3826,8 @@ class App {
     this.axisLockMode = false;
     this.axisLocks.clear();
     this.mode = mode;
+    // Revit-method default: the chosen mode is remembered across sessions
+    try { localStorage.setItem('websketch3d.mode', mode); } catch (e) { }
     document.querySelectorAll('#modetabs .mtab').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
@@ -5562,6 +5637,52 @@ class App {
       this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridIds.size ? this.selGridIds : (this.selGridId || null), this.selGridZ);
     if (this.tool && this.tool.id === 'scale') { this.tool.activate(); this.tool.status(); }
   }
+  // ---- Revit-method instance parameters -------------------------------------
+  // Editable Entity Info fields per element type (the stairs-block pattern
+  // generalized): every edit writes the param and regenerates the element's
+  // geometry from it — params are truth, the B-Rep is cache.
+  _bimParamFields(ent) {
+    const p = ent.params || {};
+    const num = (key, label, step) => (p[key] != null
+      ? { key, label, kind: 'number', step, value: +(+p[key]).toFixed(4) } : null);
+    const rot = { key: 'rotation', label: 'Rotation °', kind: 'number', step: 1,
+      value: +(((p.rotation || 0) * 180 / Math.PI).toFixed(1)) };
+    const loc = (p.locationLine != null
+      ? { key: 'locationLine', label: 'Location Line', kind: 'select', value: p.locationLine,
+          options: [['centerline', 'Centerline'], ['exterior', 'Exterior face'], ['interior', 'Interior face']] }
+      : null);
+    let list;
+    switch (ent.type) {
+      case 'wall': list = [num('height', 'Height m', 0.05), num('thickness', 'Thickness m', 0.01), loc]; break;
+      case 'column': list = [num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
+        num('height', 'Height m', 0.05), rot]; break;
+      case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05)]; break;
+      case 'floor': case 'slab': list = [num('thickness', 'Thickness m', 0.01)]; break;
+      case 'door': case 'window':
+        list = [num('width', 'Width m', 0.05), num('height', 'Height m', 0.05), num('sillHeight', 'Sill m', 0.05)];
+        break;
+      default: list = [];
+    }
+    return list.filter(Boolean);
+  }
+  // Write one instance param and regenerate the element. Returns falsy on a
+  // failed rebuild (the caller's transaction rolls params + geometry back).
+  _applyBimParam(ent, key, v) {
+    const p = ent.params;
+    if (key === 'rotation') p.rotation = v * Math.PI / 180; // field is degrees
+    else p[key] = v;
+    switch (ent.type) {
+      case 'wall': return !!this.bim.rebuildWallWithHosts(ent.id);
+      case 'column': return !!this.bim.rebuildColumnEntity(ent.id);
+      case 'beam': return !!this.bim.rebuildBeamEntity(ent.id);
+      case 'floor': case 'slab': return !!this.bim.rebuildFloorEntity(ent.id);
+      case 'door': case 'window': {
+        const host = this.bim.getEntityById(p.hostWallId);
+        return !!host && !!this.bim.rebuildWallWithHosts(host.id);
+      }
+      default: return false;
+    }
+  }
   updateInfo() {
     const el = document.getElementById('entityinfo');
     const model = this.model;
@@ -5717,13 +5838,18 @@ class App {
       // fuses/heals only within its own lineage (pieces of wall_7 never
       // merge with wall_9, however perfectly they touch)
       const lineage = p.merge && p.merge.group ? p.merge.group : null;
+      // editable instance parameters (Revit method) + Edit Boundary eligibility
+      const fields = this._bimParamFields(ent);
+      const fieldKeys = new Set(fields.map(f => f.key));
+      const canBoundary = ['floor', 'slab', 'roof'].includes(ent.type)
+        && Array.isArray(p.regions) && p.regions.length > 0;
       const rows = [];
       if (lvl) rows.push(['Base Level', lvl.name]);
-      if (p.height != null && ent.type !== 'door' && ent.type !== 'window') rows.push(['Height', fmtLen(p.height)]);
-      if (p.thickness != null) rows.push(['Thickness', fmtLen(p.thickness)]);
-      if (p.width != null) rows.push(['Width', fmtLen(p.width)]);
-      if (p.rotation) rows.push(['Rotation', (p.rotation * 180 / Math.PI).toFixed(1) + '°']);
-      if (p.locationLine) rows.push(['Location Line', { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face' }[p.locationLine] || p.locationLine]);
+      if (p.height != null && !fieldKeys.has('height') && ent.type !== 'door' && ent.type !== 'window') rows.push(['Height', fmtLen(p.height)]);
+      if (p.thickness != null && !fieldKeys.has('thickness')) rows.push(['Thickness', fmtLen(p.thickness)]);
+      if (p.width != null && !fieldKeys.has('width')) rows.push(['Width', fmtLen(p.width)]);
+      if (p.rotation && !fieldKeys.has('rotation')) rows.push(['Rotation', (p.rotation * 180 / Math.PI).toFixed(1) + '°']);
+      if (p.locationLine && !fieldKeys.has('locationLine')) rows.push(['Location Line', { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face' }[p.locationLine] || p.locationLine]);
       el.innerHTML = `
         <div class="gi-name"><span class="gi-cat">${(info && info.categoryName) || ent.type}</span> <span class="gi-eid">${ent.id}</span></div>
         ${lineage ? `<div class="stats dim">Piece of ${lineage} — heals only within this lineage</div>` : ''}
@@ -5734,6 +5860,14 @@ class App {
           : q.area.toFixed(2) + ' m²'}${q.volume != null ? ' · ' + q.volume.toFixed(3) + ' m³' : ''}</div>
         ${q.bbox ? `<div class="stats dim">Bounding box ${q.bbox.size.map(x => x.toFixed(2)).join(' × ')} m</div>` : ''}
         ${rows.length ? `<div class="gi-params">${rows.map(r => `<div class="gi-prow"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}</div>` : ''}
+        ${fields.length ? `
+          <div class="gi-params" id="gi-pfld">
+            ${fields.map(f => f.kind === 'select'
+              ? `<div class="gi-prow"><span>${f.label}</span><select data-pf="${f.key}">${f.options.map(([val, lab]) =>
+                `<option value="${val}"${f.value === val ? ' selected' : ''}>${lab}</option>`).join('')}</select></div>`
+              : `<div class="gi-prow"><span>${f.label}</span><input data-pf="${f.key}" type="number" step="${f.step}" value="${f.value}"></div>`).join('')}
+            <div class="dim" style="margin-top:2px">Edit a value — the element regenerates from its parameters</div>
+          </div>` : ''}
         ${ent.type === 'stairs' && window.StairsFeature ? `
           <div class="gi-params" id="gi-stair">
             <div class="gi-prow"><span>Width m</span><input data-st="width" type="number" step="0.05" value="${(+p.width || 1.2).toFixed(2)}"></div>
@@ -5745,9 +5879,29 @@ class App {
             <div class="gi-prow"><span>Handrail</span><input data-st="handrail" type="checkbox" ${p.handrail !== false ? 'checked' : ''}></div>
             <div class="dim" style="margin-top:2px">Edit a value — the stair (and its host opening) regenerate</div>
           </div>` : ''}
-        <button class="mini-btn primary" id="gi-eip">✏ Edit In Place</button>
+        ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
+        <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
         <button class="mini-btn" id="gi-del">Delete</button>
         <div class="dim" style="margin-top:4px">Hold <b>Ctrl</b> (or <b>Tab</b>) to query individual faces (m²) and edges (m)</div>`;
+      const bndBtn = el.querySelector('#gi-boundary');
+      if (bndBtn) bndBtn.addEventListener('click', () => this.bim.editBoundary(ent.id));
+      const pfBox = el.querySelector('#gi-pfld');
+      if (pfBox) pfBox.querySelectorAll('[data-pf]').forEach(inp => {
+        inp.addEventListener('change', () => {
+          const key = inp.dataset.pf;
+          const v = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
+          if (inp.type === 'number' && (!isFinite(v) || v < 0 || (key !== 'sillHeight' && v <= 0))) return;
+          const ok = this.transaction.run('edit element params', () => {
+            if (!this._applyBimParam(ent, key, v)) throw new Error('regeneration failed');
+            return true;
+          });
+          if (ok) {
+            this.selectElement(ent.id); // keep it selected across the rebuild
+            this.updateInfo();
+            this.toast(`${ent.type} ${key} → ${inp.type === 'number' ? v : v}`);
+          }
+        });
+      });
       const tsel = el.querySelector('#gi-type');
       if (tsel) tsel.addEventListener('change', () => {
         const t = siblings.find(x => x.id === tsel.value);

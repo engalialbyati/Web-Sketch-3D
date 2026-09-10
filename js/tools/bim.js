@@ -580,6 +580,21 @@ class FloorTool extends Tool {
   activate() {
     this._sketch = [];     // committed boundary paths this interaction
     this._err = null;      // validation error highlight
+    this._edit = null;     // Edit Boundary: {id} of the entity being re-sketched
+    // Edit Boundary seeds the sketch with the element's SAVED boundary (the
+    // Revit core loop — a sketch is never one-shot). Automatic column punches
+    // are excluded by boundarySketchPaths and re-cut fresh on commit.
+    const ed = this.app._boundaryEdit;
+    if (ed && (ed.type === 'floor' || ed.type === 'slab')) {
+      const ent = this.app.bim.getEntityById(ed.id);
+      if (ent && Array.isArray(ent.params.regions) && ent.params.regions.length) {
+        this._edit = { id: ent.id };
+        this._sketch = this.app.bim.boundarySketchPaths(ent);
+        if (this.app.levelManager && ent.params.baseLevel != null) {
+          this.app.bimOptions.baseLevel = ent.params.baseLevel; // sketch on its level
+        }
+      }
+    }
     this.engine = new DrawPrimitiveEngine(this.app, {
       primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'pick'],
       getOptions: () => this.app.bimOptions,
@@ -588,17 +603,20 @@ class FloorTool extends Tool {
       onModeChange: () => this.status(),
       color: FloorTool.SKETCH_COLOR, fill: 0xd946ef, fillAlpha: 0.12,
     });
-    this.app.enterSketchMode('Floor boundary', () => this._commitSketch(), () => this._cancelSketch());
+    this.app.enterSketchMode(this._edit ? 'Edit Floor Boundary' : 'Floor boundary',
+      () => this._commitSketch(), () => this._cancelSketch());
     this.status();
   }
   deactivate() {
+    this._edit = null;
+    if (this.app._boundaryEdit) this.app._boundaryEdit = null; // single-use arming
     this.app.exitSketchMode();
     super.deactivate();
   }
   get hint() {
     const lvl = this.app.levelManager.getLevel(this.app.bimOptions.baseLevel);
     const acc = this._sketch.length ? ` ${this._sketch.length} boundar${this._sketch.length === 1 ? 'y' : 'ies'} sketched.` : '';
-    return `Sketch Mode — Floor: draw closed boundar${'ies'} on ${lvl ? lvl.name : 'the base level'} (chain lines/arcs; contained loops become openings).${acc} ✓ commits, ✗ discards.`;
+    return `${this._edit ? 'EDIT' : 'Sketch Mode'} — Floor: draw closed boundar${'ies'} on ${lvl ? lvl.name : 'the base level'} (chain lines/arcs; contained loops become openings).${acc} ✓ commits, ✗ discards.`;
   }
   _pt(ev) {
     const anchor = this.engine.stage === 1 ? this.engine.p1
@@ -662,6 +680,8 @@ class FloorTool extends Tool {
     const v = SketchValidator.validate(this._sketch);
     if (!v.ok) { this._showError(v.error); return; }
     if (!v.regions.length) { this.toast && this.toast('No closed boundary'); return; }
+    // Edit Boundary: regenerate the SAME entity from the re-sketched boundary
+    if (this._edit) return this._commitEdit(v);
     const th = FloorTool.thickness;
     const z = this.app.levelManager.getElevation(app.bimOptions.baseLevel);
     // STRUCTURAL PRECEDENCE — columns passing through this slab punch their
@@ -744,6 +764,70 @@ class FloorTool extends Tool {
         app.view.pinLabel(G.v(c.x, c.y, z + 0.002), `${areaSum.toFixed(2)} m²`, '#1d4f9c', topFace.id);
       }
     }
+  }
+  // Edit Boundary commit: the re-sketched boundary becomes the element's new
+  // parametric truth, then the SAME entity regenerates its geometry (params
+  // + geometry mutate inside ONE transaction — a failure rolls both back).
+  _commitEdit(v) {
+    const app = this.app, m = app.model;
+    const id = this._edit.id;
+    const ent = app.bim.getEntityById(id);
+    if (!ent) { app.toast('The floor was deleted — nothing to update'); this._cancelSketch(); return; }
+    const th = ent.params.thickness != null ? ent.params.thickness : FloorTool.thickness;
+    const z = app.levelManager.getElevation(app.bimOptions.baseLevel);
+    // structural precedence against the NEW footprint (create-path parity):
+    // walls under it pre-trim to their clear height, drop-panel columns
+    // re-hang below the future soffit, columns re-punch their footprints
+    const pendingSlab = {
+      id, type: 'slab',
+      params: {
+        baseLevel: app.bimOptions.baseLevel, thickness: th,
+        regions: v.regions.map(r => ({
+          outer: r.outer.map(p => [p.x, p.y, p.z]),
+          holes: r.holes.map(h => h.map(p => [p.x, p.y, p.z])),
+        })),
+      },
+    };
+    if (app.preTrimWallsFor) app.preTrimWallsFor(pendingSlab);
+    if (app.syncDropPanels) app.syncDropPanels([pendingSlab]);
+    const colHoles = new Map(); // region index -> punch rings
+    if (app.structural) {
+      v.regions.forEach((region, i) => {
+        const holes = app.structural.columnHolesForSlab(m,
+          { baseLevel: app.bimOptions.baseLevel, thickness: th, _planeZ: z },
+          { outer: region.outer.map(p => [p.x, p.y, p.z]), holes: region.holes.map(h => h.map(p => [p.x, p.y, p.z])) });
+        if (holes.length) colHoles.set(i, holes);
+      });
+    }
+    const nPunch = [...colHoles.values()].reduce((s, h) => s + h.length, 0);
+    const nHoles = v.regions.reduce((s, r) => s + r.holes.length, 0);
+    const ok = app.run('edit floor boundary', () => {
+      // params are truth first (punches baked in — create-path storage
+      // semantics, so every existing rebuild path keeps working unchanged)
+      ent.params.baseLevel = app.bimOptions.baseLevel;
+      ent.params.levelId = app.bimOptions.baseLevel;
+      ent.params.thickness = th;
+      ent.params.regions = v.regions.map((r, i) => ({
+        outer: r.outer.map(p => [p.x, p.y, p.z]),
+        holes: r.holes.map(h => h.map(p => [p.x, p.y, p.z]))
+          .concat((colHoles.get(i) || []).map(h => h.ring.map(p => [p.x, p.y, p.z]))),
+      }));
+      if (!app.bim.rebuildFloorEntity(id)) throw new Error('floor regeneration failed');
+      return true;
+    });
+    if (!ok) {
+      app.toast('Boundary update failed — sketch kept; edit and retry', true);
+      return;
+    }
+    app._boundaryEdit = null;
+    app.setTool('select'); // deactivate() exits sketch mode + clears the edit
+    // walls that lost/gained cover re-derive their clear height (grow back too)
+    const trimmed = app.syncStructuralWalls ? app.syncStructuralWalls() : 0;
+    const fitted = app.syncDropPanels ? app.syncDropPanels() : 0;
+    app.toast(`Floor boundary updated — ${v.regions.length} region${v.regions.length === 1 ? '' : 's'}, ${nHoles} opening(s), ${nPunch} column cut(s)`
+      + (trimmed ? `, ${trimmed} wall${trimmed === 1 ? '' : 's'} re-trimmed` : ''));
+    app.selectElement(id);
+    app.updateInfo();
   }
   _cancelSketch() {
     this.app.setTool('select'); // deactivate() exits sketch mode

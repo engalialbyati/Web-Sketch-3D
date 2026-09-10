@@ -254,6 +254,23 @@
     activate() {
       this._sketch = [];     // committed boundary paths this interaction
       this._err = null;      // validation error highlight
+      this._edit = null;     // Edit Boundary: {id} of the entity being re-sketched
+      const ed = this.app._boundaryEdit;
+      if (ed && ed.type === 'roof') {
+        const ent = this.app.bim.getEntityById(ed.id);
+        if (ent && Array.isArray(ent.params.regions) && ent.params.regions.length) {
+          this._edit = { id: ent.id };
+          this._sketch = this.app.bim.boundarySketchPaths(ent);
+          // the options bar reflects the stored roof, so a re-commit keeps shape
+          const p2 = ent.params;
+          if (this.state) {
+            this.state.kind = KINDS.includes(p2.kind) ? p2.kind : 'flat';
+            this.state.thickness = clampNum(p2.thickness, 0.05, 2, 0.2);
+            this.state.pitch = clampNum(p2.pitch, 0.5, 75, 15);
+            this.state.overhang = clampNum(p2.overhang, 0, 5, 0.4);
+          }
+        }
+      }
       this.engine = new DrawPrimitiveEngine(this.app, {
         primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'pick'],
         getOptions: () => this.app.bimOptions,
@@ -262,10 +279,13 @@
         onModeChange: () => this.status(),
         color: RoofTool.SKETCH_COLOR, fill: 0xb3592a, fillAlpha: 0.12,
       });
-      this.app.enterSketchMode('Roof boundary', () => this._commitSketch(), () => this._cancelSketch());
+      this.app.enterSketchMode(this._edit ? 'Edit Roof Boundary' : 'Roof boundary',
+        () => this._commitSketch(), () => this._cancelSketch());
       this.status();
     }
     deactivate() {
+      this._edit = null;
+      if (this.app._boundaryEdit) this.app._boundaryEdit = null; // single-use arming
       this.app.exitSketchMode();
       super.deactivate();
     }
@@ -341,6 +361,8 @@
       const v = SketchValidator.validate(this._sketch);
       if (!v.ok) { this._showError(v.error); return; }
       if (!v.regions.length) { app.toast('No closed boundary'); return; }
+      // Edit Boundary: regenerate the SAME entity from the re-sketched boundary
+      if (this._edit) return this._commitEdit(v);
       const s = this.state || {};
       const kind = KINDS.includes(s.kind) ? s.kind : 'flat';
       const thickness = clampNum(s.thickness, 0.05, 2, 0.2);
@@ -399,6 +421,32 @@
           app.view.pinLabel(G.v(c.x, c.y, c.z + 0.002), `${areaSum.toFixed(2)} m\u00B2`, '#6d4c41', best.id);
         }
       }
+    }
+    // Edit Boundary commit: the re-sketched boundary becomes the roof's new
+    // parametric truth; rebuildEntity regenerates the SAME entity's geometry.
+    // It throws on failure — the transaction rolls params + geometry back.
+    _commitEdit(v) {
+      const app = this.app;
+      const id = this._edit.id;
+      const ent = app.bim.getEntityById(id);
+      if (!ent) { app.toast('The roof was deleted — nothing to update'); this._cancelSketch(); return; }
+      const regions = v.regions.map(r => ({
+        outer: r.outer.map(p => [p.x, p.y, p.z]),
+        holes: r.holes.map(h => h.map(p => [p.x, p.y, p.z])),
+      }));
+      const ok = app.run('edit roof boundary', () => {
+        ent.params.regions = regions; // params are truth — rebuildEntity does the rest
+        return RoofFeature.rebuildEntity(app, id); // throws → rollback restores all
+      });
+      if (!ok) {
+        app.toast('Boundary update failed — sketch kept; edit and retry', true);
+        return;
+      }
+      app._boundaryEdit = null;
+      app.setTool('select'); // deactivate() exits sketch mode + clears the edit
+      app.toast(`Roof boundary updated — ${v.regions.length} region${v.regions.length === 1 ? '' : 's'}`);
+      app.selectElement(id);
+      app.updateInfo();
     }
     _cancelSketch() {
       this.app.setTool('select'); // deactivate() exits sketch mode

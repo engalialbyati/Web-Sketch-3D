@@ -3,6 +3,46 @@
 // tools/free/* — SketchUp-style direct-modeling tools. Namespace: FreeTools.
 // Inner logic unchanged; all classes share the Tool lifecycle contract.
 // ---------------------------------------------------------------------------
+// ---- Revit-method guard ----------------------------------------------------
+// Faces/edges of registered BIM elements are a parametric CACHE — they
+// regenerate from the element's parameters. Freeform edits that would corrupt
+// that cache (and silently detach the element's identity) are refused outside
+// Edit In Place. The sanctioned paths — Edit In Place (holds bimHold), the
+// wall-top push sync (edits params.height, not the B-Rep), and soften (a
+// display-only flag) — never hit the refusal.
+function _ringHasEdge(ring, e) {
+  const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    if ((a === e.a && b === e.b) || (a === e.b && b === e.a)) return true;
+  }
+  return false;
+}
+function _bimGuardedUd(app, ud) {
+  if (!ud || !ud.bimEntityId) return false;        // plain free geometry
+  if (app._eip || app.model.bimHold) return false; // sanctioned freeform paths
+  app.toast(`Parametric ${ud.bimType || 'element'} — edit its values in Entity Info, or use Edit In Place`, true);
+  return true;
+}
+// Face-target guard. allowWallTop: the wall-top push is the parametric sync.
+function bimGuardFace(app, f, allowWallTop) {
+  const ud = f && f.userData;
+  if (allowWallTop && ud && ud.bimType === 'wall' && ud.role === 'top') return false;
+  return _bimGuardedUd(app, ud);
+}
+// Edge-target guard: edges are not re-stamped by every rebuild, so resolve
+// ownership by ring adjacency and guard on the first stamped owner face.
+function bimGuardEdge(app, edge) {
+  if (_bimGuardedUd(app, edge.userData)) return true;
+  const m = app.model;
+  for (const f of m.faces.values()) {
+    if (!f.userData || !f.userData.bimEntityId) continue;
+    if (_ringHasEdge(f.loop, edge) || (f.holes || []).some(h => _ringHasEdge(h, edge)))
+      return _bimGuardedUd(app, f.userData);
+  }
+  return false;
+}
+
 class SelectTool extends Tool {
   static id = 'select';
   cleanup() { this._gdrag = null; super.cleanup(); }
@@ -1145,8 +1185,11 @@ class PushPullTool extends Tool {
     this.dist = 0;
     this._rear = null; // re-detect the opposing face for this interaction
     // parametric sync: pushing a BIM wall's TOP face edits wall.height — the
-    // entity stays intact instead of becoming arbitrary free geometry
+    // entity stays intact instead of becoming arbitrary free geometry.
+    // Every OTHER stamped face refuses the push (Revit-method guard): its
+    // geometry belongs to the element's parameters, not to the B-Rep editor.
     this.bimSync = null;
+    if (bimGuardFace(app, f, true)) { this.activate(); return; }
     const ud = f.userData;
     if (ud && ud.bimType === 'wall' && ud.role === 'top') this.bimSync = ud.bimEntityId;
   }
@@ -1183,6 +1226,8 @@ class PushPullTool extends Tool {
     const last = PushPullTool.lastDist;
     if (fid == null || last == null) return;
     const f = app.model.faces.get(fid);
+    // repeat-push has no parametric sync path — a stamped face is refused
+    if (bimGuardFace(app, f, false)) return;
     app.run('push/pull', m => {
       let dist = last;
       if (f.extrude) {
@@ -1727,6 +1772,9 @@ class EraserTool extends Tool {
     const app = this.app;
     const pick = app.pickEdgeAt(ev, 8);
     if (!pick) return;
+    // hard-erase of a BIM element's edge would detach the element's identity;
+    // SOFTEN (Ctrl) stays allowed — it is a display-only hidden flag
+    if (!(ev.ctrlKey || ev.metaKey) && bimGuardEdge(app, pick.edge)) return;
     if (!this.tx) this.tx = app.begin(ev.ctrlKey || ev.metaKey ? 'soften edge' : 'erase'); // one undo step per drag
     const e = pick.edge;
     const ids = e.curveId ? app.model.curveEdges(e.curveId).map(x => x.id) : [e.id];
@@ -1791,6 +1839,7 @@ class TrimTool extends Tool {
     for (const id of this._targets) {
       const e = app.model.edges.get(id);
       if (!e) continue; // an earlier dissolve in this sweep took it already
+      if (bimGuardEdge(app, e)) { refused++; continue; } // parametric cache — not freeform-editable
       const res = app.model.dissolveEdge(e);
       if (!res.ok) { if (res.reason === 'live-extrude') refused++; continue; }
       if (res.action === 'healed') { healed++; welded += (res.welded || []).length; }

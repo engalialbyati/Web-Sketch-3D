@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-307%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-320%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -9,7 +9,8 @@ solid modeler, plus a Revit-style **Precise Drawing** (parametric BIM) mode:
 walls, floors, doors/windows, structural columns/beams/slabs with level
 datums, dynamic infill-wall clearance, quantity takeoff, and glTF export for
 rendering engines (Twinmotion/Unreal/Blender). Runs 100% locally — no build
-step, no server required.
+step, no server required. **The Revit method is the default**: the app boots
+into Precise Drawing (your last chosen mode is remembered).
 
 It also grows past the built-ins: **Scripted Elements** turn pasted code from
 any AI into parametric element types (the app ships the contract template —
@@ -270,18 +271,28 @@ previews, dimension badges, chaining, and the VCB.
 
 ## Bidirectional Free <-> Precise interop
 
-BIM walls stay parametric under Free-mode editing, and degrade gracefully:
+BIM walls stay parametric under Free-mode editing, and the editing contract is
+explicit (the Revit method):
 
 - **Push/Pull on a wall's top face** never breaks the solid: the push is
   routed to `bimEntityManager.syncWallHeight` — the top ring moves to the new
   elevation and `params.height` updates; the entity, its faces, and their
   role stamps all survive (the live badge reads "x.xx m wall height").
-- **Graceful detachment**: any structural edit to a stamped face — a line
-  drawn across it, a punch, a trim, a partition, a direct push — marks the
-  entity in `model.bimDirty`; the transaction layer drains the set on commit
-  and detaches the entity (`userData` stripped, registry entry removed). The
-  geometry itself remains in the scene as ordinary editable B-Rep — no
-  errors, no stale stamps, no corrupt registry.
+- **Edit Boundary (floors & roofs)**: select a slab or roof and hit
+  **✏ Edit Boundary** — its saved sketch re-opens (outer boundary + openings,
+  re-seated on the level's CURRENT plane; automatic column punches are
+  re-cut fresh, never sketch lines), and a re-commit regenerates the SAME
+  element: walls under it re-trim, columns re-punch their footprints.
+- **Instance parameters in Entity Info**: walls (height, thickness, location
+  line), columns (width, depth, height, rotation°), beams (web width,
+  height), floors (thickness), doors/windows (width, height, sill) — every
+  edit writes the param and regenerates the element from it.
+- **The no-detach guard**: any other freeform edit (Push/Pull, Trim, Eraser)
+  on a BIM element's faces is REFUSED with a pointer to the parametric path
+  ("edit its values in Entity Info, or use Edit In Place"). Free geometry is
+  untouched; soften (Ctrl+erase) stays allowed; Edit In Place suspends the
+  guard for its session. Elements no longer silently lose their parametric
+  identity to a stray click.
 - **Shape handles**: selecting a wall in Select mode shows a listening
   length dimension plus blue triangular handles at the baseline's start,
   midpoint, and end. Click the badge and type a new length (Enter stretches
@@ -380,7 +391,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 307 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 320 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and
