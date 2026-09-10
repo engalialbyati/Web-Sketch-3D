@@ -2185,7 +2185,20 @@ class BimEntityManager {
     if (params.closed && params.footprint) {
       return params.footprint.map(q => G.v(q[0], q[1], q[2]));
     }
-    const P1 = G.v(...params.base), P2 = G.v(...params.end);
+    let P1 = G.v(...params.base), P2 = G.v(...params.end);
+    // v0.6 FACE-STOP: where the run's ends meet columns, the geometry
+    // retreats to the first column face + ELEMENT_EPS (a solid butt joint).
+    // Params keep the drawn span — this is derivation, not mutation.
+    if (window.app && window.app.structural && window.app.structural.wallEndRetreats) {
+      const rt = window.app.structural.wallEndRetreats(params);
+      if (rt) {
+        const ux = (P2.x - P1.x) / rt.L, uy = (P2.y - P1.y) / rt.L;
+        const z = P1.z;
+        const q0 = G.v(P1.x + ux * rt.t0, P1.y + uy * rt.t0, z);
+        const q1 = G.v(P1.x + ux * rt.t1, P1.y + uy * rt.t1, z);
+        if (G.dist(q0, q1) > 0.05) { P1 = q0; P2 = q1; }
+      }
+    }
     const ring0 = window.BimTools.WallTool.bandRing(G, [P1, P2], params.thickness, params.locationLine);
     const joins = params.joins || {};
     const J = v => v == null ? null : (typeof v === 'object' ? v : { id: v, mode: 'miter' });

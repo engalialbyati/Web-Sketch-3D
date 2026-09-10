@@ -628,6 +628,50 @@
       }
       return base;
     }
+    /** v0.6 FACE-STOP: where a wall's own run meets columns at its ends,
+     *  the wall's GEOMETRY retreats to the first column face + ELEMENT_EPS
+     *  (a solid butt joint, 0.1 mm into the column). The wall stays ONE
+     *  element — params.base/end keep the DRAWN span (params are truth);
+     *  this is pure derivation, applied at draw time, in every rebuild,
+     *  and by hosted cuts. Mid-run columns are untouched (the wall runs
+     *  through them and overlaps — the independence rule).
+     *  Returns { t0, t1 } retreat parameters along the base->end run, or
+     *  null when neither end meets a column (the common cheap case). */
+    wallEndRetreats(p, pool = null) {
+      if (!p || !p.base || !p.end || p.closed) return null;
+      const ax = p.base[0], ay = p.base[1], bx = p.end[0], by = p.end[1];
+      const dx = bx - ax, dy = by - ay;
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1e-9) return null;
+      const L = Math.sqrt(L2), ux = dx / L, uy = dy / L;
+      const halfBand = (p.thickness != null ? p.thickness : 0.2) / 2 + 0.02;
+      const EPS = 1e-4;
+      let t0 = 0, t1 = L, hit = false;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.id === p.id || ent.type !== 'column' || !ent.params || !ent.params.base) continue;
+        const cx = ent.params.base[0], cy = ent.params.base[1];
+        const hw = (ent.params.width || 0.3) / 2, hd = (ent.params.depth || 0.3) / 2;
+        const rot = +ent.params.rotation || 0;
+        const rcs = Math.cos(rot), rsn = Math.sin(rot);
+        const rx = cx - ax, ry = cy - ay;
+        const tAlong = rx * ux + ry * uy;
+        if (tAlong < -0.05 || tAlong > L + 0.05) continue;       // off the run
+        const sCross = Math.abs(-rx * uy + ry * ux);
+        // rotated plan half-extents projected on/cross the run
+        const uE1 = Math.abs(ux * rcs + uy * rsn), uE2 = Math.abs(-ux * rsn + uy * rcs);
+        const alongReach = uE1 * hw + uE2 * hd;                   // support fn
+        const bandReach = uE2 * hw + uE1 * hd;
+        if (sCross > bandReach + halfBand) continue;              // misses the band
+        const near = tAlong - alongReach, far = tAlong + alongReach;
+        // END inside this column: retreat the end to its near face + EPS
+        if (L >= near - 0.02 && L <= far + 0.02 && near + EPS < t1) { t1 = near + EPS; hit = true; }
+        // START inside this column: retreat the start to its near face + EPS
+        if (0 >= near - 0.02 && 0 <= far + 0.02 && far - EPS > t0) { t0 = far - EPS; hit = true; }
+      }
+      if (!hit) return null;
+      return { t0, t1, L };
+    }
+
     /** Does the beam's run pass over plan point (x, y)? (band test) */
     _beamCrossesPoint(bp, x, y) {
       const bl = bp.baseline;

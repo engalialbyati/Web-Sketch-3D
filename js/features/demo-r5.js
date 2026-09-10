@@ -141,7 +141,8 @@
         const params = { base: A, end: B, height: h, thickness: thick, locationLine: 'centerline',
           primitive: 'line', closed: false, joins: { start: 0, end: 0 }, source: 'demo-r5' };
         const ent = reg('wall', params, () => {
-          const ring = BT.WallTool.bandRing(G, [G.v(...A), G.v(...B)], thick, 'centerline');
+          // v0.6 FACE-STOP via wallRing: ends retreat to column faces + EPS
+          const ring = bim.wallRing(params);
           const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
           if (!f) throw new Error('wall ring degenerate');
           if (!m.pushPull(f, h)) throw new Error('wall sweep failed');

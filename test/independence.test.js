@@ -23,6 +23,7 @@ module.exports = h => {
     'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
     vm.runInContext(read(f), ctx, { filename: f });
   }
+  const appTx = { run: (n, fn) => fn(null), begin: () => ({ commit() { }, rollback() { }, rolledBack: false }) };
   const appSrc = read('js/app.js');
   const s0 = appSrc.indexOf('class BimEntityManager {');
   const s1 = appSrc.indexOf('\nclass App {');
@@ -50,7 +51,12 @@ module.exports = h => {
       gridManager: null,
       structural: null };
     app.structural = new StructuralManager(() => m.levels, () => m.bimEntities);
+    app.bimOptions = { baseLevel: 'lvl_1', topConstraint: 'unconnected', unconnectedHeight: 3,
+      thickness: 0.2, locationLine: 'centerline', hosted: {} };
+    app.transaction = appTx;
+    app.view = { clearPreview() { } };
     sandbox.window.app = app;
+    sandbox.app = app; // bare-global callers inside the tools
     return { m, bim, app };
   };
 
@@ -159,6 +165,33 @@ module.exports = h => {
       ok(hasBottom, wl.id + ' owns its bottom face');
     }
     ok(w.m.validate().ok, 'model valid');
+  });
+
+  test('FACE-STOP: a wall ending at a column center stops at its face + EPS', () => {
+    const w = makeWorld();
+    column(w, 6, 0, 0.4, 0.4);                       // column at the wall's end
+    const WallTool = BimTools.WallTool;
+    const wt = new WallTool(w.app);
+    wt._commit({ kind: 'line', pts: [v(3, 0, 0), v(6, 0, 0)], closed: false });
+    const wall = w.bim.entities.find(e => e.type === 'wall');
+    ok(wall, 'wall built');
+    // params keep the DRAWN span (params are truth)…
+    eq(wall.params.base[0], 3, 'params keep drawn start');
+    eq(wall.params.end[0], 6, 'params keep drawn end (the column center)');
+    // …the GEOMETRY retreats to the column face + ELEMENT_EPS
+    const xs = [];
+    for (const fid of wall.faces) {
+      const f = w.m.faces.get(fid);
+      if (f) for (const p of w.m.pts(f.loop)) xs.push(p.x);
+    }
+    xs.sort((a, b) => a - b);
+    near(xs[xs.length - 1], 5.8 + 1e-4, 1e-6, 'geometry stops at the column face + EPS');
+    ok(xs[xs.length - 1] < 5.95, 'no wall line at the column center');
+    ok(w.m.validate().ok, 'model valid');
+    // the rebuild path (wallRing) derives the same retreat
+    const ring = w.bim.wallRing(wall.params);
+    const rxs = ring.map(p => p.x).sort((a, b) => a - b);
+    near(rxs[rxs.length - 1], 5.8 + 1e-4, 1e-6, 'wallRing agrees with the draw path');
   });
 
   test('slab stays solid; the column passes through and overlaps', () => {

@@ -367,7 +367,26 @@ static gridColumnTrim(G, A, B, colA, colB) {
     }
     let footprint;
     if (r.closed) footprint = this._closedProfile(r.pts);
-    else if (r.pts.length >= 2) footprint = this._bandProfile(r.pts);
+    else if (r.pts.length >= 2) {
+      // v0.6 FACE-STOP: endpoints that meet columns retreat to the first
+      // column face + ELEMENT_EPS for the GEOMETRY (params keep the drawn
+      // span; joins below still detect at the drawn endpoints, and their
+      // wallRing applies the same retreat itself)
+      let pts = r.pts;
+      if (!r.closed && r.kind === 'line' && app.structural && app.structural.wallEndRetreats) {
+        const A = r.pts[0], B = r.pts[r.pts.length - 1];
+        const rt = app.structural.wallEndRetreats({
+          base: [A.x, A.y, A.z], end: [B.x, B.y, B.z], thickness: app.bimOptions.thickness,
+        });
+        if (rt) {
+          const ux = (B.x - A.x) / rt.L, uy = (B.y - A.y) / rt.L;
+          const q0 = G.v(A.x + ux * rt.t0, A.y + uy * rt.t0, A.z);
+          const q1 = G.v(A.x + ux * rt.t1, A.y + uy * rt.t1, A.z);
+          if (G.dist(q0, q1) > 0.05) pts = [q0, q1];
+        }
+      }
+      footprint = this._bandProfile(pts);
+    }
     else return;
     // Wall joins: an open LINE wall that starts/ends on another wall connects
     // to it — coincident endpoints take the MITER cap; an endpoint landing
@@ -1140,7 +1159,20 @@ class HostedCut {
     const L = G.dist(P1, P2);
     const half = spec.width / 2;
     if (L < spec.width + 0.2) return { error: 'host face is shorter than the opening' };
-    const t = Math.min(Math.max(spec.distanceFromStart, half + 0.05), L - half - 0.05);
+    let t = Math.min(Math.max(spec.distanceFromStart, half + 0.05), L - half - 0.05);
+    // v0.6 FACE-STOP: the wall's GEOMETRY may retreat to column faces at its
+    // ends — clamp the opening into the real (retreated) span so a cut never
+    // lands past the wall's actual end
+    {
+      const app = typeof window !== 'undefined' ? window.app : null;
+      if (app && app.structural && app.structural.wallEndRetreats && wall.base && wall.end) {
+        const rt = app.structural.wallEndRetreats(wall);
+        if (rt) {
+          const lo = rt.t0 + half + 0.05, hi = rt.t1 - half - 0.05;
+          if (hi > lo) t = Math.min(Math.max(t, lo), hi);
+        }
+      }
+    }
     const c = G.add(P1, G.mul(dir, t));
     let leftOff, into;
     if (wall.locationLine === 'face') {

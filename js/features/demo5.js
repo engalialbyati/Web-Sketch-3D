@@ -112,12 +112,13 @@
           const params = { base: A, end: B, height: h, thickness: thick, locationLine: 'centerline',
             primitive: 'line', closed: false, joins: { start: 0, end: 0 }, source: 'demo' };
           return reg('wall', params, () => {
-            const ring = BT.WallTool.bandRing(G, [G.v(...A), G.v(...B)], thick, 'centerline');
-            const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
-            if (!f) throw new Error('wall ring degenerate');
-            if (!m.pushPull(f, h)) throw new Error('wall sweep failed');
-            return f;
-          }, f => faceAt(f, z, h));
+          // v0.6 FACE-STOP via wallRing: ends retreat to column faces + EPS
+          const ring = bim.wallRing(params);
+          const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+          if (!f) throw new Error('wall ring degenerate');
+          if (!m.pushPull(f, h)) throw new Error('wall sweep failed');
+          return f;
+        }, f => faceAt(f, z, h));
         };
         // exterior: south/north (along x), west/east (along y); interior:
         // corridor wall on grid 2 (x 0..12) + the stair shaft (bay D/2-3)
