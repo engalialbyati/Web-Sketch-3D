@@ -96,29 +96,43 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('a slab sketched ON TOP of another slab still pockets (merge kept)', () => {
-    const w = makeWorld();
-    const s1 = slab(w, 0, 0, 5, 5);
-    const a1 = audit(w, s1, 'slab 1');
-    eq(a1.top, 1, 'first slab has a top');
-    // interior sketch on slab 1's top, pushed down: hole/pocket semantics
-    const ring = [G.v(1, 1, Z), G.v(4, 1, Z), G.v(4, 4, Z), G.v(1, 4, Z)];
-    const before = new Set(w.m.faces.keys());
-    w.m.bimHold = true;
-    let f;
-    try {
-      f = w.m.addFaceFromRings(ring.map(p => G.clone(p)));
-      w.m.pushPull(f, -0.1);
-    } finally { w.m.bimHold = false; }
-    ok(f, 'pocket face drawn');
-    // the pocket must NOT have capped its base on slab 1's top: the host
-    // got a hole at the ring instead
-    const s1Top = w.m.faces.get(s1.faces.find(id => {
-      const q = w.m.faces.get(id);
-      return q && q.userData && q.userData.role === 'top';
-    }));
-    ok(s1Top, 'slab 1 top still live');
-    ok(s1Top.holes.length >= 1, 'interior push punched a hole into the host top (merge semantics preserved)');
+  test('v0.6: a foreign build never pockets another slab; its OWNER still can', () => {
+    // UNNAMED hold (a different element being built): the pocket passes
+    // through the host as an island — the host's top stays whole
+    {
+      const w = makeWorld();
+      const s1 = slab(w, 0, 0, 5, 5);
+      const ring = [G.v(1, 1, Z), G.v(4, 1, Z), G.v(4, 4, Z), G.v(1, 4, Z)];
+      w.m.bimHold = true;
+      try {
+        const f = w.m.addFaceFromRings(ring.map(p => G.clone(p)));
+        w.m.pushPull(f, -0.1);
+      } finally { w.m.bimHold = false; }
+      const s1Top = w.m.faces.get(s1.faces.find(id => {
+        const q = w.m.faces.get(id);
+        return q && q.userData && q.userData.role === 'top';
+      }));
+      ok(s1Top, 'slab 1 top still live');
+      eq(s1Top.holes.length, 0, 'independence: a foreign build never punches the host');
+    }
+    // NAMED hold (Edit In Place on the slab itself): classic pocket — the
+    // host top gets the hole at the ring
+    {
+      const w = makeWorld();
+      const s1 = slab(w, 0, 0, 5, 5);
+      const ring = [G.v(1, 1, Z), G.v(4, 1, Z), G.v(4, 4, Z), G.v(1, 4, Z)];
+      w.m.bimHold = s1.id; // the owner edits itself (EIP semantics)
+      try {
+        const f = w.m.addFaceFromRings(ring.map(p => G.clone(p)));
+        w.m.pushPull(f, -0.1);
+      } finally { w.m.bimHold = false; }
+      const s1Top = w.m.faces.get(s1.faces.find(id => {
+        const q = w.m.faces.get(id);
+        return q && q.userData && q.userData.role === 'top';
+      }));
+      ok(s1Top, 'slab 1 top still live');
+      ok(s1Top.holes.length >= 1, "the OWNER interior push pockets its own top (EIP preserved)");
+    }
   });
 
   test('two adjacent regions in ONE sketch both keep their tops', () => {

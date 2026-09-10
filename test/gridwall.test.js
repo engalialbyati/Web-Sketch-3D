@@ -78,26 +78,22 @@ module.exports = h => {
     return app;
   };
 
-  test('gridTrimFor: wall on grid 1 between 1-A and 1-B trims around both columns', () => {
+  test('gridTrimFor: v0.6 — walls run intersection-to-intersection THROUGH columns', () => {
     const { gm, g1, gA, gB } = makeWorld();
     const ents = [
       col(0, 0, 0.4, 0.4, { a: g1.id, b: gA.id }),
       col(0, 3, 0.4, 0.4, { a: g1.id, b: gB.id }),
     ];
-    const tr = WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]);
-    ok(tr, 'trim found the columns');
-    eq(tr.grid.name, '1', 'host grid identified');
-    near(tr.len1, 2.598, 1e-9, '3 - 0.2 - 0.2');
-    near(tr.a2.y, 0.201, 1e-9);
-    near(tr.b2.y, 2.799, 1e-9);
+    // v0.6 ELEMENT INDEPENDENCE: no retreat to column faces — gridTrimFor is
+    // a no-op; the wall overlaps the columns (grid snapping lands the ends)
+    eq(WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]), null,
+      'no trim: the wall runs through both columns');
   });
 
-  test('gridTrimFor: columns found by position when gridRef is missing', () => {
+  test('gridTrimFor: positional columns are ignored too (v0.6 no-op)', () => {
     const { gm } = makeWorld();
     const ents = [col(0, 0, 0.4, 0.4), col(0, 3, 0.4, 0.4)]; // no gridRef
-    const tr = WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]);
-    ok(tr, 'positional lookup works');
-    near(tr.len1, 2.598, 1e-9);
+    eq(WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]), null);
   });
 
   test('gridTrimFor: no columns -> null (plain grid wall, no trim)', () => {
@@ -118,7 +114,7 @@ module.exports = h => {
     eq(WallTool.gridTrimFor(appWith(gm, ents), [G.v(1, 1, 0), G.v(1, 4, 0)]), null);
   });
 
-  test('gridTrimFor: too-short span toasts (loud) and stays null; quiet stays silent', () => {
+  test('gridTrimFor: never toasts — the no-op is silent by contract (v0.6)', () => {
     const { gm, g1, gA, gB } = makeWorld();
     const ents = [
       col(0, 0, 3, 3, { a: g1.id, b: gA.id }),
@@ -126,17 +122,13 @@ module.exports = h => {
     ];
     const app = appWith(gm, ents);
     eq(WallTool.gridTrimFor(app, [G.v(0, 0, 0), G.v(0, 3, 0)]), null);
-    eq(app.toasts.length, 1, 'refusal toasted once');
-    const quiet = appWith(gm, ents);
-    eq(WallTool.gridTrimFor(quiet, [G.v(0, 0, 0), G.v(0, 3, 0)], true), null);
-    eq(quiet.toasts.length, 0, 'quiet preview never toasts');
+    eq(app.toasts.length, 0, 'no refusal: the wall simply runs through');
   });
 
-  test('trimmed endpoints stay on the grid line (hostGridId survives)', () => {
+  test('grid endpoints are the intersections themselves (v0.6: no retreat)', () => {
     const { gm, g1, gA, gB } = makeWorld();
     const ents = [col(0, 0, 0.4, 0.4, { a: g1.id, b: gA.id }), col(0, 3, 0.4, 0.4, { a: g1.id, b: gB.id })];
-    const tr = WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]);
-    ok(g1.distance([tr.a2.x, tr.a2.y]) < 1e-9, 'start on the grid');
-    ok(g1.distance([tr.b2.x, tr.b2.y]) < 1e-9, 'end on the grid');
+    eq(WallTool.gridTrimFor(appWith(gm, ents), [G.v(0, 0, 0), G.v(0, 3, 0)]), null,
+      'no trim record — the snapped endpoints already sit on the intersections');
   });
 };

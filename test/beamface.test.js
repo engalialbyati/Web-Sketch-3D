@@ -1,10 +1,10 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// beamface.test.js — the element rule for beams: a column RISING THROUGH a
-// beam's depth splits it into two independent beams ending at its faces
-// (piece baselines run center-to-center; buildBeam lands the ends on the
-// faces). Touching columns (standing on the beam) don't split. Pieces merge
-// back when the column leaves; deleted territory never resurrects.
+// beamface.test.js — v0.6 ELEMENT INDEPENDENCE for beams: a column rising
+// through a beam's depth NEVER splits it — beam and column coexist and
+// simply overlap (connections are relationships, not geometry). The beam's
+// OWN framing trim still lands its ends on support columns at its endpoints
+// (bearing, not division).
 // ---------------------------------------------------------------------------
 module.exports = h => {
   const fs = require('node:fs');
@@ -54,7 +54,8 @@ module.exports = h => {
     const bp = { baseline: [[ax, 0, 3], [bx, 0, 3]], profile: 'rectangular',
       webWidth: 0.25, height: 0.5, referenceLevelId: 'lvlB', zJustification: 'Bottom' };
     const before = new Set(w.m.faces.keys());
-    w.app.structural.buildBeam(G, w.m, bp);
+    w.m.bimHold = true; // v0.6: BIM builds hold the model (element islands)
+    try { w.app.structural.buildBeam(G, w.m, bp); } finally { w.m.bimHold = false; }
     const faces = [...w.m.faces.keys()].filter(id => !before.has(id));
     const roles = {};
     for (const fid of faces) roles[fid] = 'body';
@@ -64,8 +65,11 @@ module.exports = h => {
     const hw = 0.15, hd = 0.15;
     const ring = [v(x - hw, y - hd, z), v(x + hw, y - hd, z), v(x + hw, y + hd, z), v(x - hw, y + hd, z)];
     const before = new Set(w.m.faces.keys());
-    const f = w.m.addFaceFromRings(ring);
-    w.m.pushPull(f, height);
+    w.m.bimHold = true;
+    try {
+      const f = w.m.addFaceFromRings(ring);
+      w.m.pushPull(f, height);
+    } finally { w.m.bimHold = false; }
     const faces = [...w.m.faces.keys()].filter(id => !before.has(id));
     const roles = {};
     for (const fid of faces) roles[fid] = 'side';
@@ -108,42 +112,39 @@ module.exports = h => {
     return buildColumn(w, x, 0, 0, height);
   };
 
-  test('a column rising through the beam splits it into two beams', () => {
+  test('a column rising through the beam never splits it (v0.6 independence)', () => {
     const w = makeWorld();
     const beam = buildBeam(w, 0, 8);
     ok(beam && beam.faces.length > 0, 'beam built');
+    const facesBefore = beam.faces.length;
     const col = placeColumn(w, 4, 3.5); // z [0, 3.5] — through the beam's depth
     runDirty(w);
     const beams = w.bim.entities.filter(e => e.type === 'beam');
-    eq(beams.length, 2, 'TWO independent beams');
-    ok(w.bim.getEntityById(beam.id) === beams[0], 'piece 0 keeps the identity');
-    const a = beams.find(b => b.params.baseline[0][0] < 1), b2 = beams.find(b => b.params.baseline[0][0] > 1);
-    near(a.params.baseline[1][0], 4, 1e-9, 'piece A baseline runs to the column center');
-    near(b2.params.baseline[0][0], 4, 1e-9, 'piece B baseline runs from the column center');
-    ok(a.params.merge && b2.params.merge && a.params.merge.group === b2.params.merge.group, 'shared merge group');
-    const ax = beamXs(w, a), bx = beamXs(w, b2);
-    near(ax[ax.length - 1], 3.85, 5e-3, 'piece A geometry ends at the column face');
-    near(bx[0], 4.15, 5e-3, 'piece B geometry starts at the column face');
-    for (const b of beams)
-      ok(b.faces.length > 0 && b.faces.every(id => w.m.faces.has(id)), 'each piece owns live faces');
+    eq(beams.length, 1, 'the beam stays ONE element');
+    ok(w.bim.getEntityById(beam.id) === beams[0], 'identity kept');
+    eq(beams[0].params.baseline[0][0], 0, 1e-9 === undefined ? undefined : 0, 'baseline unchanged (start)');
     ok(w.m.validate().ok, 'model valid');
+    ok(col.faces.every(id => w.m.faces.has(id)), 'column keeps its own faces');
+    ok(beams[0].faces.length > 0 && beams[0].faces.every(id => w.m.faces.has(id)), 'beam owns live faces');
+    // the beam body crosses the column band — overlap, no cut faces between
+    const xs = beamXs(w, beams[0]);
+    ok(xs[0] < 3.9 && xs[xs.length - 1] > 4.1, 'beam geometry runs through the column position');
   });
 
-  test('deleting the column merges the beams back into one', () => {
+  test('deleting the column leaves the beam untouched', () => {
     const w = makeWorld();
     buildBeam(w, 0, 8);
     const col = placeColumn(w, 4, 3.5);
     runDirty(w);
-    eq(w.bim.entities.filter(e => e.type === 'beam').length, 2, 'split first');
+    for (const fid of [...col.faces]) w.m.faces.delete(fid);
     w.bim.detach(col.id);
+    w.m.gc();
     runDirty(w);
     const beams = w.bim.entities.filter(e => e.type === 'beam');
-    eq(beams.length, 1, 'merged back into ONE beam');
-    ok(!beams[0].params.merge, 'merge record cleared');
-    const xs = allBeamXs(w);
-    // empty-corner weld: a whole beam extends half a web width past each bare end
-    near(xs[0], -0.125, 5e-3, 'whole again (welded start)');
-    near(xs[xs.length - 1], 8.125, 5e-3, 'whole again (welded end)');
+    eq(beams.length, 1, 'still ONE beam');
+    const xs = beamXs(w, beams[0]);
+    near(xs[0], -0.125, 5e-3, 'start intact (welded)');
+    near(xs[xs.length - 1], 8.125, 5e-3, 'end intact (welded)');
     ok(w.m.validate().ok, 'model valid');
   });
 
@@ -159,66 +160,21 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('a column merely standing on the beam (touching) never splits it', () => {
-    const w = makeWorld();
-    buildBeam(w, 0, 8);
-    placeColumn(w, 4, 3.0); // z [0, 3] — top exactly at the beam soffit
-    runDirty(w);
-    const beams = w.bim.entities.filter(e => e.type === 'beam');
-    eq(beams.length, 1, 'beam continues over its support');
-    const xs = beamXs(w, beams[0]);
-    near(xs[0], -0.125, 5e-3, 'start intact (welded)');
-    near(xs[xs.length - 1], 8.125, 5e-3, 'end intact (welded)');
-  });
-
-  test('a deleted piece\'s territory stays gone when the column leaves', () => {
-    const w = makeWorld();
-    buildBeam(w, 0, 8);
-    const col = placeColumn(w, 4, 3.5);
-    runDirty(w);
-    const beams = w.bim.entities.filter(e => e.type === 'beam');
-    w.bim.detach(beams[1].id); // the USER deletes piece B
-    w.bim.detach(col.id);
-    runDirty(w);
-    const after = w.bim.entities.filter(e => e.type === 'beam');
-    eq(after.length, 1, 'piece A alone');
-    const xs = beamXs(w, after[0]);
-    near(xs[xs.length - 1], 3.85, 5e-3, 'A ends at the old column face — no resurrect');
-    ok(w.m.validate().ok, 'model valid');
-  });
-
-  // the re-split: a SECOND column lands on an already-split piece. Slots
-  // must stay in original-run coordinates and sibling slots must survive
-  // the re-split, or the next derive kicks every piece out of the merge
-  // group and the beam can never reunite.
-  test('a second column re-splitting a piece: the group survives, both leaving restores ONE beam', () => {
+  test('two columns through the beam: still one element, no cuts', () => {
     const w = makeWorld();
     buildBeam(w, 0, 8);
     const c1 = placeColumn(w, 4, 3.5);
+    const c2 = placeColumn(w, 6, 3.5);
     runDirty(w);
-    eq(w.bim.entities.filter(e => e.type === 'beam').length, 2, 'split at 4 first');
-    const c2 = placeColumn(w, 6, 3.5); // lands on piece [4,8]
-    runDirty(w);
-    const three = w.bim.entities.filter(e => e.type === 'beam');
-    eq(three.length, 3, 're-split into three pieces');
-    for (const b of three)
-      ok(b.params.merge && b.params.merge.group === three[0].params.merge.group,
-        'every piece still holds the shared merge group');
-    w.bim.detach(c2.id);
-    runDirty(w);
-    const two = w.bim.entities.filter(e => e.type === 'beam');
-    eq(two.length, 2, 'the second column leaving reunites its neighbors only');
-    const near45 = two.find(b => Math.abs(b.params.baseline[0][0] - 4) < 1e-6);
-    near(near45.params.baseline[1][0], 8, 1e-9, 'the reunited piece spans [4,8]');
-    w.bim.detach(c1.id);
-    runDirty(w);
-    const one = w.bim.entities.filter(e => e.type === 'beam');
-    eq(one.length, 1, 'both columns gone: ONE whole beam');
-    ok(!one[0].params.merge, 'merge record cleared');
-    const xs = allBeamXs(w);
-    near(xs[0], -0.125, 5e-3, 'geometry whole again (welded start)');
-    near(xs[xs.length - 1], 8.125, 5e-3, 'geometry whole again (welded end)');
+    const beams = w.bim.entities.filter(e => e.type === 'beam');
+    eq(beams.length, 1, 'one beam through both columns');
+    ok(!beams[0].params.merge, 'no split bookkeeping');
     ok(w.m.validate().ok, 'model valid');
+    for (const c of [c1, c2]) { for (const fid of [...c.faces]) w.m.faces.delete(fid); w.bim.detach(c.id); }
+    w.m.gc();
+    runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'beam').length, 1, 'beam unchanged after the columns leave');
+    ok(w.m.validate().ok, 'model valid after cleanup');
   });
 
   return summary_stub();

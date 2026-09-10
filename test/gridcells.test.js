@@ -195,7 +195,8 @@ module.exports = h => {
     column(w2, 1.5, 1.5); // bay center, strictly inside
     w2.tool._place();
     const slab2 = w2.bim.entities.find(e => e.type === 'slab');
-    eq(slab2.params.regions[0].holes.length, 1, 'inside column punches');
+    // v0.6: strictly-inside columns overlap the slab, never punch it
+    eq(slab2.params.regions[0].holes.length, 0, 'inside column passes through solid');
     ok(w2.m.validate().ok, 'model valid');
   });
 
@@ -317,10 +318,9 @@ module.exports = h => {
     ok(slab.params.regions[0].outer.every(p => Math.abs(p[2] - (3 + 5e-4)) < 1e-9), 'region on the L2 plane with the reveal');
     ok(slab.faces.some(id => w.m.faces.has(id)), 'live geometry');
     ok(w.toasts.some(t => /exterior: covers the columns/.test(t.msg)), 'toast names the location: ' + JSON.stringify(w.toasts.map(t => t.msg)));
-    // OWNERSHIP: slab and columns are separate elements — the corner columns
-    // punch through, and any welder split inside a column keeps the COLUMN's
-    // stamp (never the slab's), so selecting one never selects both
-    eq(slab.params.regions[0].holes.length, 4, 'the four corner columns punch through');
+    // OWNERSHIP: slab and columns are separate elements (v0.6: the corner
+    // columns pass through the SOLID slab — overlap, no punches)
+    eq(slab.params.regions[0].holes.length, 0, 'corner columns pass through solid (v0.6)');
     const cols = w.bim.entities.filter(e => e.type === 'column');
     let slabFacesInColumns = 0;
     for (const fid of slab.faces) {

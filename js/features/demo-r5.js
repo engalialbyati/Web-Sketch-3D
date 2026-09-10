@@ -109,8 +109,11 @@
 
       stage('columns on grid intersections', () => {
         for (let s = 0; s < LEVELS - 1; s++) {
-          const z0 = +(s * STORY + (s === 0 ? 0.005 : 0)).toFixed(4);   // reveal above footings
-          const h = +(STORY - (s === 0 ? 0.005 : 0)).toFixed(4);
+          // v0.6 bearing: the column tops out at the capping beam's
+          // NOMINAL soffit (story top - beam depth) — the beam's own zDrop
+          // then buries its bottom face EPS inside the column top (overlap)
+          const z0 = +(s * STORY).toFixed(4);
+          const h = +(STORY - BEAM_H).toFixed(4);
           for (let i = 0; i < XS.length; i++) for (let j = 0; j < YS.length; j++) {
             const p = { base: [XS[i], YS[j], z0], width: COL, depth: COL, height: h,
               baseLevelId: lvl(s + 1), topLevelId: lvl(s + 2) };
@@ -123,13 +126,15 @@
       });
 
       // walls between column FACES (+5 mm) — pieces never cross a column
-      const spans = (stations, half) => {
+      // v0.6 ELEMENT INDEPENDENCE: walls run grid-to-grid THROUGH the
+      // columns — no retreat, no split; they overlap at the columns
+      const spans = (stations) => {
         const out = [];
         for (let i = 0; i < stations.length - 1; i++)
-          out.push([stations[i] + half + GAP, stations[i + 1] - half - GAP]);
+          out.push([stations[i], stations[i + 1]]);
         return out;
       };
-      const xSpans = spans(XS, COL / 2), ySpans = spans(YS, COL / 2);
+      const xSpans = spans(XS), ySpans = spans(YS);
       const wallRecs = [];
       const wall = (x1, y1, x2, y2, z, h, thick) => {
         const A = [x1, y1, z], B = [x2, y2, z];
@@ -149,8 +154,8 @@
       stage('walls — exterior', () => {
         for (let s = 0; s < LEVELS - 1; s++) {
           const z = +(s * STORY).toFixed(4);
-          const h = +(STORY - BEAM_H - 0.005).toFixed(3);   // floor -> beam soffit
-          const wz = s === 0 ? 0.005 : z;                   // ground: above footing tops
+          const h = +(STORY - BEAM_H + 1e-4).toFixed(3); // v0.6: EPS overlap into the beam soffit   // floor -> beam soffit
+          const wz = z;                   // ground: above footing tops
           for (const [a, b] of xSpans) { wall(a, 0, b, 0, wz, h, 0.2); wall(a, 12, b, 12, wz, h, 0.2); }
           for (const [a, b] of ySpans) { wall(0, a, 0, b, wz, h, 0.2); wall(18, a, 18, b, wz, h, 0.2); }
         }
@@ -164,10 +169,10 @@
         // later door cut loses its host boundary.
         for (let s = 0; s < LEVELS - 1; s++) {
           const z = +(s * STORY).toFixed(4);
-          const h = +(STORY - BEAM_H - 0.005).toFixed(3);
-          const wz = s === 0 ? 0.005 : z;
+          const h = +(STORY - BEAM_H + 1e-4).toFixed(3); // v0.6: EPS overlap into the beam soffit
+          const wz = z;
           for (const [a, b] of xSpans) wall(a, 6, b, 6, wz, h, 0.15);   // partition
-          const cy0 = 0.2 + GAP, cy1 = 6 - 0.2 - GAP, cy2 = 6 + 0.2 + GAP, cy3 = 12 - 0.2 - GAP;
+          const cy0 = 0.2 - 1e-4, cy1 = 6 - 0.2 + 1e-4, cy2 = 6 + 0.2 - 1e-4, cy3 = 12 - 0.2 + 1e-4; // v0.6: EPS overlap into the column faces
           for (const x of [6, 12]) {
             wall(x, cy0, x, cy1, wz, h, 0.15);   // south divider
             wall(x, cy2, x, cy3, wz, h, 0.15);   // north divider
@@ -183,7 +188,7 @@
         const spec = { distanceFromStart: dist, width: w, height: hgt, sillHeight: sill,
           depth: rec.thick };
         const before = new Set(m.faces.keys());
-        m.bimHold = true;
+        m.bimHold = rec.ent.id; // v0.6: the host owns its own cut
         let info = null, frameFaces = [];
         try {
           info = BT.HostedCut.cut(G, m, rec.ent.params, spec);
@@ -222,7 +227,7 @@
 
       stage('doors + windows', () => {
         for (let s = 0; s < LEVELS - 1; s++) {
-          const z = s === 0 ? 0.005 : +(s * STORY).toFixed(4);
+          const z = +(s * STORY).toFixed(4);
           // entrance (ground, bay A-B) then a door in every room divider —
           // each pair of rooms connects through its divider (4/floor)
           if (s === 0) {

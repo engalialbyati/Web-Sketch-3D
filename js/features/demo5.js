@@ -81,8 +81,11 @@
 
         // ---------------------------------------------------------- columns
         for (let s = 0; s < LEVELS - 1; s++) {
-          const z0 = +(s * STORY + (s === 0 ? 0.005 : 0)).toFixed(4);   // reveal above footings
-          const h = +(STORY - (s === 0 ? 0.005 : 0)).toFixed(4);
+          // v0.6 bearing: the column tops out at the capping beam's
+          // NOMINAL soffit (story top - beam depth) — the beam's own zDrop
+          // then buries its bottom face EPS inside the column top (overlap)
+          const z0 = +(s * STORY).toFixed(4);
+          const h = +(STORY - BEAM_H).toFixed(4);
           for (const x of XS) for (const y of YS) {
             const p = { base: [x, y, z0], width: COL, depth: COL, height: h,
               baseLevelId: lvl(s + 1), topLevelId: lvl(s + 2) };
@@ -95,13 +98,15 @@
       stage('walls', () => {
         // ---------------------------------------------------------- walls
         // spans between column FACES (+5 mm) — pieces never cross a column
-        const spans = (stations, half) => {
+        // v0.6 ELEMENT INDEPENDENCE: walls run grid-to-grid THROUGH the
+        // columns — no retreat, no split; they overlap at the columns
+        const spans = (stations) => {
           const out = [];
           for (let i = 0; i < stations.length - 1; i++)
-            out.push([stations[i] + half + GAP, stations[i + 1] - half - GAP]);
+            out.push([stations[i], stations[i + 1]]);
           return out;
         };
-        const xSpans = spans(XS, COL / 2), ySpans = spans(YS, COL / 2);
+        const xSpans = spans(XS), ySpans = spans(YS);
         const wall = (x1, y1, x2, y2, z, h, thick) => {
           const A = [x1, y1, z], B = [x2, y2, z];
           const params = { base: A, end: B, height: h, thickness: thick, locationLine: 'centerline',
@@ -120,8 +125,8 @@
           const z = +(s * STORY).toFixed(4);
           // wall runs floor -> the SOFFIT of the beam above (the beam hangs
           // below its level, slab above it): story - beam depth - 5 mm reveal
-          const h = +(STORY - BEAM_H - 0.005).toFixed(3);
-          const wz = s === 0 ? 0.005 : z;   // ground walls: 5 mm above the footing tops
+          const h = +(STORY - BEAM_H + 1e-4).toFixed(3); // v0.6: EPS overlap into the beam soffit
+          const wz = z;   // v0.6: ground walls overlap EPS into the footing top
           for (const [a, b] of xSpans) {
             walls.south.push(wall(a, 0, b, 0, wz, h, 0.2));
             walls.north.push(wall(a, 12, b, 12, wz, h, 0.2));
@@ -151,7 +156,7 @@
           const spec = { distanceFromStart: dist, width: w, height: hgt, sillHeight: sill,
             depth: wallEnt.params.thickness };
           const before = new Set(m.faces.keys());
-          m.bimHold = true;
+          m.bimHold = wallEnt.id; // v0.6: the host owns its own cut
           let info = null, frameFaces = [];
           try {
             info = BT.HostedCut.cut(G, m, wallEnt.params, spec);

@@ -46,6 +46,7 @@ class Model {
     this.bimDirty = new Set();
     this._bimHoldDepth = 0;
     this._bimHoldEdges = null;
+    this._bimOwner = null; // v0.6: named hold's owning entity id
     // preview builds (drag ghosts) set this: their geometry is deleted the
     // moment the preview refreshes, so intersecting it with the model is
     // wasted work — and it was the dominant cost of dragging scripted
@@ -60,11 +61,20 @@ class Model {
   // outside any hold, so they are untouched. Precise Drawing thus leaves
   // no stray wires behind, automatically.
   get bimHold() { return this._bimHoldDepth > 0; }
+  /** v0.6: the OWNING entity id when a named hold is active ('wall_1'),
+   *  null for an unnamed first build. Gates read this via bimOwner(). */
+  bimOwner() {
+    return this.bimHold ? (this._bimOwner || '__new__') : null;
+  }
   set bimHold(v) {
     if (v) {
-      if (this._bimHoldDepth++ === 0) this._bimHoldEdges = new Set(this.edges.keys());
+      if (this._bimHoldDepth++ === 0) {
+        this._bimHoldEdges = new Set(this.edges.keys());
+        this._bimOwner = (typeof v === 'string' && v) || null;
+      }
     } else {
       if (this._bimHoldDepth > 0 && --this._bimHoldDepth === 0) {
+        this._bimOwner = null;
         const born = this._bimHoldEdges;
         this._bimHoldEdges = null;
         for (const id of [...this.edges.keys()]) {
@@ -117,6 +127,14 @@ class Model {
   // (quantized cells) so welds stay O(1); the hash is invalidated whenever a
   // vertex moves or the model is loaded.
   static WELD_EPS = 1e-4; // 0.1 mm
+
+  // v0.6 ELEMENT INDEPENDENCE — the overlap tolerance between BIM elements.
+  // Elements never cut each other; where one BEARS on another (wall under a
+  // beam, column under a beam, drop head under a slab) the supporting
+  // element extends ELEMENT_EPS INTO the supported one: faces never sit on a
+  // shared plane (no z-fighting) and the joint reads solid at any zoom.
+  // 0.1 mm — visually zero, far above float32 depth-buffer noise.
+  static ELEMENT_EPS = 1e-4;
 
   vertexAt(p) {
     const E = Model.WELD_EPS, CELL = E * 2;
@@ -965,6 +983,21 @@ class Model {
   }
   /** One-time cleanup for models saved before the sweep existed. */
   reapOrphanEdges() {
+    // v0.6 PERF: adjacency in ONE pass over face rings (edge-pair -> count),
+    // then every orphan lookup is O(1). The old per-edge
+    // facesAdjacentToEdge() scan was O(faces x ring) PER EDGE — on a
+    // multi-hundred-element model every sweep cost seconds, and Rebuild
+    // from Parameters ran one per element (the freeze).
+    const adj = new Map();
+    for (const f of this.faces.values()) {
+      for (const ring of this.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const k = a < b ? a + 'x' + b : b + 'x' + a;
+          adj.set(k, (adj.get(k) || 0) + 1);
+        }
+      }
+    }
     let n = 0;
     for (const [id, e] of [...this.edges]) {
       // deliberate drawn lines and curve-owned edges survive; an entity stamp
@@ -972,7 +1005,8 @@ class Model {
       // split cascade (merged co-linear ring segment outliving its faces),
       // and was exactly the long orphan line between distant elements
       if (e.curveId || (e.userData && e.userData.deliberate)) continue;
-      if (this.facesAdjacentToEdge(e).length === 0) { this._delEdge(id); n++; }
+      const k = e.a < e.b ? e.a + 'x' + e.b : e.b + 'x' + e.a;
+      if (!adj.get(k)) { this._delEdge(id); n++; }
     }
     if (n) this.gc();
     return n;
@@ -1035,6 +1069,19 @@ class Model {
   // If `face` was just drawn entirely inside an existing coplanar face, punch it
   // out of that face as a hole (SketchUp behavior: drawing a rect on a face
   // splits it, so later push/pull leaves a clean boundary line).
+  /** v0.6 ELEMENT INDEPENDENCE: while a BIM build holds the model, a drawn
+   *  face may only cut its OWNER's faces — another element's face is an
+   *  island to overlap (ELEMENT_EPS), never a host to punch or split. A
+   *  string bimHold names the owning entity id; truthy-but-unnamed means a
+   *  first build (its fresh faces may cut only unstamped geometry). Free
+   *  mode (bimHold falsy) cuts as always. */
+  hostCuttableBy(host) {
+    if (!this.bimHold) return true;
+    const stamp = host.userData && host.userData.bimEntityId;
+    if (!stamp) return true;
+    return stamp === this.bimOwner();
+  }
+
   punchHole(face) {
     const loop = face.loop;
     if (!loop || loop.length < 3 || face.holes.length) return false;
@@ -1053,6 +1100,7 @@ class Model {
       return inside;
     };
     for (const g of this.faces.values()) {
+      if (!this.hostCuttableBy(g)) continue; // v0.6: never cut another element
       if (g.id === face.id || g.hidden) continue;
       const gPts = this.pts(g.loop);
       const gn = G.loopNormal(gPts);
@@ -1153,6 +1201,7 @@ class Model {
       let anyCandidate = false;
       for (const f of this.faces.values()) {
         if (f.id === face.id || f.holes.length || f.extrude || protectedIds.has(f.id)) continue;
+        if (!this.hostCuttableBy(f)) continue; // v0.6: never partition another element
         const fp = this.pts(f.loop);
         if (!fp.length || !onPlane(fp[0])) continue;
         const fn2 = G.loopNormal(fp);
@@ -1392,6 +1441,7 @@ class Model {
 
     for (const host of this.faces.values()) {
       if (host.id === face.id || host.hidden) continue;
+      if (!this.hostCuttableBy(host)) continue; // v0.6: never cut another element
       // (no group-scope guard: coplanar overlap is a geometric fact)
       const hPts = this.pts(host.loop);
       const hn = G.loopNormal(hPts);
@@ -1601,6 +1651,7 @@ class Model {
     const EPS = 1e-6;
 
     for (const host of this.faces.values()) {
+      if (!this.hostCuttableBy(host)) continue; // v0.6: never cut another element
       if (host.id === face.id || host.hidden) continue;
       // (no group-scope guard: coplanar overlap is a geometric fact)
       const hPts = this.pts(host.loop);
@@ -2380,6 +2431,26 @@ class Model {
   autoIntersect(changedIds) {
     let queue = changedIds.filter(id => this.faces.has(id));
     const seen = new Set(); // id pairs already processed
+    // v0.6 ELEMENT INDEPENDENCE (the IFC contract): faces belonging to
+    // DIFFERENT BIM elements never intersect — elements intentionally
+    // overlap by ELEMENT_EPS instead of welding/splitting into each other.
+    // This is also the performance contract: a building is N independent
+    // islands, so building element k costs O(k), not O(whole model). A
+    // fresh (unstamped) face intersects only its owner's faces while a
+    // build holds the model — bimHold carries the owning entity id when
+    // known, or is truthy for a first build (owner '__new__'). Free-mode
+    // drawing (bimHold falsy) keeps the classic behavior.
+    const ownerCtx = this.bimOwner();
+    const indepSkip = (a, b) => {
+      const sa = a.userData && a.userData.bimEntityId;
+      const sb = b.userData && b.userData.bimEntityId;
+      if (sa && sb) return sa !== sb;         // two elements: never intersect
+      if (ownerCtx) {                         // mid-build: fresh faces are the owner's
+        const stamped = sa || sb;
+        return !!stamped && stamped !== ownerCtx;
+      }
+      return false;                           // free mode: classic behavior
+    };
     // An AABB is a pure function of the face's rings: memoize it for the
     // scan and drop entries only when an intersection mutates that face.
     // Recomputing both boxes for every candidate pair made this the single
@@ -2396,9 +2467,19 @@ class Model {
     const inGrid = new Set();
     const key = (ix, iy, iz) => ix + ',' + iy + ',' + iz;
     // faceAABB is a flat array [minx,miny,minz,maxx,maxy,maxz]
+    // v0.6 PERF: during a build hold, faces stamped to OTHER elements can
+    // never pair with anything (indepSkip rejects every pair) — indexing
+    // them was pure waste: a 300-element rebuild re-inserted the whole
+    // model's faces into the grid per element. Index only candidates.
+    const ownerCtx0 = this.bimOwner();
+    const indexable = f => {
+      if (!ownerCtx0) return true;
+      const s = f.userData && f.userData.bimEntityId;
+      return !s || s === ownerCtx0;
+    };
     const gridInsert = id => {
       const f = this.faces.get(id);
-      if (!f || f.hidden || inGrid.has(id)) return;
+      if (!f || f.hidden || inGrid.has(id) || !indexable(f)) return;
       inGrid.add(id);
       const b = box(f);
       for (let ix = Math.floor(b[0] / CELL); ix <= Math.floor(b[3] / CELL); ix++)
@@ -2437,6 +2518,7 @@ class Model {
           seen.add(pk);
           const A = this.faces.get(cid); // fresh: a split may have replaced it
           if (!A) break;
+          if (indepSkip(A, f)) continue;  // v0.6: different elements never cut
           if (!Model.aabbOverlap(box(A), box(f))) continue;
           const ids0 = new Set(this.faces.keys());
           if (this.intersectFaces(A, f)) {

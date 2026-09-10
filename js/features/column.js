@@ -87,6 +87,19 @@
         height: Math.max(0.1, (app.bimOptions && app.bimOptions.unconnectedHeight) || s.height || 3),
       };
       const bounds = app.structural.columnBounds(params);
+      // v0.6 BEARING: a capping beam above shortens the column — its top
+      // lands at the beam's soffit + ELEMENT_EPS (overlap, never a cut); a
+      // beam directly under the base is embedded by the same EPS.
+      {
+        const bTop = app.structural.columnBearingTop(params);
+        if (bTop < bounds.zEnd - 1e-3) {
+          if (params.topLevelId) params.topOffset = (params.topOffset || 0) - (bounds.zEnd - bTop);
+          else params.height = Math.max(0.1, bTop - bounds.zStart);
+        }
+        const bBase = app.structural.columnBearingBase(params);
+        if (bBase < bounds.zStart - 1e-6) params.baseOffset = (params.baseOffset || 0) - (bounds.zStart - bBase);
+        bounds.zEnd = Math.min(bounds.zEnd, app.structural.columnBounds(params).zEnd);
+      }
       // solid top: a drop-panel head hangs UNDER a covering slab's soffit
       bounds.solidTop = app.structural.columnSolidTop(app.model, params);
       return { params, bounds };

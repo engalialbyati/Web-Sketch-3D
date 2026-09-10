@@ -842,20 +842,46 @@ class BimEntityManager {
   _deleteWallGeometry(ent) {
     const m = this.model;
     const hosted = this.entities.filter(e => e.params && e.params.hostWallId === ent.id);
+    // capture every ring edge of the geometry about to die: after deletion
+    // only THESE can be orphaned — reaping just them is O(deleted), while a
+    // full reapOrphanEdges() walks every edge in the model per wall
+    // (O(all) x N walls was the Rebuild-from-Parameters freeze)
+    const doomed = new Set();
+    const collect = fid => {
+      const f = m.faces.get(fid);
+      if (!f) return;
+      for (const r of m.rings(f)) for (let i = 0; i < r.length; i++) {
+        const e = m.findEdge(r[i], r[(i + 1) % r.length]);
+        if (e) doomed.add(e.id);
+      }
+    };
+    for (const h of hosted) for (const fid of [...h.faces]) collect(fid);
+    for (const fid of [...ent.faces]) collect(fid);
     for (const h of hosted) for (const fid of [...h.faces]) m.faces.delete(fid);
     for (const fid of [...ent.faces]) m.faces.delete(fid);
     for (const eid of [...ent.edges]) m.edges.delete(eid);
     m.gc();
     // deleting the wall's recorded edges can also take edges it SHARED with
-    // touching geometry (a column or floor at the corner) — recreate any
-    // ring edge a surviving face still needs, or validate/tx-guard flags it
-    for (const f2 of m.faces.values()) {
+    // touching geometry (a hosted opening's reveals, a floor at the corner)
+    // — recreate any ring edge a SURVIVOR still needs. Scoped to the faces
+    // that actually bordered the doomed set: the old all-faces walk was
+    // O(model) per wall — the Rebuild-from-Parameters freeze.
+    const survivors = new Set();
+    for (const eid of doomed) {
+      const e = m.edges.get(eid);
+      if (!e) continue;
+      for (const f2 of m.facesAdjacentToEdge(e)) survivors.add(f2.id);
+    }
+    for (const fid of survivors) {
+      const f2 = m.faces.get(fid);
+      if (!f2) continue;
       m.edgesForRing(f2.loop, true);
       for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
     }
     // edges born from HOSTED CUTS (the notch splits in the wall's old loops)
     // die with their faces — reap them or the fresh re-extrusion welds the
-    // stale notch lines back in and fragments into split pieces
+    // stale notch lines back in and fragments. Full reap (one-pass index,
+    // cheap) also purges the freed vertices so nothing stale chains in.
     m.reapOrphanEdges();
     return hosted;
   }
@@ -893,9 +919,17 @@ class BimEntityManager {
       const spec = { distanceFromStart: h.params.distanceFromStart, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
       // snapshot BEFORE the cut: the reveal band born from the cut itself
       // stamps to the hosted element as 'lining' — the same ownership the
-      // original placement records, so deleting the element heals cleanly
+      // original placement records, so deleting the element heals cleanly.
+      // v0.6: the hold names THIS wall as owner so the cut may open its
+      // freshly-stamped faces (every other element stays an island)
       const hb = new Set(m.faces.keys());
-      const info = window.BimTools.HostedCut.cut(G, m, ent.params, spec);
+      m.bimHold = id;
+      let info;
+      try {
+        info = window.BimTools.HostedCut.cut(G, m, ent.params, spec);
+      } finally {
+        m.bimHold = false; // release the named hold; the base hold remains
+      }
       if (info.error) continue;
       const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
       h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
@@ -2585,139 +2619,178 @@ class App {
   // Wipes all geometry and regenerates every entity against its CURRENT
   // neighbors (foundation -> column -> wall -> slab -> beam). Repairs any
   // history: corpses, stale trims, orphan lines, ring drift.
+  // v0.6: STAGED — a large building rebuilds in ~40 ms slices between
+  // paints (progress in the status bar, the UI never freezes: the owner's
+  // report was minutes of lockup). Small models stay synchronous so
+  // interactive param edits return instantly. New edits are refused while
+  // a staged rebuild runs.
   rebuildFromParams() {
+    if (this._rebuilding) { this.toast('A rebuild is already running — one moment', true); return null; }
     const defs = this.bim.entities.map(e => ({ id: e.id, type: e.type, params: JSON.parse(JSON.stringify(e.params || {})) }));
     const skipped = [];
     let counts = {};
     // rebuildable types — everything else (stairs, scripts, hosted openings,
     // assets) KEEPS its geometry: never wipe what you cannot restore
     const CAN = { foundation: 1, column: 1, wall: 1, slab: 1, floor: 1, beam: 1, roof: 1 };
-    this.run('rebuild from parameters', mm => {
-      mm.bimHold = true;
+    const wipe = mm => {
+      const keepFaces = new Set(), keepEdges = new Set();
+      for (const e of this.bim.entities) {
+        if (CAN[e.type]) continue;
+        for (const fid of e.faces) keepFaces.add(fid);
+        for (const eid of e.edges) keepEdges.add(eid);
+      }
+      for (const [fid, f] of [...mm.faces]) if (!keepFaces.has(fid)) mm.faces.delete(fid);
+      for (const [eid, e2] of [...mm.edges]) if (!keepEdges.has(eid)) mm.edges.delete(eid);
+      mm.gc();
+      // recreate ring edges survivors may share with the wiped set
+      for (const f of mm.faces.values()) {
+        mm.edgesForRing(f.loop, true);
+        for (const h of (f.holes || [])) mm.edgesForRing(h, true);
+      }
+      for (const e of this.bim.entities) if (CAN[e.type]) { e.faces = []; e.edges = []; }
+    };
+    const adopt = (mm, ent, rolesOf) => {
+      const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
+      const roles = {}; for (const f of nf) roles[f.id] = rolesOf(f, ent);
+      const ne = [];
+      for (const f of nf) for (const ring of mm.rings(f)) for (let i = 0; i < ring.length; i++) {
+        const e2 = mm.findEdge(ring[i], ring[(i + 1) % ring.length]);
+        if (e2 && !e2.userData) ne.push(e2.id);
+      }
+      for (const [fid, role] of Object.entries(roles)) {
+        const f = mm.faces.get(+fid);
+        if (f) f.userData = { bimEntityId: ent.id, bimType: ent.type, role };
+      }
+      ent.faces = Object.keys(roles).map(Number);
+      ent.edges = [...new Set(ne)];
+      for (const eid of ent.edges) {
+        const e2 = mm.edges.get(eid);
+        if (e2 && !e2.userData) e2.userData = { bimEntityId: ent.id, bimType: ent.type, role: 'profile' };
+      }
+    };
+    const rebuildOne = mm => d => {
+      const ent = this.bim.getEntityById(d.id);
+      if (!ent) return;
       try {
-        const keepFaces = new Set(), keepEdges = new Set();
-        for (const e of this.bim.entities) {
-          if (CAN[e.type]) continue;
-          for (const fid of e.faces) keepFaces.add(fid);
-          for (const eid of e.edges) keepEdges.add(eid);
-        }
-        for (const [fid, f] of [...mm.faces]) if (!keepFaces.has(fid)) mm.faces.delete(fid);
-        for (const [eid, e2] of [...mm.edges]) if (!keepEdges.has(eid)) mm.edges.delete(eid);
-        mm.gc();
-        // recreate ring edges survivors may share with the wiped set
-        for (const f of mm.faces.values()) {
-          mm.edgesForRing(f.loop, true);
-          for (const h of (f.holes || [])) mm.edgesForRing(h, true);
-        }
-        for (const e of this.bim.entities) if (CAN[e.type]) { e.faces = []; e.edges = []; }
-        const adopt = (ent, rolesOf) => {
-          const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
-          const roles = {}; for (const f of nf) roles[f.id] = rolesOf(f, ent);
-          const ne = [];
-          for (const f of nf) for (const ring of mm.rings(f)) for (let i = 0; i < ring.length; i++) {
-            const e2 = mm.findEdge(ring[i], ring[(i + 1) % ring.length]);
-            if (e2 && !e2.userData) ne.push(e2.id);
+        if (d.type === 'foundation') {
+          this.structural.buildFooting(G, mm, d.params);
+          adopt(mm, ent, (f) => { const c = mm.faceCentroid(f);
+            return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
+        } else if (d.type === 'column') {
+          const b = d.params.base;
+          ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0);
+          adopt(mm, ent, (f) => { const c = mm.faceCentroid(f);
+            return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
+        } else if (d.type === 'wall' && d.params.base && d.params.end) {
+          const bp = d.params.base, ep = d.params.end;
+          const wl = Math.hypot(ep[0] - bp[0], ep[1] - bp[1]) || 1;
+          const spans = [];
+          let cur = 0;
+          const tr = this.structural ? this.structural.wallPlanTrims(d.params) : null;
+          for (const iv of (tr ? tr.intervals : [])) {
+            if (iv.t0 - cur > 0.05) spans.push([cur, iv.t0]);
+            cur = Math.max(cur, iv.t1);
           }
-          for (const [fid, role] of Object.entries(roles)) {
-            const f = mm.faces.get(+fid);
-            if (f) f.userData = { bimEntityId: ent.id, bimType: ent.type, role };
+          if (wl - cur > 0.05) spans.push([cur, wl]);
+          if (spans.length) {
+            this.bim._splitWallToSpans(ent, spans, {
+              ax: bp[0], ay: bp[1],
+              ux: (ep[0] - bp[0]) / wl, uy: (ep[1] - bp[1]) / wl, L: wl,
+            });
+            ent.faces = ent.faces.concat([]);
+            adopt(mm, ent, () => 'exterior'); // sweep up any strays (holes from hosted cuts etc.)
           }
-          ent.faces = Object.keys(roles).map(Number);
-          ent.edges = [...new Set(ne)];
-          for (const eid of ent.edges) {
-            const e2 = mm.edges.get(eid);
-            if (e2 && !e2.userData) e2.userData = { bimEntityId: ent.id, bimType: ent.type, role: 'profile' };
+        } else if ((d.type === 'slab' || d.type === 'floor') && d.params.regions) {
+          for (const r of d.params.regions) {
+            const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
+            if (f) mm.pushPull(f, -(d.params.thickness || 0.2));
           }
-        };
-        for (const d of defs) {
-          const ent = this.bim.getEntityById(d.id);
-          if (!ent) continue;
-          try {
-            if (d.type === 'foundation') {
-              this.structural.buildFooting(G, mm, d.params);
-              adopt(ent, (f) => { const c = mm.faceCentroid(f);
-                return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
-            } else if (d.type === 'column') {
-              const b = d.params.base;
-              ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0);
-              adopt(ent, (f) => { const c = mm.faceCentroid(f);
-                return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
-            } else if (d.type === 'wall' && d.params.base && d.params.end) {
-              // span-wise: a full-span extrusion through a standing column
-              // crosses its faces exactly (no reveal) and the split cascade
-              // explodes. The split allocator extrudes each FREE span with
-              // the 1 mm reveal — and re-creates the piece elements for
-              // mid-run intruders, exactly like a live placement.
-              const bp = d.params.base, ep = d.params.end;
-              const wl = Math.hypot(ep[0] - bp[0], ep[1] - bp[1]) || 1;
-              const spans = [];
-              let cur = 0;
-              const tr = this.structural ? this.structural.wallPlanTrims(d.params) : null;
-              for (const iv of (tr ? tr.intervals : [])) {
-                if (iv.t0 - cur > 0.05) spans.push([cur, iv.t0]);
-                cur = Math.max(cur, iv.t1);
-              }
-              if (wl - cur > 0.05) spans.push([cur, wl]);
-              if (spans.length) {
-                this.bim._splitWallToSpans(ent, spans, {
-                  ax: bp[0], ay: bp[1],
-                  ux: (ep[0] - bp[0]) / wl, uy: (ep[1] - bp[1]) / wl, L: wl,
-                });
-                ent.faces = ent.faces.concat([]);
-                adopt(ent, () => 'exterior'); // sweep up any strays (holes from hosted cuts etc.)
-              }
-            } else if ((d.type === 'slab' || d.type === 'floor') && d.params.regions) {
-              for (const r of d.params.regions) {
-                const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
-                if (f) mm.pushPull(f, -(d.params.thickness || 0.2));
-              }
-              adopt(ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; });
-            } else if (d.type === 'roof' && window.RoofFeature && d.params.regions) {
-              for (const r of d.params.regions) {
-                const zr = (r.outer[0] && r.outer[0][2] != null) ? r.outer[0][2]
-                  : this.levelManager.getElevation(d.params.baseLevel);
-                RoofFeature.buildRegion(G, mm, {
-                  kind: d.params.kind || 'flat', thickness: d.params.thickness || 0.2,
-                  pitch: d.params.pitch || 15, overhang: d.params.overhang || 0,
-                  region: r, z: zr });
-              }
-              adopt(ent, () => 'body');
-            } else if (d.type === 'beam') {
-              this.structural.buildBeam(G, mm, d.params);
-              adopt(ent, () => 'body');
-            } else { skipped.push(d.type); continue; }
-            counts[d.type] = (counts[d.type] || 0) + 1;
-          } catch (e) { /* one bad element never kills the repair */ }
-        }
-        // OWNERSHIP SETTLEMENT: later walls' miter welds repartitioned
-        // earlier walls' faces (their lists now hold dead ids) — without
-        // this re-stamp the empty-faces reap would detach every welded
-        // neighbor ('rebuild from parameters loses walls')
-        this.bim._restampWallFaces();
-      } finally { mm.bimHold = false; }
-    });
-    // the wall-face rule survives parametric rebuilds: the wall branch
-    // above extrudes the FULL span — any wall whose path crosses a standing
-    // column/beam re-trims to its face right here, or 'Rebuild from
-    // Parameters' would quietly undo the rule
-    for (const ent of this.bim.entities) {
-      if (ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end || ent.params.closed) continue;
-      if (this.structural && this.structural.wallPlanTrims(ent.params)) this.bim.planTrimWall(ent.id);
+          adopt(mm, ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; });
+        } else if (d.type === 'roof' && window.RoofFeature && d.params.regions) {
+          for (const r of d.params.regions) {
+            const zr = (r.outer[0] && r.outer[0][2] != null) ? r.outer[0][2]
+              : this.levelManager.getElevation(d.params.baseLevel);
+            RoofFeature.buildRegion(G, mm, {
+              kind: d.params.kind || 'flat', thickness: d.params.thickness || 0.2,
+              pitch: d.params.pitch || 15, overhang: d.params.overhang || 0,
+              region: r, z: zr });
+          }
+          adopt(mm, ent, () => 'body');
+        } else if (d.type === 'beam') {
+          this.structural.buildBeam(G, mm, d.params);
+          adopt(mm, ent, () => 'body');
+        } else { skipped.push(d.type); return; }
+        counts[d.type] = (counts[d.type] || 0) + 1;
+      } catch (e) { /* one bad element never kills the repair */ }
+    };
+    // post-loop: junction re-derivation + ownership settlement + report
+    const finish = () => {
+      // v0.6: wall/beam plan trims are retired (elements never divide each
+      // other) — the calls are kept conditional and cheap no-ops
+      for (const ent of this.bim.entities) {
+        if (ent.type !== 'wall' || !ent.params || !ent.params.base || !ent.params.end || ent.params.closed) continue;
+        if (this.structural && this.structural.wallPlanTrims(ent.params)) this.bim.planTrimWall(ent.id);
+      }
+      for (const ent of this.bim.entities) {
+        if (ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+        if (this.structural && this.structural.beamPlanTrims(ent.params)) this.bim.planTrimBeam(ent.id);
+      }
+      this.bim._restampWallFaces();
+      this.view.rebuild(); this.updateInfo();
+      const v = this.model.validate();
+      this.toast(`Rebuilt from parameters: ${Object.entries(counts).map(([k, n]) => n + ' ' + k + 's').join(', ')}` +
+        (skipped.length ? ` (skipped ${skipped.length} unsupported)` : '') +
+        (v.ok ? ' — model valid' : ' — validate still flags issues'), !v.ok);
+      return { counts, skipped, valid: v.ok };
+    };
+
+    if (defs.length < 40) {
+      // synchronous: interactive edits on ordinary models
+      this.run('rebuild from parameters', mm => {
+        mm.bimHold = true;
+        try {
+          wipe(mm);
+          for (const d of defs) rebuildOne(mm)(d);
+          // OWNERSHIP SETTLEMENT: later walls' miter welds repartitioned
+          // earlier walls' faces — re-stamp or the empty-faces reap would
+          // detach every welded neighbor ('rebuild from parameters loses walls')
+          this.bim._restampWallFaces();
+        } finally { mm.bimHold = false; }
+      });
+      return finish();
     }
-    // beams re-derive their mid-run splits the same way
-    for (const ent of this.bim.entities) {
-      if (ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
-      if (this.structural && this.structural.beamPlanTrims(ent.params)) this.bim.planTrimBeam(ent.id);
-    }
-    // FINAL settlement: the post-loop re-trims can churn wall face lists
-    // again — re-stamp + resync once more so no wall leaves faceless
-    this.bim._restampWallFaces();
-    this.view.rebuild(); this.updateInfo();
-    const v = this.model.validate();
-    this.toast(`Rebuilt from parameters: ${Object.entries(counts).map(([k, n]) => n + ' ' + k + 's').join(', ')}` +
-      (skipped.length ? ` (skipped ${skipped.length} unsupported)` : '') +
-      (v.ok ? ' — model valid' : ' — validate still flags issues'), !v.ok);
-    return { counts, skipped, valid: v.ok };
+
+    // STAGED: identical work in time-sliced chunks with a progress status
+    this._rebuilding = true;
+    const tx = this.transaction.begin('rebuild from parameters');
+    const mm = this.model;
+    mm.bimHold = true;
+    let i = 0;
+    let wiped = false;
+    const step = () => {
+      const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      try {
+        if (!wiped) { wipe(mm); wiped = true; }
+        const t0 = now();
+        while (i < defs.length) {
+          rebuildOne(mm)(defs[i++]);
+          if (now() - t0 > 40) break;
+        }
+      } catch (e) { /* slice failure: keep going, the settlement re-stamps */ }
+      if (i < defs.length) {
+        this.setStatus(`Rebuilding from parameters — ${i}/${defs.length} elements…`);
+        setTimeout(step, 0);
+        return;
+      }
+      try { this.bim._restampWallFaces(); } catch (e) { }
+      mm.bimHold = false;
+      try { tx.commit(); } catch (e) { /* rollback already handled by the guard */ }
+      this._rebuilding = false;
+      finish();
+    };
+    this.toast(`Rebuilding ${defs.length} elements — progress in the status bar, edits pause until it finishes`);
+    setTimeout(step, 0);
+    return { staged: true };
   }
 
   // STANDING JUNCTION RE-DERIVATION (element isolation): every element's
@@ -6295,6 +6368,7 @@ class App {
     return this._openTx;
   }
   _runTx(label, fn) {
+    if (this._rebuilding) { this.toast('Rebuilding from parameters — edits resume in a moment', true); return undefined; }
     const tx = this._beginTx(label);
     let out;
     try {
@@ -6344,18 +6418,17 @@ class App {
     } finally { this._syncingWalls = false; }
     return n;
   }
-  // One wall's clearance re-fit. The built wall sits ~1 mm below the
-  // governing soffit (beams already carry their own 0.5 mm drop, so the
-  // stagger keeps any two stacked faces from ever coinciding — no
-  // z-fighting, invisible at any zoom).
+  // One wall's clearance re-fit. The built wall's top reaches ELEMENT_EPS
+  // INTO the governing soffit (v0.6 bearing overlap — the joint reads solid
+  // at any zoom and no two faces ever share a plane).
   _fitWallClearance(ent, pool = null, downOnly = false) {
     const p = ent.params;
     const cl = this.structural.wallClearance(p, {
       model: this.model,
       structure: pool ? [...this.bim.entities, ...pool] : undefined,
     });
-    const reveal = cl.deductions.length ? 1e-3 : 0;
-    const topZ = cl.topZ - reveal;
+    const overlap = cl.deductions.length ? 1e-4 : 0;
+    const topZ = cl.topZ + overlap;
     const baseZ = p.base[2];
     const h = Math.max(0.05, topZ - baseZ);
     if (Math.abs(h - (p.height || 0)) < 1e-4) return false;
@@ -6372,6 +6445,34 @@ class App {
   preTrimWallsFor(pendingEnt) {
     if (!this.structural) return 0;
     return this.syncStructuralWalls([pendingEnt]);
+  }
+  // v0.6 BEARING SYNC — columns follow beams the way walls follow structure:
+  // a column tops out at a capping beam's soffit (+ELEMENT_EPS overlap) and
+  // grows back when the beam leaves. Elements never cut each other — the
+  // column simply regenerates from its own params against the beam grid.
+  syncColumnBearing(pool = null) {
+    if (!this.structural || !this.structural.columnBearingTop) return 0;
+    if (this._syncingColumns) return 0;
+    const structure = pool ? [...this.bim.entities, ...pool] : null;
+    let n = 0;
+    this._syncingColumns = true;
+    try {
+      for (const ent of this.bim.entities) {
+        if (ent.type !== 'column' || !ent.params || !ent.faces.length) continue;
+        if (this.structural.isDropPanel(ent.params)) continue; // syncDropPanels owns heads
+        const b = this.structural.columnBounds(ent.params);
+        const desired = this.structural.columnBearingTop(ent.params, structure);
+        const h = Math.max(0.1, desired - b.zStart);
+        if (Math.abs(h - (ent.params.height || 0)) < 1e-4) continue;
+        const changed = this.transaction.run('column bearing', () => {
+          ent.params.height = h;
+          if (!this.bim.rebuildColumnEntity(ent.id)) throw new Error('column rebuild failed');
+          return true;
+        });
+        if (changed === true) n++;
+      }
+    } finally { this._syncingColumns = false; }
+    return n;
   }
   // Drop-panel columns re-fit when slabs appear, move or vanish above them:
   // the head must hang UNDER the covering slab (flat-slab construction) and
@@ -6488,6 +6589,7 @@ class App {
         this._wallSyncQueued = false;
         this.syncStructuralWalls(); // deletions/edits re-fit walls (grow back)
         this.syncDropPanels(); // drop heads re-hang under slabs (or grow back)
+        this.syncColumnBearing(); // v0.6: columns re-cap under beams (or grow back)
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates

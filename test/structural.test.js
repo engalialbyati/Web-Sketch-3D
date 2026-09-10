@@ -107,10 +107,11 @@ module.exports = h => {
     ok(faces.length >= 6, 'rect beam needs 4 sides + 2 caps, got ' + faces.length);
     // + join extension: webWidth/2 per end (cast-in-place corner overlap)
     near(m.shellVolume(faces.map(f => f.id)), 0.25 * 0.5 * (4 + 0.25), 1e-9);
-    // the sweep hangs from the level plane (0.5 mm anti-z-fight drop)
+    // the sweep hangs from the level plane by ELEMENT_EPS (v0.6: its top
+    // face then buries strictly inside any slab at the same level)
     const zs = faces.flatMap(f => m.pts(f.loop).map(q => q.z));
-    near(Math.max(...zs), 4.0 - 5e-4, 1e-9);
-    near(Math.min(...zs), 3.5 - 5e-4, 1e-9);
+    near(Math.max(...zs), 4.0 - 1e-4, 1e-9);
+    near(Math.min(...zs), 3.5 - 1e-4, 1e-9);
     eq(m.validate().ok, true);
   });
   test('T beam sweep: flange at the level, stem projecting below', () => {
@@ -298,23 +299,22 @@ module.exports = h => {
   });
 
   // ================================================== 6. constructive precedence
-  test('slab is punched at columns passing through (no duplicate volume)', () => {
+  test('slab stays SOLID where columns pass through (v0.6: overlap, no punch)', () => {
     const m = new Model();
     const col = { id: 'col_1', type: 'column', params: { base: [2, 0, 0], width: 0.4, depth: 0.4, baseLevelId: 'lvl_0', topLevelId: 'lvl_1' } };
     const M = mgr([col]);
     const region = { outer: [[0, -2, 4], [6, -2, 4], [6, 2, 4], [0, 2, 4]], holes: [] };
     const holes = M.columnHolesForSlab(m, { baseLevel: 'lvl_1', thickness: 0.2, _planeZ: 4 }, region);
-    eq(holes.length, 1);
-    eq(holes[0].entId, 'col_1');
-    // build the slab with the punched ring: the opening must survive the sweep
+    eq(holes.length, 0, 'v0.6: columnHolesForSlab never punches');
+    // the slab extrudes SOLID; the passing column overlaps it by ELEMENT_EPS
     const outer = region.outer.map(q => G.v(q[0], q[1], q[2]));
-    const f = m.addFaceFromRings(outer, holes.map(hh => hh.ring));
-    ok(f && f.holes.length === 1, 'slab face carries the column opening');
+    const f = m.addFaceFromRings(outer);
+    ok(f && f.holes.length === 0, 'slab face is solid');
     ok(m.pushPull(f, -0.2));
     eq(m.validate().ok, true);
-    near(m.shellVolume([...m.faces.keys()]), 6 * 4 * 0.2 - 0.4 * 0.4 * 0.2, 1e-9);
+    near(m.shellVolume([...m.faces.keys()]), 6 * 4 * 0.2, 1e-9);
   });
-  test('column hole punching skips edge-straddling and non-passing columns', () => {
+  test('columnHolesForSlab is a no-op for every configuration (v0.6)', () => {
     const m = new Model();
     const edge = { id: 'col_e', type: 'column', params: { base: [6, 0, 0], width: 0.4, depth: 0.4, baseLevelId: 'lvl_0', topLevelId: 'lvl_1' } };   // on the region boundary
     const below = { id: 'col_b', type: 'column', params: { base: [2, 0, 0], width: 0.4, depth: 0.4, baseLevelId: 'lvl_0', topLevelId: 'lvl_0', topOffset: 2 } }; // stops below the slab

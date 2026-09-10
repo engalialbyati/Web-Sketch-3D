@@ -124,8 +124,8 @@ module.exports = h => {
     // a PENDING slab (not yet in the registry) counts via the pool
     near(mgr([]).dropPanelSoffit(null, DPP, [SLAB]), 3.25, 1e-9);
   });
-  test('columnSolidTop: head hangs 0.5 mm under the soffit; override honored', () => {
-    near(mgr([SLAB]).columnSolidTop(null, DPP), 3.25 - 5e-4, 1e-9);
+  test('columnSolidTop: head overlaps EPS into the soffit; override honored', () => {
+    near(mgr([SLAB]).columnSolidTop(null, DPP), 3.25 + 1e-4, 1e-9); // v0.6: +EPS overlap into the slab
     near(mgr([]).columnSolidTop(null, DPP), 3.5, 1e-9, 'no slab → level plane');
     near(mgr([SLAB]).columnSolidTop(null, { ...DPP, panelTopZ: 3.0 }), 3.0, 1e-9, 'explicit panelTopZ wins (re-fit path)');
     // a soffit absurdly low (no room left) falls back to the level plane
@@ -139,9 +139,9 @@ module.exports = h => {
     ok(m.validate().ok);
     let zMax = -Infinity;
     for (const f of faces) zMax = Math.max(zMax, m.faceCentroid(f).z);
-    near(zMax, 3.25 - 5e-4, 1e-6, 'panel top = soffit − stagger');
+    near(zMax, 3.25 + 1e-4, 1e-6, 'panel top = soffit + ELEMENT_EPS (v0.6 bearing overlap)');
     // and nothing reaches into the slab band
-    for (const f of faces) ok(m.faceCentroid(f).z <= 3.25 - 5e-4 + 1e-6, 'no geometry inside the slab');
+    for (const f of faces) ok(m.faceCentroid(f).z <= 3.25 + 1e-4 + 1e-6, 'head reaches only EPS into the slab');
   });
   test('buildColumn: re-fit moves an already-built head down (order 2 — column first)', () => {
     const m = new Model();
@@ -152,10 +152,10 @@ module.exports = h => {
     // what app.bim.refitDropPanelColumn does: delete + rebuild at panelTopZ
     for (const f of [...before]) m.faces.delete(f.id);
     m.gc();
-    const after = mgr([SLAB]).buildColumn(G, m, { ...DPP, panelTopZ: 3.25 - 5e-4 });
+    const after = mgr([SLAB]).buildColumn(G, m, { ...DPP, panelTopZ: 3.25 + 1e-4 });
     let zMax2 = -Infinity;
     for (const f of after) zMax2 = Math.max(zMax2, m.faceCentroid(f).z);
-    near(zMax2, 3.25 - 5e-4, 1e-6, 'rebuilt head now hangs under the slab');
+    near(zMax2, 3.25 + 1e-4, 1e-6, 'rebuilt head overlaps EPS into the slab');
     ok(m.validate().ok);
   });
   test('takeoff: drop head under a slab follows the shifted band', () => {
@@ -166,18 +166,20 @@ module.exports = h => {
     };
     const under = vol([SLAB]);
     eq(under.length, 2, 'shaft + panel prisms');
-    near(under[1].z[1], 3.25 - 5e-4, 1e-6, 'panel prism tops at the soffit');
-    near(under[0].z[1], 3.25 - 5e-4 - 0.15, 1e-6, 'shaft stops under the panel');
+    near(under[1].z[1], 3.25 + 1e-4, 1e-6, 'panel prism tops at the soffit + EPS');
+    near(under[0].z[1], 3.25 + 1e-4 - 0.15, 1e-6, 'shaft stops under the panel');
   });
-  test('columnHolesForSlab: drop panels never punch (they re-fit under); rect columns do', () => {
+  test('columnHolesForSlab: NOBODY punches (v0.6) — drop panels re-fit under, rect columns overlap', () => {
     const region = { outer: SLAB.params.regions[0].outer.map(q => ({ x: q[0], y: q[1] })), holes: [] };
     const slabP = { baseLevel: 'lvl_1', levelId: 'lvl_1', thickness: 0.25, _planeZ: 3.5 };
     const dpCol = { id: 'c1', type: 'column', params: DPP };
     eq(mgr([dpCol, SLAB]).columnHolesForSlab(null, slabP, region).length, 0,
       'drop-panel columns re-fit under the slab instead of punching it');
     const rectCol = { id: 'c2', type: 'column', params: { base: [0, 0, 0], width: 0.3, depth: 0.3, baseLevelId: 'lvl_0', topLevelId: 'lvl_1', height: 3.5 } };
-    eq(mgr([rectCol]).columnHolesForSlab(null, slabP, region).length, 1,
-      'plain columns still punch through');
+    // v0.6 ELEMENT INDEPENDENCE: NOBODY punches — the column passes through
+    // the slab and the two overlap by ELEMENT_EPS
+    eq(mgr([rectCol]).columnHolesForSlab(null, slabP, region).length, 0,
+      'plain columns pass through solid (v0.6: overlap, never punch)');
   });
 
   test('normalize: couplings — drop surrounds the shaft, plans stay buildable', () => {

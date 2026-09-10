@@ -375,6 +375,12 @@
     // 1 mm reveal that keeps faces off shared planes). Returns null when the
     // baseline crosses nothing (the common case — cheap early-out).
     wallPlanTrims(wallParams, pending) {
+      // v0.6 ELEMENT INDEPENDENCE: a wall is NEVER split or trimmed by the
+      // columns and beams standing in its path — elements overlap by
+      // ELEMENT_EPS instead of dividing each other (the IFC contract:
+      // connections are relationships, not geometry). The vertical bearing
+      // (wall top under a beam/slab soffit) lives in wallClearance.
+      return null;
       const p = wallParams;
       if (!p.base || !p.end) return null;
       const ax = p.base[0], ay = p.base[1], bx = p.end[0], by = p.end[1];
@@ -487,6 +493,10 @@
     // parameter — piece baselines run center-to-center and buildBeam does
     // the face trim, exactly like every hand-drawn framing beam.
     beamPlanTrims(beamParams, pending) {
+      // v0.6 ELEMENT INDEPENDENCE: a beam is NEVER split by columns rising
+      // through it — beam and column overlap by ELEMENT_EPS (bearing, not
+      // division). Kept as a stub: callers consult it opportunistically.
+      return null;
       const p = beamParams;
       const bl = p.baseline;
       if (!bl || bl.length < 2) return null;
@@ -582,6 +592,57 @@
       };
     }
 
+    // v0.6 BEARING (the owner's rule, real-life construction): a column
+    // TOPS OUT at the soffit of the beam above it (story top − beam depth),
+    // and BASES on the beam directly under it when one sits at its level.
+    // Beams and columns then overlap by ELEMENT_EPS — bearing, never
+    // splitting. Returns the z the column's solid should reach.
+    columnBearingTop(p, pool = null) {
+      const b = this.columnBounds(p);
+      const cx = (p.base || p.center || [0, 0])[0], cy = (p.base || p.center || [0, 0])[1];
+      let top = b.zEnd;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.id === p.id || ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+        const bb = this.beamBounds(ent.params);
+        if (bb.zBottom < b.zStart + 0.05) continue;      // beside/under it, not capping it
+        if (bb.zBottom > b.zEnd + 1e-3) continue;        // clearly above its top constraint
+        if (!this._beamCrossesPoint(ent.params, cx, cy)) continue;
+        top = Math.min(top, bb.zBottom + 1e-4);          // overlap INTO the beam above
+      }
+      return top;
+    }
+    /** A beam top directly under this column's base (within a tolerance):
+     *  the column then starts EPS INTO that beam (no coplanar faces). */
+    columnBearingBase(p, pool = null) {
+      const b = this.columnBounds(p);
+      const cx = (p.base || p.center || [0, 0])[0], cy = (p.base || p.center || [0, 0])[1];
+      let base = b.zStart;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.id === p.id || ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+        const bb = this.beamBounds(ent.params);
+        const topOfBeam = bb.zBottom + (bb.height || 0.5);
+        if (Math.abs(topOfBeam - b.zStart) > 1e-3) continue; // must sit AT the column base
+        if (!this._beamCrossesPoint(ent.params, cx, cy)) continue;
+        base = Math.min(base, topOfBeam - 1e-4);             // EPS INTO the beam's top
+        break;
+      }
+      return base;
+    }
+    /** Does the beam's run pass over plan point (x, y)? (band test) */
+    _beamCrossesPoint(bp, x, y) {
+      const bl = bp.baseline;
+      const A = bl[0], B = bl[bl.length - 1];
+      const dx = B[0] - A[0], dy = B[1] - A[1];
+      const L2 = dx * dx + dy * dy;
+      if (L2 < 1e-9) return false;
+      const t = ((x - A[0]) * dx + (y - A[1]) * dy) / L2;
+      if (t < -0.02 || t > 1.02) return false;
+      const px = A[0] + dx * Math.max(0, Math.min(1, t)), py = A[1] + dy * Math.max(0, Math.min(1, t));
+      const prof = BeamProfiles.normalize(bp);
+      const half = (prof.flangeWidth || prof.webWidth || 0.2) / 2 + 0.02;
+      return Math.hypot(x - px, y - py) <= half;
+    }
+
     // ---------------------------------------------------------- B-Rep builds
     /** Map a profile (u, v) loop to world points on the vertical section
      *  plane through `at`, for a baseline A -> B (used for caps, preview,
@@ -645,11 +706,13 @@
       const B = reachB > 0 ? [B0[0] - d.x * reachB, B0[1] - d.y * reachB, B0[2]]
         : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
-      // The sweep sits 0.5 mm below the reference plane: a slab sketched at
-      // the same level (or another beam crossing) then meets NO coplanar
-      // top face, so nothing z-fights and no arrangement repartitions the
-      // flange. Invisible at any zoom; quantities use the exact section.
-      const zDrop = 5e-4;
+      // The sweep sits ELEMENT_EPS below the reference plane (v0.6: the
+      // standard element overlap): a slab at the same level then buries the
+      // beam's top face strictly inside itself — no coplanar top faces, no
+      // z-fighting, no arrangement repartitions the flange. Invisible at
+      // any zoom; quantities use the exact section. (Local mirror of
+      // Model.ELEMENT_EPS — Model isn't a binding in every load context.)
+      const zDrop = 1e-4;
       const startLoop = this.profileWorld(G, p, A).map(q => G.v(q.x, q.y, q.z - zDrop));
       const before = new Set(model.faces.keys());
       const f = model.addFaceFromRings(startLoop);
@@ -863,7 +926,9 @@
         if (isFinite(+p.panelTopZ)) top = +p.panelTopZ;
         else {
           const s = this.dropPanelSoffit(model, p, structure);
-          if (s != null) top = s - 5e-4;
+          // v0.6: the head overlaps INTO the slab above by ELEMENT_EPS —
+          // bearing overlap, not the old 0.5 mm reveal gap
+          if (s != null) top = s + 1e-4;
         }
         if (top != null && top > b.zStart + 0.12) return top;
       }
@@ -876,6 +941,11 @@
      *  column volume. Only strictly-inside footprints qualify (edge cases
      *  interpenetrate and are resolved by the quantity takeoff instead). */
     columnHolesForSlab(model, slabParams, region) {
+      // v0.6 ELEMENT INDEPENDENCE: columns never punch slabs — the column
+      // passes through the slab and they overlap by ELEMENT_EPS (real
+      // cast-in-place construction: the slab is poured around the
+      // reinforcing column). Slabs extrude solid.
+      return [];
       const b = this.slabBounds(slabParams);
       const z = slabParams._planeZ != null ? slabParams._planeZ : b.zTop;
       const P2 = q => Array.isArray(q) ? { x: q[0], y: q[1] } : q; // arrays or points

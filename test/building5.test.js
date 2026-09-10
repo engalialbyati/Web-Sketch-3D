@@ -187,17 +187,17 @@ module.exports = h => {
       ok(/visits a vertex twice/.test(e), 'only the known cosmetic class: ' + e);
   });
 
-  test('slabs are punched by the columns that end at their plane', () => {
+  test('slabs stay SOLID where columns pass through (v0.6 independence)', () => {
     const floors = bim.entities.filter(e => e.type === 'floor');
     eq(floors.length, 4, 'four slabs');
+    // no punches: columns pass through the slab and the two overlap by
+    // ELEMENT_EPS — real cast-in-place construction, no divided geometry
     for (const f of floors)
-      eq(f.params.regions[0].holes.length, 4, f.id + ' punched at all 4 columns');
-    // and the punch is real in the geometry: every slab owns a HOLED TOP
-    // face (the missing-top-face regression)
+      eq(f.params.regions[0].holes.length, 0, f.id + ' carries no column punches');
     for (const f of floors) {
       const tops = f.faces.map(id => m.faces.get(id)).filter(face =>
-        face && (face.holes || []).length >= 4 && Math.abs(m.faceCentroid(face).z - f.params.regions[0].outer[0][2]) < 1e-3);
-      eq(tops.length, 1, f.id + ' owns its holed top face');
+        face && !face.holes.length && Math.abs(m.faceCentroid(face).z - f.params.regions[0].outer[0][2]) < 1e-3);
+      eq(tops.length, 1, f.id + ' owns its solid top face');
     }
   });
 

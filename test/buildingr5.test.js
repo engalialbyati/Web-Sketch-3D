@@ -93,7 +93,7 @@ module.exports = h => {
   test('every floor has six rooms and every door really cut its wall', () => {
     const wallsAt = z => W.bim.entities.filter(e =>
       e.type === 'wall' && Math.abs(e.params.base[2] - z) < 1e-6);
-    const ground = wallsAt(0.005);
+    const ground = wallsAt(0);
     const dividers = ground.filter(e => Math.abs(e.params.base[0] - e.params.end[0]) < 1e-6
       && (Math.abs(e.params.base[0] - 6) < 1e-6 || Math.abs(e.params.base[0] - 12) < 1e-6));
     eq(dividers.length, 4, '4 room dividers on the ground floor');

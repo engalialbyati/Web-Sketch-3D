@@ -152,8 +152,13 @@ static gridColumnTrim(G, A, B, colA, colB) {
 // endpoints + reporting info, or null. quiet=true (live preview) suppresses
 // the refusal toast. pickedGrid: the grid picked via Pick Lines — used
 // directly as the host instead of re-deriving it from endpoint positions.
-static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
-  const gm = app.gridManager;
+  static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
+    // v0.6 ELEMENT INDEPENDENCE: walls drawn on a grid run intersection-to-
+    // intersection THROUGH the columns — no retreat to column faces, no
+    // trim. The grid attachment (hostGridId) is resolved independently in
+    // _commitInner; grid snapping already lands the endpoints on the grids.
+    return null;
+    const gm = app.gridManager;
   if (!gm || !gm.grids || !gm.grids.length || typeof SnapSystem === 'undefined') return null;
   if (!pts || pts.length < 2) return null;
   const A = pts[0], B = pts[pts.length - 1];
@@ -254,7 +259,9 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
       height: hNominal, // unconnected walls: the nominal top is base + this
     }, { model: app.model });
     if (cl.topZ < baseZ + hNominal - 1e-4)
-      return { h: Math.max(0.05, cl.topZ - baseZ), deductions: cl.deductions };
+      // v0.6 bearing: the wall top reaches ELEMENT_EPS INTO the governing
+      // soffit — an overlap joint, never a reveal gap
+      return { h: Math.max(0.05, cl.topZ - baseZ + 1e-4), deductions: cl.deductions };
     return { h: hNominal, deductions: [] };
   }
   _bandProfile(pts) {
@@ -399,7 +406,8 @@ static gridTrimFor(app, pts, quiet = false, pickedGrid = null) {
     // reveal below the governing soffit (which itself sits 0.5 mm low when
     // it is a beam) keeps stacked faces from ever coinciding.
     const { h: hEff, deductions } = this._clearedHeight(a, b, h);
-    const wallH = deductions.length ? Math.max(0.05, hEff - 1e-3) : hEff;
+    // hEff already carries the +EPS overlap; keep the floor for degenerate fits
+    const wallH = deductions.length ? Math.max(0.05, hEff) : hEff;
     const wallParams = {
       base: [a.x, a.y, a.z], end: [b.x, b.y, b.z],
       baseLevel: app.bimOptions.baseLevel, topConstraint: app.bimOptions.topConstraint,
@@ -1568,7 +1576,9 @@ class HostedInsertionTool extends Tool {
     let info = null, err = null;
     try {
       app.transaction.run('place ' + this.kind, mm => {
-        mm.bimHold = true; // the cut edits stamped faces on purpose
+        // v0.6: name the HOST as the cut owner — the cut edits its stamped
+        // faces on purpose, while every OTHER element stays an island
+        mm.bimHold = host.kind === 'wall' ? host.ent.id : true;
         try {
           info = HostedCut.cut(G, mm, hp, spec);
           if (info.error) throw new Error(info.error);

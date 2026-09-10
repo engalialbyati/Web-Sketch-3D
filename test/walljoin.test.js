@@ -120,34 +120,27 @@ module.exports = h => {
   };
 
   // ------------------------------------------------- split-vs-join interplay
-  test('splitting a joined wall re-points the neighbor miter at the corner piece (the 90° bug)', () => {
+  test('a joined wall through a column keeps ONE wall and the miter intact (v0.6)', () => {
     const w = makeWorld();
     const h = buildWall(w, [0, 1, 0], [3, 1, 0]);   // wall_1: horizontal
     commit(w, [3, 1, 0], [3, -2, 0]);               // wall_2: vertical, miter at (3,1)
     const vert = w.bim.entities.find(e => e.id !== h.id);
-    eq(vert.params.joins.start, h.id, 'miter recorded before the split');
-    // a column mid-span of the HORIZONTAL wall splits it; the corner (3,1)
-    // moves onto the second piece — the vertical wall's miter reference
-    // must follow, or its next rebuild computes against a non-touching wall
+    eq(vert.params.joins.start, h.id, 'miter recorded');
+    // v0.6: the column never splits the wall — the miter never needs
+    // re-pointing because the neighbor's identity cannot change under it
     buildColumn(w, 1.5, 1);
     runDirty(w);
     const pieces = w.bim.entities.filter(e => e.type === 'wall');
-    eq(pieces.length, 3, 'horizontal split in two + vertical');
-    const cornerPiece = pieces.find(e => e.params.end
-      && Math.abs(e.params.end[0] - 3) < 1e-6 && Math.abs(e.params.end[1] - 1) < 1e-6);
-    ok(cornerPiece && cornerPiece.id !== h.id, 'the corner lives on the NEW piece');
-    eq(vert.params.joins.start, cornerPiece.id, 'neighbor miter re-pointed at the corner piece');
-    ok(cornerPiece.params.joins.end === vert.id, 'corner piece still joins the vertical wall');
-    ok(w.m.validate().ok, 'model valid after the split');
-    // the column leaves: the horizontal wall heals — the ref follows back
+    eq(pieces.length, 2, 'still two walls — the horizontal runs through the column');
+    eq(vert.params.joins.start, h.id, 'neighbor miter untouched');
+    ok(h.params.joins.end === vert.id, 'corner join unchanged');
+    ok(w.m.validate().ok, 'model valid');
     const col = w.bim.entities.find(e => e.type === 'column');
     w.bim.detach(col.id);
     runDirty(w);
-    const after = w.bim.entities.filter(e => e.type === 'wall');
-    eq(after.length, 2, 'healed back to two walls');
-    eq(vert.params.joins.start, h.id, 'neighbor miter re-pointed back at the healed survivor');
-    ok(h.params.joins.end === vert.id, 'survivor still joins the vertical wall');
-    ok(w.m.validate().ok, 'model valid after the heal');
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'nothing to heal — still two walls');
+    eq(vert.params.joins.start, h.id, 'miter stable throughout');
+    ok(w.m.validate().ok, 'model valid');
   });
 
   // ------------------------------------------------------------ sane joins

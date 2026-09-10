@@ -1,6 +1,6 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser
 
-[![tests](https://img.shields.io/badge/tests-334%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-332%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -23,6 +23,28 @@ incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
 models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
+
+### v0.6 — Element Independence (the IFC contract)
+
+v0.6 rebuilds the engine contract around how real BIM tools work (IFC,
+Bonsai, Revit): **every element is a geometric island**. Elements never
+punch, split, or weld each other — where one bears on another (wall under a
+beam, column under a beam, drop head under a slab) the support reaches
+`ELEMENT_EPS` (0.1 mm) INTO the supported element: solid joints at any
+zoom, no z-fighting, no reveal gaps.
+
+- **No cross-element cutting**: a column in a wall, a beam through a column,
+  a column through a slab — all simply overlap. Connections are
+  relationships, not booleans (exactly IFC's `IfcRelConnects` philosophy).
+- **Bearing rules (real-life stacking)**: beams hang from their level
+  `[L−h, L]`; columns top out at the capping beam's soffit and re-grow when
+  it leaves; slabs top at their level; walls run to the governing soffit.
+- **Performance**: the independence gate also makes builds linear — the
+  5-story demo builds **6× faster**, and Rebuild-from-Parameters is now
+  staged (progress in the status bar, the UI never freezes) with a
+  100×-faster orphan sweep.
+- **Closed loops of element edges no longer auto-create faces** — face
+  auto-creation belongs to free-drawn lines only.
 
 ### The 5-story demo building
 
@@ -398,7 +420,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 334 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 332 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and
