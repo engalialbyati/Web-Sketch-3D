@@ -6445,7 +6445,7 @@ class App {
     const topZ = cl.topZ + overlap;
     const baseZ = p.base[2];
     const h = Math.max(0.05, topZ - baseZ);
-    if (Math.abs(h - (p.height || 0)) < 1e-4) return false;
+    if (Math.abs(h - (p.height || 0)) < 5e-4) return false; // bearing-EPS noise, not a refit
     // downOnly (unconnected walls): an explicit height is never STRETCHED —
     // only structure landing on the wall lowers its top
     if (downOnly && h > (p.height || 0) + 1e-4) return false;
@@ -6477,7 +6477,11 @@ class App {
         const b = this.structural.columnBounds(ent.params);
         const desired = this.structural.columnBearingTop(ent.params, structure);
         const h = Math.max(0.1, desired - b.zStart);
-        if (Math.abs(h - (ent.params.height || 0)) < 1e-4) continue;
+        // sub-millimeter deltas are the bearing ELEMENT_EPS itself (nominal
+        // soffit vs soffit+EPS) — refitting them re-extruded every demo
+        // column on the FIRST user action after load (a 36-rebuild jank
+        // storm the user read as 'the app freezes when I draw a wall')
+        if (Math.abs(h - (ent.params.height || 0)) < 5e-4) continue;
         const changed = this.transaction.run('column bearing', () => {
           ent.params.height = h;
           if (!this.bim.rebuildColumnEntity(ent.id)) throw new Error('column rebuild failed');
