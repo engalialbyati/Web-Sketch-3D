@@ -141,6 +141,26 @@ module.exports = h => {
     near(w.app.structural.columnBearingTop(col.params), 3, 1e-9, 'full story when nothing caps it');
   });
 
+  test('chained wall pieces keep their bottom faces (v0.6 solid islands)', () => {
+    const w = makeWorld();
+    // three collinear pieces sharing cap edges exactly — the piece after
+    // the first used to count as 'hosted' by the neighbor's faces and
+    // extruded open at the bottom
+    wall(w, [0, 0, 0], [4, 0, 0]);
+    wall(w, [4, 0, 0], [8, 0, 0]);
+    wall(w, [8, 0, 0], [12, 0, 0]);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 3, 'three pieces');
+    for (const wl of walls) {
+      const hasBottom = wl.faces.some(id => {
+        const f = w.m.faces.get(id);
+        return f && Math.abs(w.m.faceCentroid(f).z) < 1e-6;
+      });
+      ok(hasBottom, wl.id + ' owns its bottom face');
+    }
+    ok(w.m.validate().ok, 'model valid');
+  });
+
   test('slab stays solid; the column passes through and overlaps', () => {
     const w = makeWorld();
     const col = column(w, 3, 3, 0.4, 0.4, 0, 3);

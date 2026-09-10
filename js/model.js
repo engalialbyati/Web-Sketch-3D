@@ -1989,6 +1989,18 @@ class Model {
         if (!probes.some(covers)) externals.delete(fid);
       }
     }
+    // v0.6 ELEMENT INDEPENDENCE: a BIM build closes into a solid island —
+    // a FOREIGN element's adjacent face never hosts it (never suppresses
+    // the base cap). Chained wall pieces share their start-cap edge with
+    // the previous piece's faces; without this rule every piece after the
+    // first counted as "hosted" and extruded open at the bottom. Pocket
+    // semantics stay for free mode and Edit In Place, where the host is
+    // the owner's OWN geometry (hostCuttableBy).
+    if (this.bimHold && externals.size) {
+      for (const fid of [...externals]) {
+        if (!this.hostCuttableBy(this.faces.get(fid))) externals.delete(fid);
+      }
+    }
     let capId = null;
     let through = null;
     if (!externals.size) {
@@ -2546,6 +2558,9 @@ class Model {
     let best = null;
     for (const f2 of this.faces.values()) {
       if (f2.id === face.id || f2.hidden) continue;
+      // v0.6: a FOREIGN element's face never blocks a BIM build's sweep —
+      // the element overlaps past it (bearing EPS) instead of punching it
+      if (this.bimHold && !this.hostCuttableBy(f2)) continue;
       // (no group-scope guard: the back face is found geometrically)
       if (f2.holes.length) continue;
       const q = this.pts(f2.loop);
