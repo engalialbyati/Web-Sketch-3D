@@ -505,11 +505,33 @@ static gridColumnTrim(G, A, B, colA, colB) {
       for (const side of ['start', 'end']) {
         const j = joins[side];
         if (!j || j.midBand) continue;
-        app.transaction.run('wall join', () => app.bim.rebuildWallWithHosts(j.ent.id, false));
+        // run() returns undefined when the tx-guard rolled the rebuild back.
+        // Marching on used to extrude against join records that were mutated
+        // but NEVER BUILT — the next validate failed too, '"wall" rolled
+        // back — invalid geometry' toasted, and the model was left with the
+        // host half-partitioned (missing tops/sides). A failed join aborts
+        // the whole commit: records restored, pre-registration detached,
+        // nothing built.
+        const joinOk = app.transaction.run('wall join', () => app.bim.rebuildWallWithHosts(j.ent.id, false));
+        if (joinOk === undefined) {
+          for (const u of undo) u();
+          app.bim.detach(ent.id);
+          app.toast('Wall join failed — nothing built', true);
+          return;
+        }
       }
     }
     const facesBefore = new Set(app.model.faces.keys());
     const edgesBefore = new Set(app.model.edges.keys());
+    // UNJOINED walls pre-register too: the entity must exist (and the
+    // footprint carry its stamp) BEFORE the sweep, or pushPull's twin-cull
+    // sees unstamped sides against foreign walls and merges them away —
+    // the paper-thin-wall bug (top+bottom sheets only). Joined walls got
+    // this with {pending}; now every wall is element-independent at birth.
+    if (!ent) {
+      ent = app.bim.create('wall', wallParams, {}, [], { pending: true });
+      ent._pending = true;
+    }
     let ok = false;
     const tx = app.transaction.begin('wall');
     try {
@@ -551,9 +573,6 @@ static gridColumnTrim(G, A, B, colA, colB) {
         if (ed) ed.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'profile' };
       }
       app.bim.ensureWallBottom(ent);
-    } else {
-      const ent2 = app.bim.create('wall', wallParams, roles, newEdges);
-      if (ent2) app.bim.ensureWallBottom(ent2); // founded walls get their underside
     }
     // the new wall's extrude repartitions the shared base plane AFTER the
     // join rebuilds ran — a neighbor's freshly claimed underside can be
