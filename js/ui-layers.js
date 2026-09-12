@@ -374,7 +374,10 @@
       const r = treeEl.getBoundingClientRect();
       menu.style.left = Math.min(ev.clientX, r.right - 150) + 'px';
       menu.style.top = ev.clientY + 'px';
-      setTimeout(() => window.addEventListener('mousedown', function close() {
+      // dismiss on mousedown OUTSIDE only: removing the menu on the item's
+      // own mousedown canceled the native click before its handler ran
+      setTimeout(() => window.addEventListener('mousedown', function close(e) {
+        if (menu.contains(e.target)) return;
         menu.remove(); window.removeEventListener('mousedown', close);
       }), 0);
     });

@@ -5162,6 +5162,17 @@ class App {
             this.toast('These faces already form an element — convert works on free (unclaimed) faces only', true)]);
         }
       }
+      // EXTRUDE EDGE: free line(s) become ribbon faces directly — pure Free
+      // Drawing geometry, no element claim (the Extrude Curve tool's J path,
+      // reachable from a selection instead of a pick)
+      if (this.sel.edges.size) {
+        const selEdges = [...this.sel.edges].map(id => this.model.edges.get(id)).filter(Boolean);
+        if (selEdges.length)
+          items.push([selEdges.length === 1
+            ? 'Extrude Edge…'
+            : `Extrude ${selEdges.length} Edges…`,
+            () => this.extrudeEdgeDialog(selEdges.map(e => e.id))]);
+      }
       // EDGE ➔ ELEMENT: free line(s) convert directly into solid members —
       // the line becomes the element's centerline (no face needed first)
       if (!this.sel.faces.size && this.sel.edges.size
@@ -5227,7 +5238,14 @@ class App {
     menu.style.left = q.x + 'px';
     menu.style.top = q.y + 'px';
     menu.classList.remove('hidden');
-    const close = () => { menu.classList.add('hidden'); window.removeEventListener('mousedown', close); };
+    // dismiss on mousedown OUTSIDE the menu only: hiding on the item's own
+    // mousedown pulled it out of hit-testing before mouseup, so the native
+    // click retargeted to whatever sat behind — menu entries "did nothing"
+    const close = (e) => {
+      if (menu.contains(e.target)) return;
+      menu.classList.add('hidden');
+      window.removeEventListener('mousedown', close);
+    };
     setTimeout(() => window.addEventListener('mousedown', close), 0);
   }
 
@@ -5392,6 +5410,64 @@ class App {
   // (width across, height up), a vertical line grows a column-like prism
   // (width × depth centered). The drawn line is CONSUMED by the conversion.
   // Multiple edges become one member each, numbered from the shared name.
+  // Extrude selected free EDGE(S) into ribbon faces — the same geometry the
+  // Extrude Curve tool (J) produces, but driven from a selection: distance +
+  // direction in a dialog, one face per edge. Pure Free Drawing geometry —
+  // no element claim, no BIM registration; Push/Pull and Trim work on the
+  // result like any drawn face.
+  extrudeEdgeDialog(eids) {
+    const ids = Array.isArray(eids) ? eids : [eids];
+    const e0 = this.model.edges.get(ids[0]);
+    if (!e0) return;
+    this.dialog(ids.length > 1 ? `Extrude ${ids.length} Edges` : 'Extrude Edge', `
+      <div class="ob-lab">Distance (m)</div>
+      <input type="number" id="ee-dist" step="0.05" min="0.01" value="1.0"
+        style="width:120px;margin:2px 0 10px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+      <div class="ob-lab">Direction</div>
+      <select id="ee-dir" style="margin:4px 0 10px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+        <option value="auto" selected>Auto — up for horizontal lines, sideways for vertical</option>
+        <option value="up">+Z (up)</option>
+        <option value="down">−Z (down)</option>
+        <option value="px">+X</option>
+        <option value="nx">−X</option>
+        <option value="py">+Y</option>
+        <option value="ny">−Y</option>
+      </select>
+      <p style="opacity:.75;margin:2px 0 0">Each edge becomes a ribbon face. The edge stays — Push/Pull the face to give it thickness.</p>
+    `, [
+      ['Cancel', null],
+      ['Extrude', () => {
+        const d = parseFloat(document.getElementById('ee-dist').value);
+        if (!isFinite(d) || Math.abs(d) < 1e-4) { this.toast('Type an extrude distance', true); return; }
+        const dirMap = { up: G.v(0, 0, 1), down: G.v(0, 0, -1), px: G.v(1, 0, 0), nx: G.v(-1, 0, 0), py: G.v(0, 1, 0), ny: G.v(0, -1, 0) };
+        const dirChoice = document.getElementById('ee-dir').value;
+        const m = this.model;
+        let n = 0;
+        this.transaction.run('extrude edges', mm => {
+          for (const eid of ids) {
+            const e = m.edges.get(eid);
+            if (!e) continue;
+            const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
+            if (!A || !B) continue;
+            let dir = dirMap[dirChoice];
+            if (dirChoice === 'auto') {
+              const chord = G.sub(B, A);
+              if (Math.abs(G.norm(chord).z) > 0.99) {
+                // vertical line: extrude sideways (horizontal perpendicular)
+                dir = G.norm(G.cross(G.norm(chord), G.v(0, 0, 1)));
+                if (G.isZero(dir)) dir = G.v(1, 0, 0);
+              } else dir = G.v(0, 0, 1);
+            }
+            const A2 = G.add(A, G.mul(dir, d)), B2 = G.add(B, G.mul(dir, d));
+            if (mm.addFaceFromRings([A, B, B2, A2])) n++;
+          }
+        });
+        if (!n) this.toast('Those edges are gone', true);
+        else this.toast(`Extruded ${n} edge${n > 1 ? 's' : ''} — ${Math.abs(d).toFixed(2)} m`);
+        this.clearSelection();
+      }],
+    ]);
+  }
   convertEdgeDialog(eids) {
     const ids = Array.isArray(eids) ? eids : [eids];
     const e0 = this.model.edges.get(ids[0]);
