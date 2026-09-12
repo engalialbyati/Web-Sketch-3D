@@ -28,8 +28,8 @@
     // the legacy options strip is superseded by the Options Bar
     const legacy = $('bimoptions');
     if (legacy) legacy.classList.add('hidden');
-    const tabs = $('modetabs');
-    if (tabs) tabs.style.display = 'none';
+    // #modetabs now carries the ribbon tab row (Draw/Model/Insert/…) built
+    // by app._initRibbonTabs — keep it visible
     buildOptionsBar();
     buildCommandBar();
     buildGearMenu();

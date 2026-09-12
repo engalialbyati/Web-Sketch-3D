@@ -142,6 +142,8 @@ const ICONS = {
   mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v20" stroke-dasharray="3 2.4"/><path d="M9 6L3 12l6 6z"/><path d="M15 6l6 6-6 6z" opacity=".45"/></svg>',
   array: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6" opacity=".45"/><rect x="3" y="15" width="6" height="6" opacity=".45"/><rect x="15" y="15" width="6" height="6" opacity=".45"/></svg>',
   ellipse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path d="M12 12h9" opacity=".5"/></svg>',
+  revolve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 12V7m0 5h5" opacity=".6"/><rect x="13" y="10" width="7" height="4" rx="1"/></svg>',
+  followme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 16c4 0 6-8 10-8 3.5 0 5 4 8 4"/><path d="M3 16l2.5-3M3 16l3.6 1.2M21 12l-3-1.5M21 12l-2.6 2.4"/></svg>',
 };
 
 // command aliases contributed by SDK features (command -> tool id)
@@ -167,6 +169,8 @@ const TOOL_DEFS = {
     { id: 'scale', label: 'Scale', key: 'S' },
     { id: 'mirror', label: 'Mirror', key: 'I' },
     { id: 'array', label: 'Array', key: 'Y' },
+    { id: 'revolve', label: 'Revolve', key: 'U' },
+    { id: 'followme', label: 'Follow Me', key: 'N' },
     'sep',
     { id: 'paint', label: 'Paint Bucket', key: 'B' },
     { id: 'eraser', label: 'Eraser', key: 'E' },
@@ -252,6 +256,47 @@ const RIBBON_GROUPS = {
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
     { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
   ],
+};
+
+// ---------------------------------------------------------------------------
+// RIBBON TABS — the OpenCADStudio tab row (Draw / Model / Insert / Annotate /
+// View / Manage). A tab is a pure toolbar LAYOUT: its tools may belong to
+// either engine mode (Free = SketchUp direct, BIM = Revit parametric), and
+// picking a tool from a tab auto-switches the engine mode the tool lives in
+// (setTool → _pendingTool → setMode). The old per-mode ribbons still exist as
+// the fallback for mode-first flows.
+// ---------------------------------------------------------------------------
+const RIBBON_TABS = {
+  draw: { label: 'Draw', groups: [
+    { title: 'Select', tools: ['select'] },
+    { title: '2D Draw', tools: ['line', 'rect', 'circle', 'arc', 'polygon'] },
+    { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'convert'] },
+    { title: 'Modify', tools: ['trim', 'offset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
+  ] },
+  model: { label: 'Model', groups: [
+    { title: 'Create', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
+    { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array'] },
+    { title: 'Tools', tools: ['paint', 'eraser'] },
+  ] },
+  insert: { label: 'Insert', groups: [
+    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof'] },
+    { title: 'Circulation', tools: ['stairs', 'handrail'] },
+    { title: 'Hosts', tools: ['door', 'window', 'opening'] },
+    { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
+    { title: 'Libraries', tools: ['browser', 'families', 'kit'] },
+  ] },
+  annotate: { label: 'Annotate', groups: [
+    { title: 'Measure', tools: ['tape', 'measurearea'] },
+    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+  ] },
+  view: { label: 'View', groups: [
+    { title: 'Navigate', tools: ['orbit', 'pan', 'zoomext'] },
+    { title: 'Palettes', tools: ['layers', 'browser'] },
+  ] },
+  manage: { label: 'Manage', groups: [
+    { title: 'Quick', tools: ['undo', 'redo', 'zoomext'] },
+    { title: 'Palettes', tools: ['families'] },
+  ] },
 };
 
 // ---------------------------------------------------------------------------
@@ -2464,6 +2509,7 @@ class App {
     this.mode = 'free';         // 'free' (SketchUp-style) | 'bim' (Revit-style) | 'design' (structural design)
     this._initTools();
     this._initModes();
+    this._initRibbonTabs();
     this._initBimOptions();
     this._buildToolbar();
     this._initMenus();
@@ -3472,14 +3518,26 @@ class App {
   }
   isFaceLocked(f) {
     const uid = f && f.userData && f.userData.bimEntityId;
-    return uid ? this._flagSets().locked.has(uid) : false;
+    if (uid) return this._flagSets().locked.has(uid);
+    // raw (entity-less) geometry: its own layer decides
+    const ly = f && this.getLayer(f.layerId || '0');
+    return !!(ly && ly.locked);
   }
   isEdgeLocked(e) {
     const uid = e && e.userData && e.userData.bimEntityId;
-    return uid ? this._flagSets().locked.has(uid) : false;
+    if (uid) return this._flagSets().locked.has(uid);
+    const ly = e && this.getLayer(e.layerId || '0');
+    return !!(ly && ly.locked);
   }
   isEntityHidden(id) {
     return this._flagSets().hidden.has(id);
+  }
+  /** Raw (entity-less) geometry on an OFF layer — rebuild paths and pick
+   *  filters skip these exactly like hidden elements. */
+  isRawLayerHidden(obj) {
+    if (!obj || obj.userData && obj.userData.bimEntityId) return false;
+    const ly = this.getLayer(obj.layerId || '0');
+    return !!ly && ly.visible === false;
   }
   // Edge ownership drives hide: a wall's outlines must vanish with its faces.
   // Rebuild paths (joins, resizes, grid moves, hosted re-cuts) restamp FACES
@@ -4046,6 +4104,12 @@ class App {
     const modeName = mode === 'bim' ? 'Precise Drawing (BIM)'
       : mode === 'design' ? 'Design' : 'Free Drawing';
     this.setStatus(`Mode: ${modeName} — camera, selection, and model are preserved.`);
+    // a tool picked from another ribbon tab asked for this mode first
+    if (this._pendingTool) {
+      const t = this._pendingTool;
+      this._pendingTool = null;
+      this.setTool(t);
+    }
   }
   // The drawing plane spanned by a two-axis lock (V + X/Z etc.) through the
   // anchor — vertical and angled sketch planes for the line/arc/circle tools.
@@ -4178,9 +4242,83 @@ class App {
   _toolForKey(k) {
     for (const t of TOOL_DEFS[this.mode]) {      if (t !== 'sep' && t.key && t.key.toLowerCase() === k) return t.id;
     }
+    // ribbon-tab extras: tools listed on the active tab from the OTHER mode
+    // stay one keypress away (Insert tab + K = column while in Free Drawing)
+    const tab = RIBBON_TABS[this.ribbonTab];
+    if (tab) {
+      const all = this._allToolDefs();
+      for (const gid of tab.groups.flatMap(g => g.tools)) {
+        const t = all.get(gid);
+        if (t && t.key && t.key.toLowerCase() === k) return t.id;
+      }
+    }
     return null;
   }
+  _allToolDefs() {
+    if (!this._allDefs) {
+      this._allDefs = new Map();
+      for (const mode of ['free', 'bim', 'design'])
+        for (const t of TOOL_DEFS[mode])
+          if (t !== 'sep' && !this._allDefs.has(t.id)) this._allDefs.set(t.id, t);
+    }
+    return this._allDefs;
+  }
+  // ------------------------------------------------------------- ribbon tabs
+  // The OpenCADStudio tab row replaces the old mode tabs: Draw / Model /
+  // Insert / Annotate / View / Manage. Tabs are layouts; tools keep their
+  // engine modes (setTool switches automatically).
+  _initRibbonTabs() {
+    const row = document.getElementById('modetabs');
+    if (!row) return;
+    row.innerHTML = '';
+    row.style.display = '';
+    this.ribbonTab = localStorage.getItem('ws3d-ribbontab') || 'draw';
+    if (!RIBBON_TABS[this.ribbonTab]) this.ribbonTab = 'draw';
+    for (const [id, t] of Object.entries(RIBBON_TABS)) {
+      const b = document.createElement('button');
+      b.className = 'mtab';
+      b.dataset.tab = id;
+      b.textContent = t.label;
+      b.addEventListener('click', () => this.setRibbonTab(id));
+      row.appendChild(b);
+    }
+    this._syncRibbonTabs();
+  }
+  setRibbonTab(id) {
+    if (!RIBBON_TABS[id] || id === this.ribbonTab) return;
+    this.ribbonTab = id;
+    try { localStorage.setItem('ws3d-ribbontab', id); } catch (e) { }
+    this._syncRibbonTabs();
+    this._buildToolbar();
+    document.querySelectorAll('#toolbar .tbtn[data-tool]').forEach(b =>
+      b.classList.toggle('active', b.dataset.tool === (this.tool && this.tool.id)));
+    this.setStatus(`${RIBBON_TABS[id].label} ribbon`);
+  }
+  _syncRibbonTabs() {
+    document.querySelectorAll('#modetabs .mtab').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab === this.ribbonTab));
+  }
+  /** The engine mode a tool id lives in (null when it exists nowhere). */
+  _toolMode(id) {
+    for (const mode of Object.keys(TOOL_DEFS))
+      if (TOOL_DEFS[mode].some(t => t !== 'sep' && t.id === id)) return mode;
+    return null;
+  }
+
   setTool(id) {
+    // cross-tab pick: a tool ABSENT from the current engine mode switches to
+    // the mode it lives in (setMode applies the pending tool once the mode's
+    // state is ready). Tools present here — including shared ones like
+    // Select — never switch.
+    const inCurrent = TOOL_DEFS[this.mode] && TOOL_DEFS[this.mode].some(t => t !== 'sep' && t.id === id);
+    if (!inCurrent) {
+      const target = this._toolMode(id);
+      if (target) {
+        this._pendingTool = id;
+        this.setMode(target);
+        return;
+      }
+    }
     if (this.tool) this.tool.deactivate();
     this._liveSnaps = null; // a leaving tool's sketch endpoints are stale
     this.tool = this.tools[id] || this.tools.select;
@@ -4205,7 +4343,7 @@ class App {
   // ------------------------------------------------------------------ toolbar
   _buildToolbar() {
     const bar = document.getElementById('toolbar');
-    bar.innerHTML = ''; // full ribbon swap per mode
+    bar.innerHTML = ''; // full ribbon swap per tab/mode
     // current open group body — every factory appends here, the group closes
     // when the next group starts (OpenCADStudio-style titled panels)
     let body = null;
@@ -4230,14 +4368,24 @@ class App {
       body.appendChild(b);
       return b;
     };
-    // resolve this mode's groups; Engine-registered tools absent from the
-    // static map land in a trailing catch-all group so nothing disappears
-    const defs = TOOL_DEFS[this.mode].filter(t => t !== 'sep');
-    const groups = (RIBBON_GROUPS[this.mode] || []).map(g => ({ ...g }));
-    const assigned = new Set(groups.flatMap(g => g.tools));
-    const leftover = defs.filter(t => !assigned.has(t.id)).map(t => t.id);
-    if (leftover.length) groups.push({ title: 'Tools', tools: leftover });
-    const byId = new Map(defs.map(t => [t.id, t]));
+    // Tab layout: every tool id from every mode is resolvable (a tab may list
+    // free tools next to BIM tools); the per-mode ribbons keep their old
+    // leftover catch-all for Engine tools that self-register later.
+    const tab = RIBBON_TABS[this.ribbonTab];
+    let groups, byId = new Map();
+    if (tab) {
+      groups = (tab.groups || []).map(g => ({ ...g }));
+      for (const mode of ['free', 'bim', 'design'])
+        for (const t of TOOL_DEFS[mode])
+          if (t !== 'sep' && !byId.has(t.id)) byId.set(t.id, t);
+    } else {
+      const defs = TOOL_DEFS[this.mode].filter(t => t !== 'sep');
+      groups = (RIBBON_GROUPS[this.mode] || []).map(g => ({ ...g }));
+      const assigned = new Set(groups.flatMap(g => g.tools));
+      const leftover = defs.filter(t => !assigned.has(t.id)).map(t => t.id);
+      if (leftover.length) groups.push({ title: 'Tools', tools: leftover });
+      byId = new Map(defs.map(t => [t.id, t]));
+    }
     for (const grp of groups) {
       const tools = grp.tools.filter(id => id !== 'levelview' || this.mode === 'bim');
       if (!tools.length) continue;
@@ -4277,11 +4425,14 @@ class App {
     this.refreshToolbar();
   }
   refreshToolbar() {
-    this.btnShadow.classList.toggle('on', this.shadowsOn);
-    this.btnXray.classList.toggle('on', this.xrayOn);
+    // ribbon tabs may not carry the display toggles — guard every optional button
+    if (this.btnShadow) this.btnShadow.classList.toggle('on', this.shadowsOn);
+    if (this.btnXray) this.btnXray.classList.toggle('on', this.xrayOn);
     const fs = { shaded: 'Shaded', monochrome: 'Monochrome', wireframe: 'Wireframe' }[this.faceStyle];
-    this.btnWire.classList.toggle('on', this.faceStyle !== 'shaded');
-    this.btnWire.title = `Face Style: ${fs} (click to cycle)`;
+    if (this.btnWire) {
+      this.btnWire.classList.toggle('on', this.faceStyle !== 'shaded');
+      this.btnWire.title = `Face Style: ${fs} (click to cycle)`;
+    }
     if (this.btnBrowser && window.ElementBrowser)
       this.btnBrowser.classList.toggle('on', ElementBrowser.visible);
     if (this.btnLayers && window.LayerPanel)
@@ -4823,6 +4974,13 @@ class App {
           ht.onKey({ key: 'v' });
           return;
         }
+        // arc/circle with a start point: V flips the sketch plane vertical
+        // (Z-axis arcs) — one press, no axis-lock arming
+        if (ht && ['arc', 'circle'].includes(ht.id) && (ht.s || ht.center)) {
+          ev.preventDefault();
+          ht.onKey({ key: 'v' });
+          return;
+        }
         ev.preventDefault();
         this.axisLockMode = true;
         this.axisLocks.clear();
@@ -5113,6 +5271,16 @@ class App {
   convertToElementDialog(fids) {
     const ids = Array.isArray(fids) ? fids : [fids];
     const multi = ids.length > 1;
+    // ALERT on already-claimed geometry: a selected face belongs to an
+    // element — say so instead of opening a dialog that cannot convert
+    const claimedSample = ids.map(id => this.model.faces.get(id)).find(f => f && f.userData && f.userData.bimEntityId);
+    if (claimedSample) {
+      const ent = this.bim.getEntityForFace(claimedSample);
+      this.toast(ent
+        ? `${ent.type} ${ent.id} is already an element — convert works on free (unclaimed) faces only`
+        : 'These faces already form an element — convert works on free faces only', true);
+      return;
+    }
     const f0 = this.model.faces.get(ids[0]);
     if (!f0) return;
     const o = this.bimOptions;
@@ -6307,21 +6475,104 @@ class App {
         <div class="dim" style="margin-top:4px">Select faces ▸ Ctrl+G to group · select faces ▸ Give Thickness</div>`;
       return;
     }
-    let len = 0;
-    for (const id of this.sel.edges) { const e = model.edges.get(id); if (e) len += model.edgeLength(e); }
-    let area = 0;
-    for (const id of this.sel.faces) { const f = model.faces.get(id); if (f) area += model.faceArea(f); }
-    const parts = [];
-    if (this.sel.faces.size) parts.push(`${this.sel.faces.size} face${this.sel.faces.size > 1 ? 's' : ''}`);
-    if (this.sel.edges.size) parts.push(`${this.sel.edges.size} edge${this.sel.edges.size > 1 ? 's' : ''}`);
-    el.innerHTML = `<div class="selcount">${parts.join(' · ')}</div>
-      ${this.sel.faces.size ? `<div>Area: ${area.toFixed(3)} m²</div>` : ''}
-      ${this.sel.edges.size ? `<div>Length: ${fmtLen(len)}</div>` : ''}
-      ${this.sel.faces.size ? '<button class="mini-btn primary" id="gi-thicken">Give Thickness…</button>' : ''}
-      ${this._wallHint()}
-      <div class="dim" style="margin-top:4px">Shift/Ctrl+click adds to the selection · areas are net of openings · Ctrl+G groups</div>`;
-    const tb = el.querySelector('#gi-thicken');
-    if (tb) tb.addEventListener('click', () => this.thickenDialog());
+    // ---- LINE inspector (OpenCADStudio Properties parity): one selected
+    // line edits its layer / linetype / lineweight / thickness and reports
+    // its geometry; several lines take bulk style edits
+    if (this.sel.edges.size && !this.sel.faces.size) {
+      const eids = [...this.sel.edges];
+      const e0 = model.edges.get(eids[0]);
+      if (e0) {
+        const a = model.vp(e0.a), b = model.vp(e0.b);
+        const single = eids.length === 1;
+        const st = model.resolveEdgeStyle(e0);
+        const LT = Model.LINETYPES, LW = Model.LINEWEIGHTS;
+        const lyrs = model.layers.map(l => `<option value="${l.id}"${(e0.layerId || '0') === l.id ? ' selected' : ''}>${l.name}</option>`).join('');
+        const ltOpts = `<option value="bylayer"${e0.lt == null ? ' selected' : ''}>ByLayer (${LT[st.lt].name})</option>`
+          + LT.map(t => `<option value="${t.id}"${e0.lt === t.id ? ' selected' : ''}>${t.name}</option>`).join('');
+        const lwOpts = `<option value="bylayer"${e0.lw == null ? ' selected' : ''}>ByLayer (${LW[st.lw].name})</option>`
+          + LW.map(w => `<option value="${w.id}"${e0.lw === w.id ? ' selected' : ''}>${w.mm === 0 ? w.name : w.name + ' mm'}</option>`).join('');
+        const d = G.sub(b, a);
+        const len = model.edgeLength(e0);
+        const ang = ((Math.atan2(d.y, d.x) * 180 / Math.PI) % 360 + 360) % 360;
+        const thk = model.edgeThickness(e0.id);
+        el.innerHTML = `
+          <div class="selcount">${single ? 'Line' : eids.length + ' lines'} selected</div>
+          <div class="pp-group" style="margin-top:4px">General</div>
+          ${this._propRow('Layer', `<select id="pi-layer">${lyrs}</select>`)}
+          ${this._propRow('Linetype', `<select id="pi-lt">${ltOpts}</select>`)}
+          ${this._propRow('Lineweight', `<select id="pi-lw">${lwOpts}</select>`)}
+          ${single ? this._propRow('Thickness', `<input type="number" step="0.1" id="pi-thk" value="${thk ? +thk.toFixed(3) : 0}" title="Extrusion depth in Z (m) — grows the line into a vertical ribbon face"> <span class="dim">m</span>`) : ''}
+          ${single ? `<div class="pp-group">Geometry</div>
+          ${this._propRow('Start', `${fmtCoord(a)}`)}
+          ${this._propRow('End', `${fmtCoord(b)}`)}
+          ${this._propRow('Delta X', fmtLen(d.x))}
+          ${this._propRow('Delta Y', fmtLen(d.y))}
+          ${this._propRow('Delta Z', fmtLen(d.z))}
+          ${this._propRow('Length', `<input type="number" step="0.1" id="pi-len" value="${+len.toFixed(3)}"> <span class="dim">m</span>`)}
+          ${this._propRow('Angle', ang.toFixed(2) + '\u00B0')}` : ''}`;
+        const style = patch => {
+          this.run('line style', m => {
+            m.setEdgeStyle(eids, patch);
+          });
+          this.updateInfo();
+        };
+        el.querySelector('#pi-layer').addEventListener('change', ev => style({ layerId: ev.target.value }));
+        el.querySelector('#pi-lt').addEventListener('change', ev => style({ lt: ev.target.value === 'bylayer' ? null : +ev.target.value }));
+        el.querySelector('#pi-lw').addEventListener('change', ev => style({ lw: ev.target.value === 'bylayer' ? null : +ev.target.value }));
+        const lenIn = el.querySelector('#pi-len');
+        if (lenIn) lenIn.addEventListener('change', ev => {
+          const L = parseFloat(ev.target.value);
+          if (!(L > 1e-4)) return;
+          this.run('line length', m => {
+            const e = m.edges.get(e0.id);
+            if (!e) return;
+            const dir = G.sub(m.vp(e.b), m.vp(e.a));
+            if (G.len(dir) < 1e-9) return;
+            m.setVertex(e.b, G.add(m.vp(e.a), G.mul(dir, L / G.len(dir))));
+          });
+          this.updateInfo();
+        });
+        const thkIn = el.querySelector('#pi-thk');
+        if (thkIn) thkIn.addEventListener('change', ev => {
+          const t = parseFloat(ev.target.value) || 0;
+          this.run('line thickness', m => { m.thickenEdge(e0.id, t); });
+          this.updateInfo();
+        });
+      }
+      return;
+    }
+    // ---- FACE selection: add the layer picker to the area summary
+    {
+      let len = 0;
+      for (const id of this.sel.edges) { const e = model.edges.get(id); if (e) len += model.edgeLength(e); }
+      let area = 0;
+      for (const id of this.sel.faces) { const f = model.faces.get(id); if (f) area += model.faceArea(f); }
+      const f0 = this.sel.faces.size === 1 ? model.faces.get([...this.sel.faces][0]) : null;
+      const parts = [];
+      if (this.sel.faces.size) parts.push(`${this.sel.faces.size} face${this.sel.faces.size > 1 ? 's' : ''}`);
+      if (this.sel.edges.size) parts.push(`${this.sel.edges.size} edge${this.sel.edges.size > 1 ? 's' : ''}`);
+      const lyrs = model.layers.map(l => `<option value="${l.id}"${((f0 && f0.layerId) || '0') === l.id ? ' selected' : ''}>${l.name}</option>`).join('');
+      el.innerHTML = `<div class="selcount">${parts.join(' · ')}</div>
+        ${this.sel.faces.size ? `<div>Area: ${area.toFixed(3)} m²</div>` : ''}
+        ${this.sel.faces.size ? this._propRow('Layer', `<select id="pi-flayer">${lyrs}</select>`) : ''}
+        ${this.sel.edges.size ? `<div>Length: ${fmtLen(len)}</div>` : ''}
+        ${this.sel.faces.size ? '<button class="mini-btn primary" id="gi-thicken">Give Thickness…</button>' : ''}
+        ${this._wallHint()}
+        <div class="dim" style="margin-top:4px">Shift/Ctrl+click adds to the selection · areas are net of openings · Ctrl+G groups</div>`;
+      const fl = el.querySelector('#pi-flayer');
+      if (fl) fl.addEventListener('change', ev => {
+        this.run('face layer', m => { m.setFaceLayers([...this.sel.faces], ev.target.value); });
+        this.updateInfo();
+      });
+      const tb = el.querySelector('#gi-thicken');
+      if (tb) tb.addEventListener('click', () => this.thickenDialog());
+      return;
+    }
+  }
+  _propRow(label, inner) {
+    return `<div class="pp-row" style="display:flex;align-items:center;gap:6px;margin:2px 0">
+      <span style="width:76px;flex:none;opacity:.75;font-size:12px">${label}</span>
+      <span style="flex:1;display:flex;align-items:center;gap:4px">${inner}</span></div>`;
   }
   _wallHint() {
     if (this.sel.faces.size !== 1 || this.sel.edges.size) return '';

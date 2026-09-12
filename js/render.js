@@ -263,6 +263,39 @@ class Viewport {
       new THREE.LineBasicMaterial({ color: 0x26262a }));
     this.scene.add(this.edgeLines);
 
+    // styled edges (CAD linetypes/lineweights + raw-geometry layers): one
+    // LineSegments per non-continuous linetype (dash patterns) and one
+    // clip-space ribbon mesh per heavy weight (>=2 px — WebGL line width is
+    // capped at 1, so weight renders as a screen-parallel quad). Children are
+    // rebuilt together with edgeLines in rebuild().
+    this.styledEdges = new THREE.Group();
+    this.styledEdges.name = 'styled-edges';
+    this.scene.add(this.styledEdges);
+    this.heavyMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uRes: { value: new THREE.Vector2(800, 600) },
+        uPx: { value: 2 },
+        uColor: { value: new THREE.Color(0x26262a) },
+      },
+      vertexShader: [
+        'attribute vec3 other;',      // the segment's far endpoint
+        'attribute float side;',      // -1/+1: which edge of the ribbon
+        'uniform vec2 uRes; uniform float uPx;',
+        'void main() {',
+        '  vec4 c0 = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '  vec4 c1 = projectionMatrix * modelViewMatrix * vec4(other, 1.0);',
+        '  vec2 d = c0.xy / c0.w - c1.xy / c1.w;',
+        '  float l = length(d);',
+        '  if (l > 1e-9) {',
+        '    vec2 p = vec2(-d.y, d.x) / l * uPx * 2.0 / uRes * c0.w;',
+        '    c0.xy += p * side;',
+        '  }',
+        '  gl_Position = c0;',
+        '}',
+      ].join('\n'),
+      fragmentShader: 'uniform vec3 uColor; void main() { gl_FragColor = vec4(uColor, 1.0); }',
+    });
+
     // selected edges
     this.selEdges = new THREE.LineSegments(new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ color: 0x1f6fd6 }));
@@ -446,8 +479,14 @@ class Viewport {
     this._mergedFaces = []; // [{id, aabb}] — picking broad-phase index
     let geoChanged = false;
     const prevFaceCount = this._rbFaceCount || 0;
+    // raw-geometry layers: OFF layers leave the merged mesh (and picking);
+    // a layer color tints unpainted faces, same ByLayer rule as element groups
+    const appLayers = (this.app.layers || []);
+    const hiddenLayers = new Set(appLayers.filter(l => l.visible === false).map(l => l.id));
+    const layerTints = new Map(appLayers.filter(l => l.color).map(l => [l.id, l.color]));
     for (const f of model.faces.values()) {
       if (f.hidden || (ff && !ff(f)) || elementFaceIds.has(f.id)) continue;
+      if (hiddenLayers.has(f.layerId || '0')) continue;
       // content key: ring vertex ids + quantized coords + color/alpha
       const parts = [];
       for (const ring of model.rings(f)) {
@@ -457,7 +496,8 @@ class Viewport {
           parts.push(ring[j], Math.round(p.x * 1e5), Math.round(p.y * 1e5), Math.round(p.z * 1e5));
         }
       }
-      const key = parts.join(',') + '|' + (f.color || '') + ',' + (f.alpha == null ? 1 : f.alpha);
+      const key = parts.join(',') + '|' + (f.color || '') + ',' + (f.alpha == null ? 1 : f.alpha)
+        + ',' + (layerTints.get(f.layerId || '0') || '');
       let entry = cache.get(f.id);
       if (!entry || entry.key !== key) {
         const outer = model.pts(f.loop);
@@ -470,7 +510,8 @@ class Viewport {
         let tris = [];
         try { tris = THREE.ShapeUtils.triangulateShape(contour, holes); } catch (e) { tris = []; }
         const all = outer.concat(f.holes.flatMap(h => model.pts(h)));
-        const c = f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 };
+        const paint = f.color || layerTints.get(f.layerId || '0') || null; // ByLayer tint
+        const c = paint ? hexToRgb(paint) : { r: 1, g: 1, b: 1 };
         const a = f.alpha == null ? 1 : f.alpha;
         const tp = [];
         let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
@@ -519,21 +560,90 @@ class Viewport {
     this.faceMesh.geometry = fg;
 
     // edges (element edges included — shared/welded edges belong to the
-    // whole scene graph; hidden edges are skipped like hidden faces)
+    // whole scene graph; hidden edges are skipped like hidden faces).
+    // Non-continuous linetypes and heavy lineweights (the Properties panel's
+    // CAD line styles) bucket into styledEdges instead of the plain pass.
     const ep = [];
+    const dashPts = {}; // ltIdx -> [xyz,...]
+    const heavyPts = {}; // lwIdx -> [xyz,...]
+    const LTT = window.Model ? Model.LINETYPES : [];
+    const LWW = window.Model ? Model.LINEWEIGHTS : [];
     for (const e of model.edges.values()) {
       if (e.hidden || (ef && !ef(e))) continue;
       if (elementEdgeIds.has(e.id)) continue; // renders inside its element Group
       const eu = e.userData && e.userData.bimEntityId;
       if (eu && this.app.isEntityHidden(eu)) continue; // hidden element edges go too
+      if (!eu && hiddenLayers.has(e.layerId || '0')) continue; // raw-edge layer OFF
       const a = model.vp(e.a), b = model.vp(e.b);
       if (!a || !b) continue;
-      ep.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      const st = model.resolveEdgeStyle ? model.resolveEdgeStyle(e) : { lt: 0, lw: 0 };
+      const lt = LTT[st.lt] ? st.lt : 0;
+      const lwPx = (LWW[st.lw] || LWW[0]).px;
+      if (lwPx >= 2) {
+        // heavy: a clip-space ribbon, chopped into dashes when the linetype
+        // is patterned (the pattern survives the width)
+        const arr = (heavyPts[st.lw] = heavyPts[st.lw] || []);
+        if (lt > 0 && LTT[lt].dash > 0.05) {
+          const L = G.dist(a, b), D = LTT[lt].dash, GP = LTT[lt].gap;
+          let t0 = 0;
+          while (t0 < L) {
+            const t1 = Math.min(t0 + D, L);
+            const p1 = G.add(a, G.mul(G.sub(b, a), t0 / L));
+            const p2 = t1 >= L ? b : G.add(a, G.mul(G.sub(b, a), t1 / L));
+            arr.push(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z);
+            t0 = t1 + GP;
+          }
+        } else arr.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      } else if (lt > 0) {
+        (dashPts[lt] = dashPts[lt] || []).push(a.x, a.y, a.z, b.x, b.y, b.z);
+      } else ep.push(a.x, a.y, a.z, b.x, b.y, b.z);
     }
     const eg = new THREE.BufferGeometry();
     eg.setAttribute('position', new THREE.Float32BufferAttribute(ep, 3));
     this.edgeLines.geometry.dispose();
     this.edgeLines.geometry = eg;
+
+    // rebuild the styled buckets
+    for (const ch of [...this.styledEdges.children]) {
+      this.styledEdges.remove(ch);
+      if (ch.geometry) ch.geometry.dispose();
+      if (ch.material && ch.material !== this.heavyMat) ch.material.dispose();
+    }
+    const mkDashed = (pts, lt) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      const l = new THREE.LineSegments(g, new THREE.LineDashedMaterial({
+        color: 0x26262a, dashSize: LTT[lt].dash, gapSize: LTT[lt].gap,
+      }));
+      l.computeLineDistances();
+      this.styledEdges.add(l);
+    };
+    for (const lt of Object.keys(dashPts)) mkDashed(dashPts[lt], +lt);
+    for (const lw of Object.keys(heavyPts)) {
+      const pts = heavyPts[lw];
+      const px = (LWW[+lw] || LWW[0]).px;
+      const nSeg = pts.length / 6;
+      const vp = [], vo = [], vs = [], idx = [];
+      for (let i = 0; i < nSeg; i++) {
+        const o = i * 6, b0 = vp.length / 3;
+        // four ribbon corners: (a,-1) (a,+1) (b,+1) (b,-1); each vertex knows
+        // the segment's OTHER endpoint for the in-shader perpendicular
+        vp.push(pts[o], pts[o + 1], pts[o + 2], pts[o], pts[o + 1], pts[o + 2],
+          pts[o + 3], pts[o + 4], pts[o + 5], pts[o + 3], pts[o + 4], pts[o + 5]);
+        vo.push(pts[o + 3], pts[o + 4], pts[o + 5], pts[o + 3], pts[o + 4], pts[o + 5],
+          pts[o], pts[o + 1], pts[o + 2], pts[o], pts[o + 1], pts[o + 2]);
+        vs.push(-1, 1, 1, -1);
+        idx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(vp, 3));
+      g.setAttribute('other', new THREE.Float32BufferAttribute(vo, 3));
+      g.setAttribute('side', new THREE.Float32BufferAttribute(vs, 1));
+      g.setIndex(idx);
+      const mat = this.heavyMat.clone();
+      mat.uniforms.uPx.value = px;
+      this.styledEdges.add(new THREE.Mesh(g, mat));
+    }
 
     this.updateSelectionVisuals();
     this._syncMeasureFaces(); // green highlights follow faces through edits
@@ -1674,6 +1784,10 @@ class Viewport {
     this.hud.style.width = w + 'px'; this.hud.style.height = h + 'px';
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
+    // heavy-line ribbons expand in clip space — keep the px→NDC scale honest
+    for (const ch of this.styledEdges.children)
+      if (ch.material && ch.material.uniforms && ch.material.uniforms.uRes)
+        ch.material.uniforms.uRes.value.set(w, h);
     this.invalidate();
   }
   exportPNG() {

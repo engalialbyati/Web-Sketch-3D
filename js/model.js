@@ -44,7 +44,7 @@ class Model {
     // is the undeletable default. Entities carry `layerId` (unknown → '0');
     // new entities land on `currentLayerId`. Deep-copied through snapshots
     // like levels, so layers survive undo/autosave/file round-trips.
-    this.layers = [{ id: '0', name: '0', color: null, visible: true, locked: false }];
+    this.layers = [{ id: '0', name: '0', color: null, visible: true, locked: false, lt: 0, lw: 0 }];
     this.currentLayerId = '0';
     // transient: entity ids whose B-Rep was structurally edited (split,
     // punched, trimmed, pushed) since the last drain — the app layer detaches
@@ -151,6 +151,32 @@ class Model {
   // shared plane (no z-fighting) and the joint reads solid at any zoom.
   // 0.1 mm — visually zero, far above float32 depth-buffer noise.
   static ELEMENT_EPS = 1e-4;
+
+  // ---------------------------------------------------------------- linestyles
+  // OpenCADStudio/.lin linetype families adapted to our meter-scale world:
+  // the AutoCAD dash lengths (12.7 mm etc.) read invisible on buildings, so
+  // the canonical 1× pattern is scaled to decimeters. idx 0 = Continuous.
+  static LINETYPES = [
+    { id: 0, name: 'Continuous', dash: 0, gap: 0 },
+    { id: 1, name: 'Dashed', dash: 0.60, gap: 0.30 },
+    { id: 2, name: 'Hidden', dash: 0.28, gap: 0.20 },
+    { id: 3, name: 'Center', dash: 1.20, gap: 0.25 },
+    { id: 4, name: 'Dotted', dash: 0.02, gap: 0.16 },
+    { id: 5, name: 'Phantom', dash: 1.20, gap: 0.22 },
+    { id: 6, name: 'DashDot', dash: 0.60, gap: 0.20 },
+  ];
+  // Lineweight menu (AutoCAD's mm list, trimmed to the architecturally used
+  // steps); px = on-screen thickness the renderer draws (WebGL line width is
+  // capped at 1 px, so heavier weights render through a clip-space ribbon).
+  static LINEWEIGHTS = [
+    { id: 0, mm: 0, name: 'Default', px: 1 },
+    { id: 1, mm: 0.13, name: '0.13', px: 1 },
+    { id: 2, mm: 0.25, name: '0.25', px: 1 },
+    { id: 3, mm: 0.35, name: '0.35', px: 2 },
+    { id: 4, mm: 0.50, name: '0.50', px: 2 },
+    { id: 5, mm: 0.70, name: '0.70', px: 3 },
+    { id: 6, mm: 1.00, name: '1.00', px: 4 },
+  ];
 
   vertexAt(p) {
     const E = Model.WELD_EPS, CELL = E * 2;
@@ -2740,6 +2766,218 @@ class Model {
   }
   clearExtrudes() { for (const f of this.faces.values()) f.extrude = null; }
 
+  // ------------------------------------------------------- edge display style
+  // Per-edge CAD display properties (the Properties panel writes these):
+  //   lt — linetype index (Model.LINETYPES); null/undefined = ByLayer
+  //   lw — lineweight index (Model.LINEWEIGHTS); null/undefined = ByLayer
+  //   layerId — the layer a RAW (entity-less) edge/face belongs to
+  // An edge owned by a BIM entity resolves its style from the ENTITY's layer
+  // instead; raw geometry resolves from its own layerId ('0' by default).
+  setEdgeStyle(edgeIds, patch) {
+    let n = 0;
+    for (const id of edgeIds) {
+      const e = this.edges.get(id);
+      if (!e) continue;
+      if ('lt' in patch) e.lt = patch.lt;
+      if ('lw' in patch) e.lw = patch.lw;
+      if ('layerId' in patch) e.layerId = patch.layerId;
+      n++;
+    }
+    if (n) this.touch();
+    return n;
+  }
+  setFaceLayers(faceIds, layerId) {
+    let n = 0;
+    for (const id of faceIds) {
+      const f = this.faces.get(id);
+      if (!f) continue;
+      f.layerId = layerId;
+      n++;
+    }
+    if (n) this.touch();
+    return n;
+  }
+  _layerOf(obj) {
+    if (!obj) return null;
+    const lid = obj.layerId || '0';
+    return this.layers.find(l => l.id === lid) || null;
+  }
+  /** Effective render style of an edge: explicit value, else its layer's
+   *  default, else Continuous/Default. Returns {lt, lw, layer}. */
+  resolveEdgeStyle(e) {
+    if (!e) return { lt: 0, lw: 0, layer: null };
+    const eu = e.userData && e.userData.bimEntityId;
+    let layer = null;
+    if (eu) {
+      const ent = (this.bimEntities || []).find(x => x.id === eu);
+      layer = ent && this.layers.find(l => l.id === ent.layerId);
+    }
+    if (!layer) layer = this._layerOf(e);
+    return {
+      lt: e.lt != null ? e.lt : (layer ? (layer.lt || 0) : 0),
+      lw: e.lw != null ? e.lw : (layer ? (layer.lw || 0) : 0),
+      layer,
+    };
+  }
+
+  // Edge "thickness" (AutoCAD's DXF-39): extrude the line vertically into a
+  // ribbon face. The born face is tracked from the edge (userData.thickFace)
+  // so the panel can re-set or clear the value later.
+  thickenEdge(eid, dist) {
+    const e = this.edges.get(eid);
+    if (!e) return null;
+    this.unthickenEdge(eid);
+    if (!dist || Math.abs(dist) < 1e-6) return null;
+    const a = this.vp(e.a), b = this.vp(e.b);
+    const z = G.v(0, 0, dist);
+    const f = this.addFaceFromRings([G.add(a, z), G.add(b, z), b, a]);
+    if (!f) return null;
+    if (!e.userData) e.userData = {};
+    e.userData.thickFace = f.id;
+    f.userData = { fromEdge: eid };
+    return f;
+  }
+  unthickenEdge(eid) {
+    const e = this.edges.get(eid);
+    const fid = e && e.userData && e.userData.thickFace;
+    if (fid == null) return false;
+    const f = this.faces.get(fid);
+    if (f) { this.deleteFace(fid, true); this.gc(); }
+    if (e && e.userData) delete e.userData.thickFace;
+    return !!f;
+  }
+  edgeThickness(eid) {
+    const e = this.edges.get(eid);
+    const fid = e && e.userData && e.userData.thickFace;
+    if (fid == null || !this.faces.has(fid)) return 0;
+    const f = this.faces.get(fid);
+    const zs = this.pts(f.loop).map(p => p.z);
+    return Math.max(...zs) - Math.min(...zs);
+  }
+
+  // ------------------------------------------------------------ sweep builders
+  // Shared core of Revolve / Sweep (Follow Me) / Loft: connect N rings (each
+  // an equal-length ordered point loop) with quad faces. Rings may be open
+  // polylines (a strip) or closed loops; `closed` connects the last ring back
+  // to the first (a full revolution); caps close the profile at the ends.
+  // Degenerate quads (poles, repeated points) are skipped silently — the
+  // caller cannot always avoid them (a revolve apex).
+  loftRings(rings, { closed = false, capStart = true, capEnd = true, color = null, ringClosed = true } = {}) {
+    if (!rings || rings.length < 2) return [];
+    const n = rings[0].length;
+    if (rings.some(r => r.length !== n)) return [];
+    const out = [];
+    const quad = (a, b, c, d) => {
+      if (G.loopArea([a, b, c, d]) < 1e-10) return;
+      const f = this.addFaceFromRings([a, b, c, d]);
+      if (f) { if (color != null) f.color = color; out.push(f.id); }
+    };
+    const last = closed ? rings.length : rings.length - 1;
+    const segs = ringClosed ? n : n - 1; // a closed profile ring wraps (j+1)%n
+    for (let i = 0; i < last; i++) {
+      const R0 = rings[i], R1 = rings[(i + 1) % rings.length];
+      for (let j = 0; j < segs; j++) {
+        const j2 = (j + 1) % n;
+        quad(G.clone(R0[j]), G.clone(R0[j2]), G.clone(R1[j2]), G.clone(R1[j]));
+      }
+    }
+    if (capStart) { const f = this.addFaceFromRings(rings[0].map(G.clone)); if (f) out.push(f.id); }
+    if (capEnd) { const f = this.addFaceFromRings(rings[rings.length - 1].map(G.clone)); if (f) out.push(f.id); }
+    return out;
+  }
+
+  /** Revolve a profile face about the axis P1->P2 (SketchUp Follow-Me around
+   *  a circle, OCS REVOLVE). angleDeg defaults to 360 (a closed torus/solid);
+   *  partial turns cap both ends. Consumes the profile face on success.
+   *  Returns { faces } or { error }. */
+  revolveFace(faceId, P1, P2, angleDeg = 360, segs = 24) {
+    const f = this.faces.get(faceId);
+    if (!f) return { error: 'profile face is gone' };
+    if ((f.holes || []).length) return { error: 'profiles with openings cannot revolve yet' };
+    const axisV = G.sub(P2, P1);
+    if (G.len(axisV) < 1e-6) return { error: 'axis points coincide' };
+    const axis = G.norm(G.clone(axisV));
+    const ring = this.pts(f.loop);
+    // the RING (the swept boundary) must clear the axis: a vertex on it or a
+    // segment crossing it folds the surface through itself. The disk's
+    // interior is irrelevant — revolving a loop yields a surface (a torus
+    // around a nearby axis is fine).
+    const perpOf = p => {
+      const d = G.sub(p, P1);
+      return G.sub(d, G.mul(axis, G.dot(d, axis)));
+    };
+    for (const p of ring) {
+      if (G.len(perpOf(p)) < 1e-5) return { error: 'the axis touches the profile — offset it first' };
+    }
+    for (let i = 0; i < ring.length; i++) {
+      const o1 = perpOf(ring[i]), o2 = perpOf(ring[(i + 1) % ring.length]);
+      const dv = G.sub(o2, o1);
+      // distance from the axis line to the EDGE's own line, with the closest
+      // point inside the segment: zero means the edge crosses the axis
+      const c = G.cross(o1, o2);
+      const dist = G.len(c) / Math.max(G.len(dv), 1e-12);
+      const t = -G.dot(o1, dv) / Math.max(G.dot(dv, dv), 1e-12);
+      if (dist < 1e-5 && t >= 0 && t <= 1)
+        return { error: 'the axis crosses the profile — offset it first' };
+    }
+    const ang = Math.abs(angleDeg) > 0.1 ? Math.abs(angleDeg) * Math.PI / 180 : Math.PI * 2;
+    const n = Math.max(6, Math.min(64, segs));
+    const closed = ang >= Math.PI * 2 - 1e-6;
+    const step = closed ? ang / n : ang / Math.max(1, n - 1);
+    const rings = [];
+    for (let i = 0; i < n; i++)
+      rings.push(ring.map(p => G.rotatePoint(G.clone(p), P1, axis, step * i)));
+    const faces = this.loftRings(rings, { closed, capStart: !closed, capEnd: !closed, color: f.color });
+    this.deleteFace(faceId, true);
+    this.gc();
+    return { faces };
+  }
+
+  /** Sweep a profile face along a path polyline (SketchUp's Follow Me). The
+   *  profile's frame parallel-transports along the path — no twist on planar
+   *  paths, natural banking through corners. Consumes the profile; the PATH
+   *  stays (SketchUp parity). Returns { faces } or { error }. */
+  sweepFaceAlongPath(faceId, path) {
+    const f = this.faces.get(faceId);
+    if (!f) return { error: 'profile face is gone' };
+    if ((f.holes || []).length) return { error: 'profiles with openings cannot sweep yet' };
+    if (!path || path.length < 2) return { error: 'path is too short' };
+    const ring = this.pts(f.loop);
+    // profile frame: origin = ring centroid, normal from the ring
+    const c = ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
+    const O = G.mul(c, 1 / ring.length);
+    let nrm = G.loopNormal(ring);
+    if (G.isZero(nrm)) return { error: 'profile is degenerate' };
+    nrm = G.norm(nrm);
+    // local profile coordinates (u, v) in the plane, centered on the centroid
+    const { u, v } = G.basisForNormal(nrm);
+    const local = ring.map(p => G.v(G.dot(G.sub(p, O), u), G.dot(G.sub(p, O), v), 0));
+    // transport the frame along the path
+    let T = nrm, U = u;
+    const sections = [];
+    for (let i = 0; i < path.length; i++) {
+      if (i > 0) {
+        const d = G.norm(G.sub(path[i], path[i - 1]));
+        const T2 = G.norm(G.add(T, d)); // parallel transport: bisector
+        if (G.isZero(T2)) { /* 180° turn: keep the frame */ }
+        else {
+          const rot = G.cross(T, T2);
+          const ang = Math.asin(Math.max(-1, Math.min(1, G.len(rot))));
+          if (ang > 1e-9) {
+            U = G.rotatePoint(U, G.v(0, 0, 0), G.norm(rot), ang);
+            T = T2;
+          }
+        }
+      }
+      const V = G.cross(T, U);
+      sections.push(local.map(q => G.add(path[i], G.add(G.mul(U, q.x), G.mul(V, q.y)))));
+    }
+    const faces = this.loftRings(sections, { closed: false, capStart: true, capEnd: true, color: f.color });
+    this.deleteFace(faceId, true);
+    this.gc();
+    return { faces };
+  }
+
   // ---------------------------------------------------------------- groups
   createGroup(sel, name) {
     const gid = nid();
@@ -3075,7 +3313,8 @@ class Model {
     // later edits retroactively corrupt live undo snapshots.
     return {
       v: [...this.vertices.entries()].map(([id, p]) => [id, p.x, p.y, p.z]),
-      e: [...this.edges.values()].map(x => [x.id, x.a, x.b, x.curveId || 0, x.gid || 0, x.userData || null, x.hidden ? 1 : 0]),
+      e: [...this.edges.values()].map(x => [x.id, x.a, x.b, x.curveId || 0, x.gid || 0, x.userData || null, x.hidden ? 1 : 0,
+        x.lt != null ? x.lt : null, x.lw != null ? x.lw : null, x.layerId && x.layerId !== '0' ? x.layerId : null]),
       c: [...this.curves.entries()].map(([id, m]) => [id, m]),
       g: [...this.groups.entries()].map(([id, g]) => [id, g]),
       lvl: (this.levels || []).map(l => ({ ...l })),
@@ -3094,6 +3333,7 @@ class Model {
         id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), gid: x.gid || 0,
         userData: x.userData || null,
         color: x.color, alpha: x.alpha,
+        layerId: x.layerId && x.layerId !== '0' ? x.layerId : null,
         extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
       })),
     };
@@ -3102,7 +3342,10 @@ class Model {
     if (!data || !data.v) return;
     this.version++; // wholesale swap: every cached view of the model is stale
     this.vertices = new Map(data.v.map(([id, x, y, z]) => [id, { x, y, z }]));
-    this.edges = new Map((data.e || []).map(([id, a, b, cid, gid, ud, hid]) => [id, { id, a, b, curveId: cid || 0, gid: gid || 0, userData: ud || null, hidden: !!hid }]));
+    this.edges = new Map((data.e || []).map(([id, a, b, cid, gid, ud, hid, lt, lw, lid]) => [id, {
+      id, a, b, curveId: cid || 0, gid: gid || 0, userData: ud || null, hidden: !!hid,
+      lt: lt != null ? lt : null, lw: lw != null ? lw : null, layerId: lid || '0',
+    }]));
     this._edgeIndex = new Map(); // derived from the edges, never serialized
     for (const e of this.edges.values()) this._edgeIndex.set(edgePairKey(e.a, e.b), e.id);
     this.curves = new Map((data.c || []).map(([id, m]) => [id, m]));
@@ -3111,6 +3354,7 @@ class Model {
       id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), color: x.color || null,
       userData: x.userData || null,
       alpha: x.alpha == null ? 1 : x.alpha, gid: x.gid || 0,
+      layerId: x.layerId || '0',
       extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
     }]));
     let mx = 0;
@@ -3143,9 +3387,10 @@ class Model {
     this.layers = (data.lyr || []).map(l => ({
       id: String(l.id), name: String(l.name != null ? l.name : l.id),
       color: l.color || null, visible: l.visible !== false, locked: !!l.locked,
+      lt: l.lt || 0, lw: l.lw || 0,
     }));
     if (!this.layers.some(l => l.id === '0'))
-      this.layers.unshift({ id: '0', name: '0', color: null, visible: true, locked: false });
+      this.layers.unshift({ id: '0', name: '0', color: null, visible: true, locked: false, lt: 0, lw: 0 });
     const cur = data.cur || '0';
     this.currentLayerId = this.layers.some(l => l.id === cur) ? cur : '0';
     const known = new Set(this.layers.map(l => l.id));

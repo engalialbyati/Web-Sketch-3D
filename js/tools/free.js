@@ -844,13 +844,34 @@ class CircleTool extends Tool {
     this.polygon = polygon;
     this.sides = polygon ? 6 : 24;
   }
-  activate() { this.center = null; this.plane = null; this.r = 0; this._pts = null; }
+  activate() { this.center = null; this.plane = null; this.r = 0; this._pts = null; this._vert = false; }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
     const nm = this.polygon ? 'Polygon' : 'Circle';
     return this.center
-      ? `${nm}: click to set the radius (type a value + Enter; "1,12" = radius,sides). Esc cancels.`
+      ? `${nm}: click to set the radius (type a value + Enter; "1,12" = radius,sides). V flips the plane vertical. Esc cancels.`
       : `${nm}: click to set the center point (on the ground or on a face).`;
+  }
+  // V cycles the sketch plane: ground (or picked face) ↔ the vertical plane
+  // through the center facing the camera — vertical circles without arming
+  // the two-axis lock first
+  _cyclePlane() {
+    const app = this.app;
+    if (!this.center) return;
+    if (this._vert) {
+      this.plane = this._ground || { n: G.v(0, 0, 1), d: 0 };
+      this._vert = false;
+      app.setStatus('Circle plane: ground');
+    } else {
+      const cam = app.view.activeCamera();
+      const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.center);
+      toCam.z = 0;
+      const u = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
+      const n = G.cross(u, G.v(0, 0, 1));
+      this.plane = { n, d: G.dot(n, this.center) };
+      this._vert = true;
+      app.setStatus('Circle plane: VERTICAL (V again for ground)');
+    }
   }
   _tess(p2) {
     const { u, v } = G.basisForNormal(this.plane.n);
@@ -868,6 +889,8 @@ class CircleTool extends Tool {
     if (!this.center) {
       const fid = app.view.pickFaceAt(app.view.eventPt(ev));
       this.plane = fid != null ? app.model.facePlane(app.model.faces.get(fid)) : { n: G.v(0, 0, 1), d: 0 };
+      this._ground = this.plane; // V cycles back here from the vertical plane
+      this._vert = false;
       const inf = app.inferPoint(ev, null);
       this.center = projectToPlane(inf.p, this.plane);
       this.status();
@@ -919,6 +942,7 @@ class CircleTool extends Tool {
     this.status();
   }
   onKey(ev) {
+    if (ev.key === 'v' && this.center) { this._cyclePlane(); return true; }
     if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
     return false;
   }
@@ -943,12 +967,35 @@ class CircleTool extends Tool {
 // =========================================================== arc
 class ArcTool extends Tool {
   static id = 'arc';
-  activate() { this.s = null; this.e = null; this.plane = null; this.bulge = null; }
+  activate() { this.s = null; this.e = null; this.plane = null; this.bulge = null; this._vert = false; }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
     if (!this.s) return 'Arc: click the start point.';
-    if (!this.e) return 'Arc: click the end point (chord).';
+    if (!this.e) return 'Arc: click the end point (chord). V flips the plane vertical (arcs in Z).';
     return 'Arc: move to set the bulge, click to finish. Type radius or bulge + Enter.';
+  }
+  // V cycles the sketch plane: ground (or picked face) ↔ the vertical plane
+  // through the start facing the camera — Z-axis arcs without the two-axis
+  // lock (which still works: V + X/Z etc. re-aims through the start)
+  _cyclePlane() {
+    const app = this.app;
+    if (!this.s) return;
+    if (this._vert) {
+      this.plane = this._ground || { n: G.v(0, 0, 1), d: 0 };
+      this._vert = false;
+      if (this.e) this.e = projectToPlane(this.e, this.plane);
+      app.setStatus('Arc plane: ground');
+    } else {
+      const cam = app.view.activeCamera();
+      const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.s);
+      toCam.z = 0;
+      const u = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
+      const n = G.cross(u, G.v(0, 0, 1));
+      this.plane = { n, d: G.dot(n, this.s) };
+      this._vert = true;
+      if (this.e) this.e = projectToPlane(this.e, this.plane);
+      app.setStatus('Arc plane: VERTICAL (V again for ground)');
+    }
   }
   onDown(ev) {
     if (ev.button !== 0) return;
@@ -956,6 +1003,8 @@ class ArcTool extends Tool {
     if (!this.s) {
       const fid = app.view.pickFaceAt(app.view.eventPt(ev));
       this.plane = fid != null ? app.model.facePlane(app.model.faces.get(fid)) : { n: G.v(0, 0, 1), d: 0 };
+      this._ground = this.plane; // V cycles back here from the vertical plane
+      this._vert = false;
       this.s = projectToPlane(app.inferPoint(ev, null).p, this.plane);
     } else if (!this.e) {
       // a two-axis lock (V + X/Z, V + Y/Z, ...) re-aims the sketch plane
@@ -1038,6 +1087,7 @@ class ArcTool extends Tool {
     this.status();
   }
   onKey(ev) {
+    if (ev.key === 'v' && this.s) { this._cyclePlane(); return true; }
     if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
     return false;
   }
@@ -2597,8 +2647,9 @@ class ExtrudeCurveTool extends Tool {
   }
   // ordered points along the picked curve's chain (the whole arc/circle, or
   // the single picked straight edge)
-  _chain(edge) {
-    const m = this.app.model;
+  _chain(edge) { return ExtrudeCurveTool.chainFor(this.app.model, edge); }
+  static chainFor(model, edge) {
+    const m = model;
     const cid = edge.curveId || 0;
     const chain = cid ? [...m.edges.values()].filter(e => e.curveId === cid) : [edge];
     if (!chain.length) return null;
@@ -2631,9 +2682,11 @@ class ExtrudeCurveTool extends Tool {
     if (path.length < 2) return null;
     return path.map(v => G.clone(m.vp(v)));
   }
-  // extrusion direction: the locked axis, else +Z, else the horizontal
-  // perpendicular when the curve itself is vertical
-  _direction() {
+  // extrusion direction: the locked axis, else the drag itself aims it
+  // (Blender-style edge extrude — a horizontal pull drags the ribbon toward
+  // the cursor, a vertical pull stays up), else the horizontal perpendicular
+  // when the curve itself is vertical
+  _direction(ev) {
     const app = this.app;
     if (app.lockAxis) return G.clone(AXES[app.lockAxis]);
     const a = this.pts[0], b = this.pts[this.pts.length - 1];
@@ -2643,6 +2696,13 @@ class ExtrudeCurveTool extends Tool {
     const up = G.v(0, 0, 1);
     const perp = G.norm(G.cross(G.norm(horiz), up)); // horizontal perpendicular
     if (Math.abs(G.dot(G.norm(chord), up)) > 0.99) return perp; // vertical curve: extrude sideways
+    if (ev) {
+      const sum = this.pts.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
+      const base = G.mul(sum, 1 / this.pts.length);
+      const v = G.sub(app.inferPoint(ev, null).p, base);
+      const vh = G.v(v.x, v.y, 0);
+      if (G.len(vh) > Math.abs(v.z) * 1.2 && G.len(vh) > 0.05) return G.norm(vh);
+    }
     return up;
   }
   // cursor-driven distance ALONG the direction axis: closest approach of the
@@ -2671,8 +2731,12 @@ class ExtrudeCurveTool extends Tool {
       view.setHoverEdges(pe ? [pe.edge.id] : null);
       return;
     }
-    // live direction: the lock can change mid-drag
-    this.dir = this._direction();
+    // live direction: the lock can change mid-drag; the drag-aimed direction
+    // locks in once the ribbon is long enough to read as intentional
+    if (!this._dirLocked) {
+      this.dir = this._direction(ev);
+      if (Math.abs(this.dist) > 0.15) this._dirLocked = true;
+    } else if (app.lockAxis) this.dir = G.clone(AXES[app.lockAxis]);
     this.dist = this._dragDist(ev);
     this._preview();
   }
@@ -2698,6 +2762,7 @@ class ExtrudeCurveTool extends Tool {
       this.pts = pts;
       this.dir = this._direction();
       this.dist = 0;
+      this._dirLocked = false;
       app.view.setHoverEdges(null);
       this.status();
       return;
@@ -2733,8 +2798,221 @@ class ExtrudeCurveTool extends Tool {
   }
 }
 
+// =========================================================== revolve
+// OCS REVOLVE on the B-Rep: click the profile face, click the two axis
+// points, sweep the angle live (default full 360°; a near-zero sweep reads
+// as a full turn, exactly like their "<360>" default). VCB types degrees.
+class RevolveTool extends Tool {
+  static id = 'revolve';
+  activate() { this.stage = 0; this.profile = null; this.P1 = null; this.P2 = null; this.snapshot = null; this.ang = Math.PI * 2; }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    if (this.stage === 0) return 'Revolve: click the profile face to revolve (or select one face first).';
+    if (this.stage === 1) return 'Revolve: click the first point of the axis (a face pick aims the axis on its normal).';
+    return 'Revolve: click the second axis point, sweep the angle with the cursor, click to finish. VCB = degrees (empty = 360°).';
+  }
+  _faceSnapshot(fid) {
+    const m = this.app.model, f = m.faces.get(fid);
+    if (!f) return null;
+    const edges = [];
+    for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+      const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+      if (e) edges.push({ a: m.vp(e.a), b: m.vp(e.b) });
+    }
+    return { edges, faces: [{ outer: m.pts(f.loop), holes: (f.holes || []).map(h => m.pts(h)), color: f.color }] };
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    if (this.stage === 0) {
+      let fid = null;
+      if (app.sel.faces.size === 1 && !app.sel.edges.size) fid = [...app.sel.faces][0];
+      else {
+        const fid2 = app.view.pickFaceAt(app.view.eventPt(ev));
+        if (fid2 != null && !app.isFaceLocked(app.model.faces.get(fid2))) fid = fid2;
+      }
+      const f = fid != null ? app.model.faces.get(fid) : null;
+      if (!f) { app.toast('Click a profile face to revolve'); return; }
+      this.profile = fid;
+      this.snapshot = this._faceSnapshot(fid);
+      this.stage = 1;
+    } else if (this.stage === 1) {
+      this.P1 = app.inferPoint(ev, null).p;
+      // a face under the first axis point aims the axis on its normal
+      const fid = app.view.pickFaceAt(app.view.eventPt(ev));
+      let ax = null;
+      if (fid != null) {
+        const f2 = app.model.faces.get(fid);
+        if (f2 && f2.id !== this.profile) {
+          const n = G.loopNormal(app.model.pts(f2.loop));
+          if (!G.isZero(n)) ax = G.norm(n);
+        }
+      }
+      this._axisHint = ax;
+      this.stage = 2;
+    } else if (this.stage === 2) {
+      if (this._axisHint) this.P2 = G.add(this.P1, this._axisHint);
+      else this.P2 = app.inferPoint(ev, this.P1).p;
+      if (G.dist(this.P1, this.P2) < 1e-6) { app.toast('Axis points coincide'); return; }
+      this.stage = 3;
+      this._ref = null; // sweep reference set on first move
+    } else {
+      this._commit(this.ang);
+    }
+    this.status();
+  }
+  // cursor sweep angle about the axis, from the profile centroid's start ray
+  _cursorAngle(ev) {
+    const app = this.app, m = app.model;
+    const f = m.faces.get(this.profile);
+    if (!f) return Math.PI * 2;
+    const axis = G.norm(G.sub(this.P2, this.P1));
+    const ring = m.pts(f.loop);
+    const c = G.mul(ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0)), 1 / ring.length);
+    const flat = q => G.sub(q, G.mul(axis, G.dot(G.sub(q, this.P1), axis)));
+    if (!this._ref) {
+      this._ref = G.norm(flat(c));
+      if (G.isZero(this._ref)) return Math.PI * 2;
+    }
+    const cur = flat(app.inferPoint(ev, null).p);
+    if (G.isZero(cur)) return Math.PI * 2;
+    let a = G.signedAngle(this._ref, cur, axis);
+    if (Math.abs(a) < 0.09) a = Math.PI * 2 * (a < 0 ? -1 : 1); // near the reference = full turn
+    return a;
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    view.showSnapDot(null);
+    if (this.stage <= 1) return;
+    if (this.stage === 2 && this._axisHint) {
+      view.previewLine([this.P1, G.add(this.P1, this._axisHint)], 0x9a9a9a, true);
+      return;
+    }
+    if (this.stage !== 3 || !this.snapshot) return;
+    this.ang = this._cursorAngle(ev);
+    const axis = G.norm(G.sub(this.P2, this.P1));
+    view.previewLine([this.P1, this.P2], 0x5a6673, true);
+    for (let i = 1; i <= 4; i++)
+      app.renderGhost(this.snapshot, p => G.rotatePoint(p, this.P1, axis, this.ang * i / 4));
+    const deg = Math.abs(this.ang) >= Math.PI * 2 - 1e-3 ? 360 : Math.abs(this.ang) * 180 / Math.PI;
+    const s = view.toScreen(this.P2);
+    if (s) view.hudLabel(s.x, s.y, `${this.ang < 0 ? '-' : ''}${deg.toFixed(1)}\u00B0`);
+  }
+  _commit(ang) {
+    const app = this.app;
+    const deg = Math.abs(ang) >= Math.PI * 2 - 1e-3 ? 360 : ang * 180 / Math.PI;
+    let err = null, made = 0;
+    app.run('revolve', m => {
+      const r = m.revolveFace(this.profile, this.P1, this.P2, deg, 24);
+      if (r.error) err = r.error;
+      else made = r.faces.length;
+    });
+    if (err) app.toast('Revolve: ' + err, true);
+    else app.toast(`Revolved ${deg.toFixed(0)}° — ${made} faces`);
+    this.activate();
+    app.view.clearPreview();
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
+    return false;
+  }
+  onVCB(text) {
+    if (this.stage !== 3) return false;
+    const a = parseAngle(text);
+    if (a == null || Math.abs(a) < 0.1) return false;
+    this._commit(a);
+    return true;
+  }
+}
+
+// =========================================================== follow me
+// SketchUp's Follow Me / OCS SWEEP on the B-Rep: pick the profile face, then
+// pick the path — the profile transports along the edge chain and caps
+// itself at both ends. The path STAYS (SketchUp parity); the profile is
+// consumed into the sweep.
+class FollowMeTool extends Tool {
+  static id = 'followme';
+  activate() { this.profile = null; this.snapshot = null; this.hoverChain = null; }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    return this.profile
+      ? 'Follow Me: hover the path — its whole edge chain highlights — and click. The profile follows it and caps at both ends. Esc cancels.'
+      : 'Follow Me: click the profile face (the cross-section that will travel), or select one face first.';
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    if (!this.profile) {
+      let fid = null;
+      if (app.sel.faces.size === 1 && !app.sel.edges.size) fid = [...app.sel.faces][0];
+      else {
+        const fid2 = app.view.pickFaceAt(app.view.eventPt(ev));
+        if (fid2 != null && !app.isFaceLocked(app.model.faces.get(fid2))) fid = fid2;
+      }
+      const f = fid != null ? app.model.faces.get(fid) : null;
+      if (!f) { app.toast('Click the profile face first'); return; }
+      this.profile = fid;
+      const m = app.model;
+      const edges = [];
+      for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+        const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+        if (e) edges.push({ a: m.vp(e.a), b: m.vp(e.b) });
+      }
+      this.snapshot = { edges, faces: [{ outer: m.pts(f.loop), holes: (f.holes || []).map(h => m.pts(h)), color: f.color }] };
+      this.status();
+      return;
+    }
+    if (!this.hoverChain) { app.toast('Hover the path line to follow'); return; }
+    const path = this.hoverChain.pts;
+    let err = null, made = 0;
+    app.run('follow me', m => {
+      const r = m.sweepFaceAlongPath(this.profile, path);
+      if (r.error) err = r.error;
+      else made = r.faces.length;
+    });
+    if (err) app.toast('Follow Me: ' + err, true);
+    else app.toast(`Followed the path — ${made} faces`);
+    this.activate();
+    app.view.clearPreview();
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    view.showSnapDot(null);
+    if (!this.profile) return;
+    const pe = app.pickEdgeAt(ev, 9);
+    this.hoverChain = null;
+    if (!pe) { view.setHoverEdges(null); return; }
+    const chainIds = pe.edge.curveId
+      ? [...app.model.edges.values()].filter(e => e.curveId === pe.edge.curveId).map(e => e.id)
+      : [pe.edge.id];
+    view.setHoverEdges(chainIds);
+    const pts = ExtrudeCurveTool.chainFor(app.model, pe.edge);
+    if (!pts) return;
+    this.hoverChain = { pts };
+    // ghost stations: the profile translated along the path (transport
+    // rotation happens at commit — the preview shows where it lands)
+    const f = app.model.faces.get(this.profile);
+    if (!f || !this.snapshot) return;
+    const ring = app.model.pts(f.loop);
+    const c = G.mul(ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0)), 1 / ring.length);
+    const n = G.norm(G.loopNormal(ring));
+    for (let i = 0; i < pts.length; i += Math.max(1, Math.floor(pts.length / 4))) {
+      const off = G.sub(G.add(pts[i], G.mul(n, G.dot(G.sub(pts[0], c), n))), c);
+      app.renderGhost(this.snapshot, p => G.add(p, off));
+    }
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.setHoverEdges(null); this.status(); return true; }
+    return false;
+  }
+  onVCB() { return false; }
+}
+
 window.FreeTools = {
   SelectTool, LineTool, RectTool, CircleTool, ArcTool, PushPullTool, MoveTool,
   RotateTool, ScaleTool, OffsetTool, PaintTool, EraserTool, TrimTool, TapeMeasureTool,
   OrbitTool, PanTool, ZoomTool, ResizeTool, ExtrudeCurveTool, MirrorTool, ArrayTool,
+  RevolveTool, FollowMeTool,
 };

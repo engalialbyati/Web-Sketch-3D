@@ -917,6 +917,16 @@ body.mode-design #hint { color: #0a5c55; }
 }
 .lay-row:hover .lay-del { opacity: 1; }
 .lay-del:hover { background: #f6e3e5; border-color: #e3b6bb; }
+/* Linetype / Lineweight columns (OpenCADStudio Layer Manager parity) */
+.lay-lt, .lay-lw {
+  flex: none; height: 18px; font-size: 10px; padding: 0 2px;
+  border: 1px solid #d3d7db; border-radius: 4px; background: transparent;
+  color: inherit; cursor: pointer;
+}
+.lay-lt { width: 74px; }
+.lay-lw { width: 58px; }
+.lay-lt:hover, .lay-lw:hover { border-color: #3e66c4; background: #eef3fb; }
+.lay-lt:focus, .lay-lw:focus { outline: none; border-color: #3e66c4; }
 .lay-del.dis { visibility: hidden; } /* layer 0 is undeletable */
 .lay-quick { display: flex; gap: 5px; }
 .lay-quick button {

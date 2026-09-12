@@ -229,10 +229,19 @@
       curSel.value = cur;
     }
 
-    // live element counts per layer
+    // live element counts per layer (BIM entities + raw geometry assigned
+    // to the layer through the Properties panel)
     const counts = new Map();
     for (const ent of (app.bim ? app.bim.entities : []))
       counts.set(ent.layerId, (counts.get(ent.layerId) || 0) + 1);
+    for (const f of app.model.faces.values())
+      if ((!f.userData || !f.userData.bimEntityId) && f.layerId && f.layerId !== '0')
+        counts.set(f.layerId, (counts.get(f.layerId) || 0) + 1);
+
+    const LT = (window.Model && Model.LINETYPES) || [{ id: 0, name: 'Continuous' }];
+    const LW = (window.Model && Model.LINEWEIGHTS) || [{ id: 0, name: 'Default', mm: 0 }];
+    const ltOpts = lt => LT.map(t => `<option value="${t.id}"${(lt || 0) === t.id ? ' selected' : ''}>${t.name}</option>`).join('');
+    const lwOpts = lw => LW.map(w => `<option value="${w.id}"${(lw || 0) === w.id ? ' selected' : ''}>${w.mm === 0 ? w.name : w.name + ' mm'}</option>`).join('');
 
     let html = '';
     for (const ly of layers) {
@@ -241,17 +250,19 @@
       const is0 = ly.id === '0';
       const dot = ly.color || '#c3c9cf';
       html += `<div class="elb-node lay-row${isCur ? ' is-cur' : ''}${ly.visible ? '' : ' is-off'}" data-lid="${esc(ly.id)}"
-        title="${esc(ly.name)} — ${n} element${n === 1 ? '' : 's'}${is0 ? ' · default layer (cannot be deleted)' : ''}${isCur ? ' · CURRENT (new elements go here)' : ''}">
+        title="${esc(ly.name)} — ${n} object${n === 1 ? '' : 's'}${is0 ? ' · default layer (cannot be deleted)' : ''}${isCur ? ' · CURRENT (new elements go here)' : ''}">
         <button class="lay-cur${isCur ? ' on' : ''}" data-act="current" title="${isCur ? 'Current layer' : 'Set as current layer — new elements go here'}"></button>
         <button class="lay-color" data-act="color" style="background:${dot}"
-          title="Layer color — tints the elements (${ly.color ? 'double-click to clear' : 'none'}). Applied “ByLayer” in the 3D view"></button>
+          title="Layer color — tints the elements (${ly.color ? 'double-click to clear' : 'none'}). Applied "ByLayer" in the 3D view"></button>
         <span class="elb-lab" data-act="rename" title="${is0 ? 'Layer 0 (cannot be renamed)' : 'Double-click to rename'}">${esc(ly.name)}</span>
         <span class="elb-count">${n || ''}</span>
+        <select class="lay-lt" data-act="lt" title="Linetype — the style unstyled lines on this layer draw with">${ltOpts(ly.lt)}</select>
+        <select class="lay-lw" data-act="lw" title="Lineweight — the weight unstyled lines on this layer draw with">${lwOpts(ly.lw)}</select>
         <button class="lay-move" data-act="move" title="Move the selected elements onto this layer">⇨</button>
-        <button class="elb-flag f-eye${ly.visible ? '' : ' off'}" data-act="visible"
-          title="${ly.visible ? 'Layer OFF — hide its elements' : 'Layer ON — show its elements'}">${ly.visible ? '\u{1F441}' : '\u{1F648}'}</button>
-        <button class="elb-flag f-lock${ly.locked ? ' on' : ''}" data-act="locked"
-          title="${ly.locked ? 'Unlock layer (elements become selectable again)' : 'Lock layer — visible, but no select / no edit'}">${ly.locked ? '\u{1F512}' : '\u{1F513}'}</button>
+        <button class="layb-flag f-eye${ly.visible ? '' : ' off'}" data-act="visible"
+          title="${ly.visible ? 'Layer OFF — hide its objects' : 'Layer ON — show its objects'}">${ly.visible ? '\u{1F441}' : '\u{1F648}'}</button>
+        <button class="layb-flag f-lock${ly.locked ? ' on' : ''}" data-act="locked"
+          title="${ly.locked ? 'Unlock layer (objects become selectable again)' : 'Lock layer — visible, but no select / no edit'}">${ly.locked ? '\u{1F512}' : '\u{1F513}'}</button>
         <button class="lay-del${is0 ? ' dis' : ''}" data-act="delete" title="${is0 ? 'Layer 0 cannot be deleted' : 'Delete layer'}">\u{2715}</button>
       </div>`;
     }
@@ -269,6 +280,10 @@
       if (!ly) return;
       const act = ev.target.closest('[data-act]');
       const what = act ? act.dataset.act : '';
+      if (what === 'lt' || what === 'lw') {
+        ev.stopPropagation(); // the select's change event carries the edit
+        return;
+      }
       if (what === 'current') {
         ev.stopPropagation();
         app.setCurrentLayer(lid);
@@ -304,6 +319,16 @@
       }
       // plain row click: select every element on the layer
       app.selectLayerElements(lid);
+    });
+    // linetype / lineweight columns: ByLayer defaults, applied live
+    treeEl.addEventListener('change', ev => {
+      const sel = ev.target.closest('select[data-act]');
+      if (!sel || !window.app) return;
+      const row = sel.closest('.lay-row');
+      const ly = app.getLayer(row && row.dataset.lid);
+      if (!ly) return;
+      if (sel.dataset.act === 'lt') app.setLayerFlags(ly.id, { lt: +sel.value });
+      else if (sel.dataset.act === 'lw') app.setLayerFlags(ly.id, { lw: +sel.value });
     });
     // double-click: label renames, color swatch clears the ByLayer tint
     treeEl.addEventListener('dblclick', ev => {
