@@ -5,11 +5,53 @@
   "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app. First working product.",
   "scripts": {
     "test": "node test/run.js",
-    "bridge": "node server/blenderkitBridge.js"
+    "bridge": "node server/blenderkitBridge.js",
+    "desktop": "electron .",
+    "dist": "electron-builder --win nsis"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "three-mesh-bvh": "^0.5.6"
+  },
+  "devDependencies": {
+    "electron": "^44.3.0",
+    "electron-builder": "^26.15.3"
+  },
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.websketch3d.app",
+    "productName": "WebSketch 3D",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "js/**",
+      "css/**",
+      "index.html",
+      "families/**",
+      "README.md",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "WebSketch3D-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WebSketch 3D"
+    }
   }
 }

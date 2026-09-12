@@ -16,3 +16,4 @@ cache/
 # Rust build artifacts
 target/
 pkg/
+dist/
