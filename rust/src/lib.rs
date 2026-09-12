@@ -22,9 +22,8 @@ pub fn planar_cycles(px: &[f64], py: &[f64], edges: &[u32]) -> Vec<u32> {
     let n = px.len().min(py.len());
     // adjacency: (neighbor, angle) sorted CCW per vertex
     let mut adj: Vec<Vec<(u32, f64)>> = vec![Vec::new(); n];
-    let mut e = edges.chunks_exact(2);
-    while let Some([a, b]) = e.next() {
-        let (a, b) = (a as usize, b as usize);
+    for chunk in edges.chunks_exact(2) {
+        let (a, b) = (chunk[0] as usize, chunk[1] as usize);
         if a >= n || b == a || b >= n {
             continue;
         }
@@ -67,13 +66,11 @@ pub fn planar_cycles(px: &[f64], py: &[f64], edges: &[u32]) -> Vec<u32> {
     let mut visited = std::collections::HashSet::<u64>::with_capacity(2 * m);
     let mut out = Vec::new();
 
-    let mut ei = edges.chunks_exact(2);
-    let mut pair_index = 0u32;
-    while let Some([a, b]) = ei.next() {
+    for chunk in edges.chunks_exact(2) {
+        let (a, b) = (chunk[0], chunk[1]);
         for &(s, t) in &[(a, b), (b, a)] {
             let (s, t) = (s as usize, t as usize);
             if visited.contains(&(key(s, t))) {
-                pair_index += 1;
                 continue;
             }
             let mut loop_v: Vec<u32> = vec![s as u32];
@@ -116,7 +113,6 @@ pub fn planar_cycles(px: &[f64], py: &[f64], edges: &[u32]) -> Vec<u32> {
                     }
                 }
             }
-            pair_index += 1;
         }
     }
     out
