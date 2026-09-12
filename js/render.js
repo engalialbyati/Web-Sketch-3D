@@ -83,6 +83,38 @@ class Viewport {
 
     this.raycaster = new THREE.Raycaster();
 
+    // ---- GPU ID-BUFFER PICKING (the ThatOpen FastModelPicker pattern) ----
+    // Element meshes carry a uniform per-vertex pickId; the merged free-face
+    // mesh carries per-face ids. A pick renders ONLY those meshes with the
+    // id-encoding shader into a reusable target, scissored to 4×4 px around
+    // the cursor — one readPixels replaces the O(#elements) raycast loop.
+    // faceId still comes from a single-element BVH raycast (exact + cheap);
+    // identification (WHICH element) is the part the GPU now owns.
+    this.gpuPick = true;
+    this._pickRegistry = [null]; // pickId -> {entity} | {face}
+    this._pickTarget = null;
+    this._pickMat = new THREE.ShaderMaterial({
+      side: THREE.DoubleSide,
+      vertexShader: [
+        'attribute float pickId;',
+        'varying float vPickId;',
+        'void main() {',
+        '  vPickId = pickId;',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+        '}',
+      ].join('\n'),
+      fragmentShader: [
+        'varying float vPickId;',
+        'void main() {',
+        '  float id = floor(vPickId) + 0.5;',
+        '  float b = floor(id / 65536.0);',
+        '  float g = floor((id - b * 65536.0) / 256.0);',
+        '  float r = id - b * 65536.0 - g * 256.0;',
+        '  gl_FragColor = vec4(r / 255.0, g / 255.0, b / 255.0, 1.0);',
+        '}',
+      ].join('\n'),
+    });
+
     this._resize();
     window.addEventListener('resize', () => this._resize());
     new ResizeObserver(() => this._resize()).observe(container);
@@ -362,8 +394,34 @@ class Viewport {
     // hidden elements leave the render (and with it, picking) entirely —
     // isEntityHidden includes the entity's layer being OFF
     if (this.app.elements)
-      for (const el of this.app.elements.list())
+      for (const el of this.app.elements.list()) {
         el.group.visible = !this.app.isEntityHidden(el.entity.id) && (elf ? !!elf(el.entity) : true);
+        // layer 1 = the GPU pick pass; layer 0 = normal render
+        if (el.mesh) el.mesh.layers.enable(1);
+      }
+    // GPU pick ids: one per element mesh (uniform), continuing per-face for
+    // the merged free-face mesh below
+    this._pickRegistry = [null];
+    let pickId = 1;
+    const pickArr = [];
+    let elCount = 0;
+    if (this.app.elements)
+      for (const el of this.app.elements.list()) {
+        if (!el.mesh || !el.mesh.geometry.getAttribute('position')) continue;
+        const n = el.mesh.geometry.getAttribute('position').count;
+        el.mesh.geometry.setAttribute('pickId',
+          new THREE.BufferAttribute(new Float32Array(n).fill(pickId), 1));
+        this._pickRegistry[pickId] = { entity: el.entity.id };
+        el.mesh.userData.pickId = pickId++;
+        elCount++;
+      }
+    // GPU broad-phase auto-gate (measured): the scissored id-render +
+    // readback costs a fixed ~1.2ms; raycasting N BVH'd element meshes
+    // costs ~0.007ms each + per-mesh overhead. Below ~120 elements the
+    // plain CPU loop is faster, so the GPU pass switches on above that.
+    // view.gpuPickOverride forces either mode for testing.
+    this.gpuPick = this.gpuPickOverride !== undefined
+      ? this.gpuPickOverride : elCount > 120;
     // per-face triangulation cache — the earcut in THREE.ShapeUtils is
     // allocation-heavy and was re-run for EVERY face on EVERY commit; a
     // commit that moves one wall re-triangulated the whole model. Entries are
@@ -427,7 +485,11 @@ class Viewport {
         col.push(entry.r, entry.g, entry.b, entry.a);
       }
       const ntri = entry.pos.length / 9;
-      for (let k = 0; k < ntri; k++) this.triangleFace.push(f.id);
+      for (let k = 0; k < ntri; k++) {
+        this.triangleFace.push(f.id);
+        pickArr.push(pickId, pickId, pickId); // per-vertex constant: the face's id
+      }
+      this._pickRegistry[pickId++] = { face: f.id };
       this._mergedFaces.push({ id: f.id, aabb: entry.aabb });
     }
     this._rbFaceCount = this._mergedFaces.length;
@@ -440,6 +502,8 @@ class Viewport {
     fg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     fg.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     fg.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+    if (pickArr.length) fg.setAttribute('pickId', new THREE.Float32BufferAttribute(pickArr, 1));
+    this.faceMesh.layers.enable(1); // layer 1 = GPU pick pass
     if (fg.computeBoundsTree && pos.length > 9 * 64) // BVH pays off above a few dozen tris
       fg.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
     this.faceMesh.geometry.dispose();
@@ -772,10 +836,21 @@ class Viewport {
     this.selEdges.geometry.dispose();
     this.selEdges.geometry = eg;
 
-    // selected faces (triangulated overlay)
+    // selected faces (triangulated overlay) — triangles come from the
+    // rebuild()'s per-face triangulation cache when present (no re-earcut
+    // per selection change); element-owned faces triangulate here (they
+    // live in their own meshes, not the cache)
     const pos = [], nor = [];
     for (const id of sel.faces) {
       const f = model.faces.get(id); if (!f || f.hidden) continue;
+      const entry = this._triCache && this._triCache.get(id);
+      if (entry && entry.pos.length) {
+        for (let k = 0; k < entry.pos.length; k += 3) {
+          pos.push(entry.pos[k], entry.pos[k + 1], entry.pos[k + 2]);
+          nor.push(entry.n.x, entry.n.y, entry.n.z);
+        }
+        continue;
+      }
       const outer = model.pts(f.loop);
       const n = G.loopNormal(outer);
       if (G.isZero(n)) continue;
@@ -1154,6 +1229,83 @@ class Viewport {
   // Returns { entityId, faceId } of the closest hit, or null. Locked/hidden
   // elements are not targets. This is the O(#elements) path — the merged-mesh
   // and edge-list scans stay in Free Drawing (the "edit mode").
+  // ---- GPU pick pass (broad phase) -----------------------------------------
+  // Renders ONLY pickable meshes (element meshes + the merged free-face mesh)
+  // with the id-encoding shader into a reusable target, scissored to 4×4 px
+  // around the cursor, and reads all 16 pixels. The result is the SET of
+  // candidate elements/faces under the cursor — the exact hit (smallest
+  // coincident face, locked/hidden filters) is then resolved by raycasting
+  // just those 2-3 candidates instead of every element in the model.
+  // Pickable meshes live on layer 1 (enabled alongside 0 at rebuild); the
+  // pick render looks at layer 1 only, so nothing is toggled per pass.
+  // Returns { elements:Set<entityId>, faces:Set<fid> } (empty = clean miss)
+  // or undefined when the GPU path is unavailable.
+  _gpuPickCandidates(s) {
+    if (!this.gpuPick) return undefined;
+    if (!this._pickRegistry || this._pickRegistry.length < 2) return undefined;
+    const r = this.renderer;
+    const canvas = this.canvas;
+    try {
+      if (!this._pickTarget || this._pickTarget.width !== canvas.width || this._pickTarget.height !== canvas.height) {
+        if (this._pickTarget) this._pickTarget.dispose();
+        this._pickTarget = new THREE.WebGLRenderTarget(canvas.width, canvas.height, { depthBuffer: true });
+      }
+      const cam = this.activeCamera();
+      this.applyCamera();
+      const pr = r.getPixelRatio() || 1;
+      const W = canvas.width, H = canvas.height;
+      const prevMask = cam.layers.mask;
+      const prevOverride = this.scene.overrideMaterial;
+      cam.layers.set(1);
+      this.scene.overrideMaterial = this._pickMat;
+      r.setRenderTarget(this._pickTarget);
+      r.setScissorTest(true);
+      const x = Math.max(0, Math.min(W - 4, Math.round(s.x * pr) - 2));
+      const y = Math.max(0, Math.min(H - 4, Math.round((H / pr - s.y) * pr) - 2));
+      r.setScissor(x, y, 4, 4);
+      r.clear();
+      r.render(this.scene, cam);
+      const buf = new Uint8Array(4 * 16);
+      r.readRenderTargetPixels(this._pickTarget, x, y, 4, 4, buf);
+      r.setScissorTest(false);
+      r.setRenderTarget(null);
+      this.scene.overrideMaterial = prevOverride;
+      cam.layers.mask = prevMask;
+      const out = { elements: new Set(), faces: new Set() };
+      for (let i = 0; i < 16; i++) {
+        const id = buf[i * 4] + buf[i * 4 + 1] * 256 + buf[i * 4 + 2] * 65536;
+        if (id <= 0) continue;
+        const e = this._pickRegistry[id];
+        if (!e) continue;
+        if (e.entity) out.elements.add(e.entity);
+        else if (e.face != null) out.faces.add(e.face);
+      }
+      return out;
+    } catch (e) {
+      this.gpuPick = false; // unsupported context/config: CPU path from now on
+      return undefined;
+    }
+  }
+  // Face id inside ONE element (after the GPU pass named the element): a
+  // single-group BVH raycast — exact face + triangle, a fraction of a ms.
+  _elementFaceAt(el, s) {
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const hits = this.raycaster.intersectObjects(el.group.children, true)
+      .filter(h => h.object.userData && h.object.userData.triangleFace);
+    if (!hits.length) return null;
+    const d0 = hits[0].distance;
+    let best = null, bestArea = Infinity;
+    for (const h of hits) {
+      if (h.distance - d0 > 1e-4) break;
+      const fid = h.object.userData.triangleFace[h.faceIndex];
+      if (fid == null) continue;
+      const f = this.app.model.faces.get(fid);
+      if (!f) continue;
+      const area = this.app.model.faceArea(f);
+      if (area < bestArea) { bestArea = area; best = fid; }
+    }
+    return best;
+  }
   pickElementAt(s) {
     if (!this.elementsRoot || !this.elementsRoot.children.length) return null;
     const app = this.app;
@@ -1164,14 +1316,26 @@ class Viewport {
       if (!eid) return true;
       return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
     };
+    // GPU broad phase: the 4×4 id-render names the 1-3 elements under the
+    // cursor; the exact raycast below runs on THOSE groups only. Semantic
+    // note: the smallest-coincident-face rule still applies across the
+    // candidates, so behavior matches the full CPU path.
+    const gpu = this._gpuPickCandidates(s);
+    let targets;
+    if (gpu !== undefined) {
+      if (!gpu.elements.size) return null;
+      targets = this.elementsRoot.children.filter(
+        g => g.userData && g.userData.elementId && gpu.elements.has(g.userData.elementId) && pickable(g));
+    } else {
+      targets = this.elementsRoot.children.filter(pickable);
+    }
     // MESH hits only: the per-element edge LineSegments are raycastable with
     // a generous line threshold — a far element's edge line would 'catch' the
     // click before the intended face (selecting a distant column under the
     // cursor's beam). Face meshes carry the triangle map; lines do not.
-    const hits = this.raycaster.intersectObjects(
-      this.elementsRoot.children.filter(pickable), true)
+    const hits = this.raycaster.intersectObjects(targets, true)
       .filter(h => h.object.userData && h.object.userData.triangleFace);
-    if (!hits.length) return null;
+    if (!hits.length) return gpu !== undefined ? null : null;
     // coincident hits: prefer the SMALLEST face (the beam under the slab, not
     // the slab) — same rule as pickFaceAt
     const d0 = hits[0].distance;
@@ -1191,6 +1355,11 @@ class Viewport {
   }
   pickFaceAt(s) {
     if (!this.faceMesh.visible) return null;
+    const app = this.app;
+    // GPU broad phase: candidate elements from the id-render; the exact
+    // element raycast below then touches only those groups. The merged-mesh
+    // AABB scan is already broad-phase cheap and stays as-is.
+    const gpu = this._gpuPickCandidates(s);
     this.applyCamera();
     this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
     // the merged Free-Drawing mesh is picked through the rebuild()'s cached
@@ -1200,13 +1369,15 @@ class Viewport {
     // ordinary small meshes and stay on the raycaster; each carries its own
     // triangle -> faceId map in userData. Locked / hidden elements are not
     // pick targets at all.
-    const app = this.app;
     const pickable = obj => {
       const eid = obj.userData && obj.userData.elementId;
       if (!eid) return true;
       return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
     };
-    const targets = this.elementsRoot ? this.elementsRoot.children.filter(pickable) : [];
+    const targets = gpu !== undefined
+      ? (this.elementsRoot ? this.elementsRoot.children.filter(
+          g => g.userData && g.userData.elementId && gpu.elements.has(g.userData.elementId) && pickable(g)) : [])
+      : (this.elementsRoot ? this.elementsRoot.children.filter(pickable) : []);
     const hits = targets.length ? this.raycaster.intersectObjects(targets, true) : [];
     const ray = this.raycaster.ray;
     const merged = this._pickMergedFaces(ray.origin, ray.direction);

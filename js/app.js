@@ -3377,25 +3377,41 @@ class App {
     const ls = this.model.layers || [];
     return (ent && ls.find(l => l.id === ent.layerId)) || ls.find(l => l.id === '0') || ls[0];
   }
+  // FLAG SETS (the ThatOpen ModelIdMap pattern): hidden/locked as id Sets,
+  // rebuilt only when flags/layers/entities change. isEntityHidden/Locked
+  // run per face and per edge inside rebuild loops — the old per-call
+  // entity-find + layer-find made every rebuild walk the registry ~10k
+  // times. Set membership is O(1); stale ids of detached entities are
+  // simply absent (the old code's `!e -> false` behavior).
+  _flagSets() {
+    const ls = this.model.layers || [];
+    const sig = this.bim.entities.length + '/' + ls.map(l =>
+      (l.visible === false ? 'h' : '') + (l.locked ? 'l' : '')).join('');
+    if (this._flagCache && this._flagCacheSig === sig) return this._flagCache;
+    const hidden = new Set(), locked = new Set();
+    const hiddenL = new Set(ls.filter(l => l.visible === false).map(l => l.id));
+    const lockedL = new Set(ls.filter(l => l.locked).map(l => l.id));
+    for (const e of this.bim.entities) {
+      if (e.hidden || hiddenL.has(e.layerId)) hidden.add(e.id);
+      if (e.locked || lockedL.has(e.layerId)) locked.add(e.id);
+    }
+    this._flagCache = { hidden, locked };
+    this._flagCacheSig = sig;
+    return this._flagCache;
+  }
   isEntityLocked(id) {
-    const e = this.bim.getEntityById(id);
-    if (!e) return false;
-    const ly = this.layerOf(e);
-    return !!(e.locked || (ly && ly.locked));
+    return this._flagSets().locked.has(id);
   }
   isFaceLocked(f) {
     const uid = f && f.userData && f.userData.bimEntityId;
-    return uid ? this.isEntityLocked(uid) : false;
+    return uid ? this._flagSets().locked.has(uid) : false;
   }
   isEdgeLocked(e) {
     const uid = e && e.userData && e.userData.bimEntityId;
-    return uid ? this.isEntityLocked(uid) : false;
+    return uid ? this._flagSets().locked.has(uid) : false;
   }
   isEntityHidden(id) {
-    const e = this.bim.getEntityById(id);
-    if (!e) return false;
-    const ly = this.layerOf(e);
-    return !!(e.hidden || (ly && ly.visible === false));
+    return this._flagSets().hidden.has(id);
   }
   // Edge ownership drives hide: a wall's outlines must vanish with its faces.
   // Rebuild paths (joins, resizes, grid moves, hosted re-cuts) restamp FACES
@@ -3419,6 +3435,7 @@ class App {
       const ids = String(id).split(',').filter(Boolean);
       const live = ids.map(x => this.bim.getEntityById(x)).filter(Boolean);
       if (!live.length) return;
+      this._flagCache = null; // entity flags mutated — rebuild the id Sets
       // live-state toggle targets (stale-click safe, like the grid masters)
       const eff = {};
       if (patch.hidden != null) eff.hidden = live.every(e => e.hidden) ? false : patch.hidden;
@@ -5133,15 +5150,28 @@ class App {
     const model = this.model;
     const locked = this.axisLocks.size > 0;
     if (!this._snapCache) {
+      // ThatOpen SnapResolver pattern: candidates are DEDUPLICATED on a 1mm
+      // quantized key (triangulation-seam and shared-edge duplicates
+      // collapse; endpoint > center > midpoint priority) — and their screen
+      // projections are cached per camera signature so a hover move scans
+      // 2D distances instead of re-projecting every candidate.
+      const seen = new Map();
       const cands = [];
-      for (const [, p] of model.vertices) cands.push({ p, kind: 'endpoint', label: 'Endpoint' });
+      const addC = (p, kind, label) => {
+        const k = Math.round(p.x * 1e3) + ',' + Math.round(p.y * 1e3) + ',' + Math.round(p.z * 1e3);
+        if (seen.has(k)) return;
+        seen.set(k, 1);
+        cands.push({ p, kind, label });
+      };
+      for (const [, p] of model.vertices) addC(p, 'endpoint', 'Endpoint');
+      for (const [, m] of model.curves) if (m.center) addC(m.center, 'center', 'Center');
       for (const e of model.edges.values()) {
         if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
-        if (a && b) cands.push({ p: G.mul(G.add(a, b), 0.5), kind: 'midpoint', label: 'Midpoint' });
+        if (a && b) addC(G.mul(G.add(a, b), 0.5), 'midpoint', 'Midpoint');
       }
-      for (const [, m] of model.curves) if (m.center) cands.push({ p: m.center, kind: 'center', label: 'Center' });
       this._snapCache = cands;
+      this._snapProj = null;
     }
     if (!locked) {
       let best = null, bestD = 9;
@@ -5149,13 +5179,37 @@ class App {
       // (never model edges), so tools feed their path endpoints through
       // this._liveSnaps on every planePoint() call
       const live = this._liveSnaps;
-      const all = (live && live.length ? live : []).concat(this._snapCache);
-      for (const c of all) {
-        const s = this.view.worldToScreenPixels(c.p);
+      // project the cache ONCE per camera state (orbit/pan/zoom/edit), not
+      // once per candidate per mouse move — the hover loop below is then a
+      // pure 2D distance scan. The key extends the view's camera signature
+      // with ortho zoom and viewport size (neither moves the camera).
+      const cam = this.view.activeCamera();
+      const camSig = this.view._cameraSig() + '|z' + (cam.zoom || 0).toFixed(4)
+        + '|' + this.view.canvas.width + 'x' + this.view.canvas.height;
+      if (this._snapProjSig !== camSig || !this._snapProj) {
+        const proj = new Array(this._snapCache.length);
+        for (let i = 0; i < proj.length; i++) proj[i] = this.view.worldToScreenPixels(this._snapCache[i].p);
+        this._snapProj = proj;
+        this._snapProjSig = camSig;
+      }
+      const proj = this._snapProj;
+      let bestLive = null, bestLiveD = 9;
+      if (live && live.length) {
+        for (const c of live) {
+          const s = this.view.worldToScreenPixels(c.p);
+          if (!s.visible) continue;
+          const d = Math.hypot(s.x - q.x, s.y - q.y);
+          if (d < bestLiveD) { bestLiveD = d; bestLive = c; }
+        }
+      }
+      const cache = this._snapCache;
+      for (let i = 0; i < cache.length; i++) {
+        const s = proj[i];
         if (!s.visible) continue;
         const d = Math.hypot(s.x - q.x, s.y - q.y);
-        if (d < bestD) { bestD = d; best = c; }
+        if (d < bestD) { bestD = d; best = cache[i]; }
       }
+      best = bestLive && bestLiveD <= bestD ? bestLive : best;
       if (best) {
         // HIDDEN-CENTERLINE override: the wall's own band-edge MIDPOINTS are
         // tier-1 artifacts of its side faces — when the cursor is on the
