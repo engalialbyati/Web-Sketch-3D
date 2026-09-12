@@ -2029,6 +2029,11 @@ class Model {
         holes: anchorHoles.map(h => [...h]),
         color: face.color, alpha: face.alpha, hidden: false, extrude: null,
         gid: face.gid || 0,
+        // v0.6: a stamped face's extrusion children carry its stamp from birth
+        // — otherwise every born face is unstamped during the sweep, passes
+        // indepSkip's fresh-pair gate, and slices its own siblings at welded
+        // junctions (the corner-column rebuild freeze)
+        userData: face.userData ? { ...face.userData } : null,
       };
       this.faces.set(cap.id, cap);
       capId = cap.id;
@@ -2143,7 +2148,8 @@ class Model {
               continue;
             }
           }
-          const sf = { id: nid(), loop, holes: [], color: face.color, alpha: face.alpha, hidden: false, extrude: null, gid: face.gid || 0 };
+          const sf = { id: nid(), loop, holes: [], color: face.color, alpha: face.alpha, hidden: false, extrude: null,
+            gid: face.gid || 0, userData: face.userData ? { ...face.userData } : null };
           this.faces.set(sf.id, sf);
           sideIds.push(sf.id);
         }

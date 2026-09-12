@@ -1828,14 +1828,21 @@ class BimEntityManager {
     try {
       const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
       if (!f) return false;
+      // stamp BEFORE the sweep: every face pushPull births from this anchor
+      // inherits it, so indepSkip protects the whole span during the hold
+      // (unstamped children sliced each other at welded junctions)
+      f.userData = { bimEntityId: ent.id, bimType: 'wall', role: 'profile' };
       if (!m.pushPull(f, p.height || 3)) return false;
-      const nf = [...m.faces.keys()].filter(x => !before.has(x)).map(x => m.faces.get(x)).filter(f2 => f2 && !f2.userData);
+      const nf = [...m.faces.keys()].filter(x => !before.has(x)).map(x => m.faces.get(x)).filter(f2 => f2);
       const h = p.height || 3;
       const roles = WallTool.classifyRoles(G, m, nf,
         [G.v(A[0], A[1], z), G.v(B[0], B[1], z)], false, z, z + h);
       const ne = [];
       for (const f2 of nf) {
-        f2.userData = { bimEntityId: ent.id, bimType: 'wall', role: roles[f2.id] || 'exterior' };
+        // a foreign element's split-born face keeps ITS stamp (independence);
+        // our own children (already carrying ours via the anchor) get roles
+        if (!f2.userData || f2.userData.bimEntityId === ent.id)
+          f2.userData = { bimEntityId: ent.id, bimType: 'wall', role: roles[f2.id] || 'exterior' };
         for (const r of m.rings(f2)) for (let i = 0; i < r.length; i++) {
           const e = m.findEdge(r[i], r[(i + 1) % r.length]);
           if (e) {
@@ -2007,7 +2014,8 @@ class BimEntityManager {
     let made = [];
     try {
       made = window.ColumnFeature
-        ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0)
+        ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0,
+          { bimEntityId: id, bimType: 'column' })
         : [];
     } catch (e) { m.bimHold = false; return false; }
     if (!made || !made.length) { m.bimHold = false; return false; }
@@ -2706,7 +2714,8 @@ class App {
             return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
         } else if (d.type === 'column') {
           const b = d.params.base;
-          ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0);
+          ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0,
+            { bimEntityId: ent.id, bimType: 'column' });
           adopt(mm, ent, (f) => { const c = mm.faceCentroid(f);
             return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
         } else if (d.type === 'wall' && d.params.base && d.params.end) {
@@ -4314,6 +4323,9 @@ class App {
       if (!window.Demo5) { this.toast('demo5 feature not loaded', true); return; }
       const done = counts => {
         this.onLevelsChanged();
+        // fresh demo = consistent model; the deferred backlog would storm the
+        // first user action with hundreds of synchronous rebuilds
+        if (this.bim && this.bim._hostsDirty) this.bim._hostsDirty.clear();
         this.view.rebuild();
         this.updateInfo();
         this.refreshGroups();
@@ -4352,6 +4364,10 @@ class App {
       const done = counts => {
         this.onLevelsChanged();
         if (this.onGridsChanged) this.onGridsChanged();
+        // a freshly built demo is consistent: the deferred host-dirty backlog
+        // (every wall/column/beam the build marked) would otherwise drain on
+        // the FIRST user action — hundreds of synchronous rebuilds
+        if (this.bim && this.bim._hostsDirty) this.bim._hostsDirty.clear();
         this.view.rebuild();
         this.updateInfo();
         this.refreshGroups();

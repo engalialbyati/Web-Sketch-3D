@@ -22,12 +22,16 @@
   // pure geometry — unit-testable, no app dependency. Legacy direct builder
   // (extrudes UP from the picked plane); the level-driven path is
   // StructuralManager.buildColumn, used by the tool below.
-  function placeColumn(G, m, p, w, d, h, rot = 0) {
+  function placeColumn(G, m, p, w, d, h, rot = 0, stamp = null) {
     // plan rotation about the column center — aligned columns cut walls square
     const cs = Math.cos(rot), sn = Math.sin(rot);
     const pc = (lx, ly) => G.v(p.x + lx * cs - ly * sn, p.y + lx * sn + ly * cs, p.z);
     const f = m.addFaceFromRings([pc(-w / 2, -d / 2), pc(w / 2, -d / 2), pc(w / 2, d / 2), pc(-w / 2, d / 2)]);
     if (!f) return null;
+    // stamp BEFORE the sweep: pushPull children inherit it, so indepSkip
+    // shields the whole rebuild — unstamped children once sliced each other
+    // at corner junctions (the load-grid-model-then-draw-a-wall freeze)
+    if (stamp) f.userData = { ...stamp };
     if (!m.pushPull(f, h)) return null;
     const R = Math.hypot(w, d); // circumscribed half-extent (rotation-proof filter)
     return [...m.faces.values()].filter(g => {
