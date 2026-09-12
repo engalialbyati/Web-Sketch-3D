@@ -232,11 +232,50 @@ footprint overlap across the room, so a small stub or cylinder facet inside
 the room can't hijack the measurement. A skinless selection (a lone face)
 moves just that face's plane.
 
+## Architecture (v0.7)
+
+Layered strictly downward — UI never touches raw model state:
+
+1. **UI shell** — `index.html` + `js/app.js` (menus, mode switching, the
+   ribbon, selection, inference, transactions, clipboard, autosave, the DB
+   mirror) and the palette modules `js/ui-cad.js` (options bars / dynamic
+   input), `ui-browser.js` (Element Browser), `ui-layers.js` (layers),
+   `ui-families.js` (column families), `ui-schedules.js` (schedules).
+2. **Ribbon** — `RIBBON_TABS` (app.js): tab-based tool layout
+   (Draw / Model / Insert / Annotate / View / Manage); each tool declares
+   which engine mode it lives in and picking it auto-switches modes. Tools
+   self-register through the **feature registry** (`js/engine/api.js`):
+   `Engine.features.register({ id, kind, tool, icon, commands, mode })` —
+   features in `js/features/*` (column, beam, foundation, roof, stairs,
+   handrail, grid placement, measure-area, demos…) load like plugins and
+   grow the ribbon, the toolbar, and the command bar automatically.
+3. **Tools** — `js/tools/` with a shared lifecycle contract (`base.js`):
+   `free.js` (direct modeling, incl. polyline chaining + dynamic input),
+   `bim.js` (parametric elements + Convert), `draw.js` (the shared
+   2D-primitive sketch engine), `assets.js`, `script.js`; `registry.js`
+   combines them into the flat id→class map.
+4. **Element layer** — `js/BimElement.js` (entity→Group rendering,
+   incremental dirty-signature rebuilds, catalog mapping),
+   `js/StructuralManager.js` (pure structural families + datum rules),
+   `js/edit-inplace.js` (isolation sandbox), `js/SnapSystem.js`
+   (inference candidates), `js/GridManager.js` / `GridLine.js` (datums),
+   `js/db.js` (IndexedDB relational store), `js/families.js` /
+   `families-loader.js` / `columnFamilies.js` (design catalog),
+   `js/script-elements.js` (AI-pasted parametric types),
+   `js/export-gltf.js`, `js/assets.js` + `BlenderKitBrowser.js`,
+   `js/autosaveWorker.js` (off-thread persistence).
+5. **Kernel & viewport** — `js/model.js` (the B-Rep solid modeler) and
+   `js/render.js` (Three.js viewport with on-demand rendering, per-face
+   triangulation cache, merged element Groups + edge batches, HUD osnap
+   glyphs).
+
 ## Files
 
 - `index.html` — UI shell (menus, mode tabs, toolbar, tray, status bar)
-- `css/style.css` — SketchUp-style light theme + the Precise Drawing palette
-- `js/lib/three.min.js` — Three.js r128 (local copy, offline-friendly)
+- `css/style.css` — light theme + ribbon, dialogs, palettes, osnap glyphs
+- `electron/main.js` — desktop wrapper: zero-dependency localhost static
+  server + BrowserWindow (localStorage/IndexedDB parity with the web build)
+- `js/lib/` — Three.js r128 + loaders (local copies, offline-friendly)
 - `js/geometry.js` — vector/plane math, offsets, triangulation helpers
 - `js/model.js` — the solid modeler: edges/faces/curves, auto-facing, face
   splitting and healing, push/pull with capping + collapse, serialization,
@@ -251,33 +290,28 @@ moves just that face's plane.
   `clientToCanvasPixels` / `worldToScreenPixels` (raw `ev.clientX/Y` never
   escapes past `Viewport.eventPt`)
 - `js/tools/base.js` — the Tool lifecycle contract (`activate deactivate
-  cleanup onDown onMove onUp onKey onVCB status`) + shared helpers
-- `js/tools/free.js` — `tools/free/*`: the 17 SketchUp-style direct-modeling
-  tools (namespace `FreeTools`)
-- `js/tools/bim.js` — `tools/bim/*`: Revit-style parametric tools (namespace
-  `BimTools`) — `WallTool` (baseline → thickness × height solid, driven by
-  the options bar: Base Level, Top Constraint / Unconnected Height,
-  Thickness, Location Line, Chain) and `FloorTool` (corners → slab on the
-  Base Level, VCB "w,h[,thickness]"). Both mutate the SAME B-Rep through the
-  transaction manager and stamp every face with BIM metadata
-- `js/tools/registry.js` — combines both namespaces into the flat tool map
+  cleanup onDown onMove onUp onKey onVCB dynSpec/dynApply/dynCommit status`)
+  + shared helpers
+- `js/tools/free.js` — the SketchUp-style direct-modeling tools, including
+  the polyline-chaining Line tool and the local-normal Extrude Curve tool
+  (namespace `FreeTools`)
+- `js/tools/bim.js` — Revit-style parametric tools (namespace `BimTools`),
+  including Convert Faces/Edge to Element (fixed named types)
+- `js/tools/registry.js` — combines the namespaces into the flat tool map
+- `js/engine/api.js` — the feature registry tools and features plug into
+- `js/features/` — feature plugins (structural elements, stairs, roofs,
+  grid placement, demos, …)
 - `js/db.js` — the persistent relational store: Categories / Families / Types /
   Elements tables over IndexedDB (in-memory adapter elsewhere, so the CRUD
-  layer — `createElement` / `updateElementGeometry` / `deleteElement` /
-  `queryElementsByCategory` — runs headless in `test/db.test.js`)
+  layer runs headless in `test/db.test.js`)
 - `js/BimElement.js` — the element architecture: one parametric entity = one
-  unified Three.js `Group` (a single selectable compound mesh), sub-element
-  face/area (m²) and edge/length (m) measurement queries, and the entity ➔
-  Category➔Family➔Type catalog mapping with dynamic type creation
-- `js/edit-inplace.js` — the in-place Edit Mode sandbox (isolation, finish's
-  validate + re-adopt + single undo step, cancel's snapshot restore)
-- `js/ui-browser.js` — the floating & dockable Element Browser palette
-- `js/app.js` — menus, mode switcher, toolbar/ribbon, materials tray,
-  inference engine, selection, the TransactionManager, clipboard, autosave,
-  the DB mirror (every commit upserts element B-Reps + quantities), and the
-  element inspector / Edit In Place wiring
-- `test/` — Node unit tests (`npm test` or `node test/run.js`; no DOM needed —
-  `test/harness.js` loads geometry.js + model.js into a `vm` sandbox)
+  unified Three.js `Group`, sub-element measurement queries, and the
+  entity ➔ Category➔Family➔Type catalog mapping with dynamic type creation
+- `js/edit-inplace.js` — the in-place Edit Mode sandbox
+- `js/StructuralManager.js` — pure structural families + datum/takeoff rules
+- `js/SnapSystem.js` — inference candidates (endpoints, midpoints, centers)
+- `test/` — Node unit tests (`npm test`; no DOM needed — the harness loads
+  geometry.js + model.js into a `vm` sandbox)
 
 ## BIM hierarchy: database, elements, Edit In Place
 
