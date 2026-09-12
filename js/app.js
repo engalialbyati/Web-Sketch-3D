@@ -562,6 +562,13 @@ class BimEntityManager {
     // entities without a layer resolve back to '0' on load
     const ent = { id, type, params, faces: Object.keys(faceRoles).map(Number), edges: [...edgeIds], layerId: this.model.currentLayerId || '0' };
     this.entities.push(ent);
+    // REGISTRY INVALIDATION: tools build geometry first and register after —
+    // the geometry commit's rebuild cached the view's no-op-gate signature
+    // BEFORE this entity existed, and registration changes no model counts,
+    // so every later rebuild no-opped and the new element never got its
+    // Group (placed columns rendered as ghosts until some edit happened to
+    // bump the version). Registration IS a display-state change: touch().
+    if (this.model && this.model.touch) this.model.touch();
     for (const [fid, role] of Object.entries(faceRoles)) {
       const f = this.model.faces.get(+fid);
       if (f) f.userData = { bimEntityId: id, bimType: type, role };
@@ -2323,6 +2330,7 @@ class BimEntityManager {
     const i = this.entities.findIndex(e => e.id === id);
     if (i < 0) return false;
     const ent = this.entities[i];
+    if (this.model && this.model.touch) this.model.touch(); // registry changed: view gate must reopen
     for (const fid of ent.faces) {
       const f = this.model.faces.get(fid);
       if (f) f.userData = null;

@@ -376,6 +376,14 @@ class Viewport {
     // unified element Groups first: they claim their faces; the merged mesh
     // renders only the remaining (plain Free Drawing) geometry
     const elementFaceIds = (this.app.elements && this.app.elements.rebuild) ? this.app.elements.rebuild() : new Set();
+    // element-geometry signature (count + id sum): deleting/editing an
+    // element changes element-owned faces WITHOUT touching the merged mesh
+    // below — without this, geoChanged stayed false and the cached shadow
+    // map kept rendering deleted elements' shadows
+    let elemSig = elementFaceIds.size;
+    for (const id of elementFaceIds) elemSig += id;
+    const elemGeoChanged = this._rbElemSig !== undefined && this._rbElemSig !== elemSig;
+    this._rbElemSig = elemSig;
     // element-owned edges render inside their own Groups now — collect their
     // ids once so the merged edge pass (and its O(all-edges) walk) skips them
     const elementEdgeIds = new Set();
@@ -494,6 +502,7 @@ class Viewport {
     }
     this._rbFaceCount = this._mergedFaces.length;
     if (this._rbFaceCount !== prevFaceCount) geoChanged = true; // faces born/died
+    if (elemGeoChanged) geoChanged = true; // element meshes born/died/edited
     // the shadow map only needs refreshing when triangles actually changed —
     // paint jobs and selection passes were re-rendering 2048² shadows for
     // nothing
