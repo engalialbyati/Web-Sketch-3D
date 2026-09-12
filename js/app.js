@@ -254,7 +254,9 @@ class Transaction {
         let preExisting = 0;
         try {
           const scratch = Object.create(Object.getPrototypeOf(A.model));
-          scratch.load(JSON.parse(JSON.stringify(this.snapshot)));
+          // structuredClone: the JSON round-trip double-serialized the whole
+          // snapshot on the main thread — a classic freeze on large models
+          scratch.load((window.structuredClone || (o => JSON.parse(JSON.stringify(o))))(this.snapshot));
           const before = scratch.validate();
           preExisting = before.ok ? 0 : (before.errors || []).length;
         } catch (e) { preExisting = 0; }
@@ -2652,7 +2654,7 @@ class App {
   // a staged rebuild runs.
   rebuildFromParams() {
     if (this._rebuilding) { this.toast('A rebuild is already running — one moment', true); return null; }
-    const defs = this.bim.entities.map(e => ({ id: e.id, type: e.type, params: JSON.parse(JSON.stringify(e.params || {})) }));
+    const defs = this.bim.entities.map(e => ({ id: e.id, type: e.type, params: (window.structuredClone || (o => JSON.parse(JSON.stringify(o))))(e.params || {}) }));
     const skipped = [];
     let counts = {};
     // rebuildable types — everything else (stairs, scripts, hosted openings,
@@ -6588,13 +6590,22 @@ class App {
     this.clearSelection();
     this._snapCache = null;
     this.view.rebuild();
-    this.onLevelsChanged(); // level edits are transactional too — resync planes/dropdowns
-    this.onGridsChanged();  // grids ride the same snapshots
-    if (window.LayerPanel) LayerPanel.refresh(); // layer ops are transactional too
-    this.updateInfo();
-    this.refreshGroups();
-    this._updateEditBox();
+    // panel refreshes wait for idle: the rebuild already spent the frame
+    // budget — painting the viewport first is what makes undo feel instant
+    this._deferUI();
     if (!this._eip) this._saveAutosave();
+  }
+  /** Post-rebuild UI sync (undo/redo): run when the browser is idle. */
+  _deferUI() {
+    const fn = () => {
+      this.onLevelsChanged(); // level edits are transactional too — resync planes/dropdowns
+      this.onGridsChanged();  // grids ride the same snapshots
+      if (window.LayerPanel) LayerPanel.refresh(); // layer ops are transactional too
+      this.updateInfo();
+      this.refreshGroups();
+      this._updateEditBox();
+    };
+    (window.requestIdleCallback || (f => setTimeout(f, 30)))(fn);
   }
   redo() {
     if (!this.redoStack.length) { this.toast('Nothing to redo'); return; }
@@ -6608,12 +6619,7 @@ class App {
     this.clearSelection();
     this._snapCache = null;
     this.view.rebuild();
-    this.onLevelsChanged();
-    this.onGridsChanged();
-    if (window.LayerPanel) LayerPanel.refresh();
-    this.updateInfo();
-    this.refreshGroups();
-    this._updateEditBox();
+    this._deferUI();
     if (!this._eip) this._saveAutosave();
   }
   opDone() {
@@ -6731,8 +6737,31 @@ class App {
   _saveAutosave() {
     clearTimeout(this._asTimer);
     this._asTimer = setTimeout(() => {
-      try { localStorage.setItem('websketch3d', JSON.stringify(this.model.serialize())); } catch (e) { }
+      try {
+        const snap = this.model.serialize();
+        if (!this._asWorker) {
+          try { this._asWorker = new Worker('js/autosaveWorker.js'); } catch (e) { this._asWorker = null; }
+        }
+        if (!this._asWorker) { // no workers (or blob CSP): old inline path
+          try { localStorage.setItem('websketch3d', JSON.stringify(snap)); } catch (e) { }
+          return;
+        }
+        // coalesce: only the LATEST snapshot matters; if the worker is still
+        // busy, remember it and post when the previous stringify completes
+        if (this._asBusy) { this._asPending = snap; return; }
+        this._asBusy = true;
+        this._asWorker.onmessage = (ev) => {
+          this._asBusy = false;
+          if (ev.data) { try { localStorage.setItem('websketch3d', ev.data); } catch (e) { } }
+          if (this._asPending) { const p = this._asPending; this._asPending = null; this._saveAutosaveNow(p); }
+        };
+        this._saveAutosaveNow(snap);
+      } catch (e) { }
     }, 600);
+  }
+  _saveAutosaveNow(snap) {
+    this._asBusy = true;
+    this._asWorker.postMessage(snap);
   }
   _restoreAutosave() {
     try {

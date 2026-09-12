@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebSketch kernel bench — planar_cycles: JS vs Rust/WASM</title>
+<style>
+  body { font-family: Consolas, monospace; background: #1e1e1e; color: #ddd; margin: 2rem; }
+  table { border-collapse: collapse; margin-top: 1rem; }
+  td, th { border: 1px solid #444; padding: 6px 14px; text-align: right; }
+  th { background: #2a2a2a; }
+  .ok { color: #3fb950; } .bad { color: #f85149; } h1 { font-size: 1.2rem; }
+  button { padding: 8px 18px; font-size: 1rem; cursor: pointer; }
+</style>
+</head>
+<body>
+<h1>planar_cycles — JS (model.js algorithm) vs Rust/WASM</h1>
+<p>Synthetic N×N planar grid graph; expected cells = (N−1)². Median of 7 runs each.</p>
+<button id="run">Run benchmark</button>
+<div id="out"></div>
+<script type="module">
+// ---- JS reference: faithful port of js/model.js splitFaceArrangement loop trace ----
+function planarCyclesJS(px, py, edges) {
+  const n = px.length;
+  const ang = new Map(); // vid -> [{other, angle}]
+  const addAng = (from, to) => {
+    if (!ang.has(from)) ang.set(from, []);
+    ang.get(from).push({ other: to, angle: Math.atan2(py[to] - py[from], px[to] - px[from]) });
+  };
+  for (let i = 0; i < edges.length; i += 2) {
+    const a = edges[i], b = edges[i + 1];
+    if (a === b) continue;
+    addAng(a, b); addAng(b, a);
+  }
+  for (const [, list] of ang) list.sort((x, y) => x.angle - y.angle);
+  const next = (fromV, toV) => {
+    const list = ang.get(toV);
+    if (!list) return null;
+    const rev = Math.atan2(py[fromV] - py[toV], px[fromV] - px[toV]);
+    let best = null;
+    for (const c of list) {
+      if (c.other === fromV) continue;
+      let d = rev - c.angle;
+      while (d <= 1e-12) d += 2 * Math.PI;
+      if (d > 2 * Math.PI - 1e-9) d -= 2 * Math.PI;
+      if (!best || d < best.d) best = { w: c.other, d };
+    }
+    return best ? best.w : null;
+  };
+  const visited = new Set();
+  const out = [];
+  const m = edges.length / 2;
+  for (let i = 0; i < edges.length; i += 2) {
+    const a = edges[i], b = edges[i + 1];
+    for (const [s, t] of [[a, b], [b, a]]) {
+      if (visited.has(s + '>' + t)) continue;
+      const loop = [s];
+      let cur = s, nxt = t, ok = true;
+      while (nxt !== s) {
+        visited.add(cur + '>' + nxt);
+        loop.push(nxt);
+        const w = next(cur, nxt);
+        if (w == null || loop.length > m * 2 + 4) { ok = false; break; }
+        cur = nxt; nxt = w;
+      }
+      if (ok && loop.length >= 3) {
+        visited.add(cur + '>' + s);
+        if (new Set(loop).size === loop.length) {
+          let area = 0;
+          for (let k = 0; k < loop.length; k++) {
+            const k2 = (k + 1) % loop.length;
+            area += px[loop[k]] * py[loop[k2]] - px[loop[k2]] * py[loop[k]];
+          }
+          if (area > 2e-7) out.push(loop);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// ---- synthetic grid graph ----
+function grid(n) {
+  const px = [], py = [], edges = [];
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const id = y * n + x; px[id] = x + (y % 2 ? 0.13 : 0); py[id] = y; // jitter kills degenerate angles
+  }
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const id = y * n + x;
+    if (x + 1 < n) edges.push(id, id + 1);
+    if (y + 1 < n) edges.push(id, id + n);
+  }
+  return { px, py, edges };
+}
+
+function median(a) { const s = [...a].sort((x, y) => x - y); return s[(s.length >> 1)]; }
+
+import init, { planar_cycles } from '../pkg/websketch_geometry.js';
+const wasm = await init();
+document.getElementById('run').onclick = () => {
+  const sizes = [25, 50, 75, 100];
+  const rows = [];
+  for (const n of sizes) {
+    const { px, py, edges } = grid(n);
+    const px64 = new Float64Array(px), py64 = new Float64Array(py), e32 = new Uint32Array(edges);
+    // correctness: same cell count & identical loops
+    const js = planarCyclesJS(px64, py64, e32);
+    const flat = planar_cycles(px64, py64, e32);
+    let cells = 0, i = 0;
+    while (i < flat.length) { cells++; i += 1 + flat[i]; }
+    const ok = cells === js.length && cells === (n - 1) * (n - 1);
+    // timing (median of 7)
+    const tj = [], tw = [];
+    for (let r = 0; r < 7; r++) {
+      let t = performance.now(); planarCyclesJS(px64, py64, e32); tj.push(performance.now() - t);
+      t = performance.now(); planar_cycles(px64, py64, e32); tw.push(performance.now() - t);
+    }
+    const mj = median(tj), mw = median(tw);
+    rows.push({ n, edges: edges.length / 2, cells, ok, mj, mw, speedup: mj / mw });
+  }
+  document.getElementById('out').innerHTML =
+    '<table><tr><th>N</th><th>edges</th><th>cells</th><th>JS ms</th><th>WASM ms</th><th>speedup</th></tr>' +
+    rows.map(r => `<tr><td>${r.n}</td><td>${r.edges}</td><td class="${r.ok ? 'ok' : 'bad'}">${r.cells}${r.ok ? ' ✓' : ' ✗ MISMATCH'}</td><td>${r.mj.toFixed(2)}</td><td>${r.mw.toFixed(2)}</td><td class="${r.speedup >= 1 ? 'ok' : 'bad'}">${r.speedup.toFixed(2)}×</td></tr>`).join('') +
+    '</table>';
+};
+</script>
+</body>
+</html>
