@@ -1,6 +1,7 @@
-# WebSketch 3D — a SketchUp-style 3D modeler for the browser
+# WebSketch 3D — a SketchUp-style 3D modeler for the browser (and desktop)
 
-[![tests](https://img.shields.io/badge/tests-332%20passing-brightgreen)]() 
+[![release](https://img.shields.io/badge/release-v0.7.0%20%22First%20Working%20Product%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0)
+[![tests](https://img.shields.io/badge/tests-350%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -23,6 +24,43 @@ incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
 models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
+
+### v0.7 — First Working Product
+
+v0.7 is the first end-user release, shipped as a Windows installer plus the
+web build. The headline additions:
+
+- **Desktop app**: `WebSketch3D-Setup-0.7.0.exe` on the
+  [release page](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0) —
+  a signed-free NSIS installer (choose folder, Desktop/Start-Menu shortcuts)
+  wrapping the full app in an Electron window with the same
+  localStorage/IndexedDB persistence as the web build.
+- **Ribbon UI**: tab-based ribbon (Draw / Model / Insert / Annotate / View /
+  Manage) with titled tool panels; tools auto-switch their engine mode.
+- **True polylines (AutoCAD semantics)**: the Line/Polyline tool chains
+  segments as ONE entity — click any segment to select the whole chain — and
+  **Join Edges into Polyline** welds gaps (≤2 cm), fuses collinear runs, and
+  chains separately drawn lines into one polyline.
+- **Drawing in 3D**: Z-axis lines work from the very first segment (cursor-ray
+  axis math; on-screen axis-lock chip + an **axis button in the input bar**),
+  `V` flips rectangles/arcs onto vertical planes (arc endpoints stay locked —
+  the plane rotates through the chord), and arcs can be typed end-to-end via
+  dynamic input (chord Length/Angle, then Radius/Sweep °).
+- **AutoCAD osnap markers everywhere**: green endpoint squares, midpoint
+  triangles, center circles — on hover with any tool, over every kind of
+  geometry (lines, polylines, rects, arcs, circles, element edges).
+- **Edge extrude (right-click ▸ Extrude Edge…)**: sweep lines/curves into
+  ribbon faces along the curve's own plane normal (Newell), the edge's
+  in-plane slope, the local out-of-plane perpendicular, the span direction
+  (vaults), a world axis, or **toward the mouse** (live preview, click to
+  commit). Open paths sweep with clamped end tangents — squared-off caps,
+  no sliver faces.
+- **Convert Faces/Edge to Element**: pick a name and kind (or a custom type) —
+  the drawn geometry becomes a *fixed* element (no parametric dims), its type
+  lands in the Element Browser and is reused by name on later conversions.
+- **Safer deletes**: deleting a selected edge never cascade-deletes the faces
+  it borders (a clear message points to the Eraser for deliberate
+  dissolution); free lines survive parametric rebuilds.
 
 ### v0.6 — Element Independence (the IFC contract)
 
@@ -77,8 +115,14 @@ windows — 325 live parametric elements in one click.
 
 ## Run it
 
-- Double-click `index.html` (works from `file://`), **or**
+- **Windows installer (recommended)**: grab
+  `WebSketch3D-Setup-0.7.0.exe` from the
+  [v0.7.0 release](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0)
+  — installs a desktop app with Start-Menu/Desktop shortcuts.
+- **From source**: double-click `index.html` (works from `file://`), **or**
 - Serve it: `py -m http.server 8742` → open http://127.0.0.1:8742
+- **Desktop build from source**: `npm install && npm run desktop`
+  (dev window), `npm run dist` (rebuild the installer).
 
 ## Optional: BlenderKit asset library (local bridge)
 
@@ -112,11 +156,12 @@ npm run bridge         # http://localhost:3001
 | Tool | Shortcut | Notes |
 |---|---|---|
 | Select | Space | click / window / crossing select, Shift adds, double-click selects face border |
-| Line | L | chaining; click any existing endpoint (green dot) to continue an old line; closing a loop of lines creates a face; live `[x, y, z]` readout; axis lock (arrow keys); exact length via VCB |
-| Rectangle | R | on ground or any face; red preview with all four corner coordinates while drawing; exact `w,h` via VCB; drawn inside a face punches it out; drawn ACROSS a face edge it splits the face and extends beyond it |
-| Circle | C | radius + sides (`r,s` or `24s` via VCB); center + cursor coordinates shown while drawing |
+| Line | L | chaining; click any existing endpoint (green square) to continue an old line; closing a loop of lines creates a face; live `[x, y, z]` readout; arrow-key axis locks work from the FIRST segment (Z included — a chip in the viewport shows the lock); dynamic input (Length/Angle + the axis button); exact length via VCB |
+| Polyline | — | the Line tool's chained mode under its own name: every segment of a drawing session is ONE polyline entity — click any segment to select the whole chain; extrude/convert/offset treat it end to end |
+| Rectangle | R | on ground or any face; `V` after the first corner flips the plane vertical (3D rects); exact `w,h` via VCB; drawn inside a face punches it out; drawn ACROSS a face edge it splits the face and extends beyond it |
+| Circle | C | radius + sides (`r,s` or `24s` via VCB); `V` flips the plane vertical; center + cursor coordinates shown while drawing |
 | Polygon | — | like circle, default 6 sides |
-| Arc | A | start–end–bulge; exact radius or bulge via VCB |
+| Arc | A | start–end–bulge with **dynamic input**: type the chord (Length/Angle), then Radius or Sweep °; `V` flips the plane vertical THROUGH the chord (start/end stay locked in world space); placed points carry endpoint-square markers; exact radius or bulge via VCB |
 | Push/Pull | P | drag or click-move-click; exact distance; double-click repeats; re-push extends walls; collapse to 0; SketchUp merge semantics — pushing a shape drawn on a face **outward merges** with the host solid (shared walls extend, no twin quads), **inward carves a recess**, and pushing **through** punches a clean hole in the far face. Inward drags **snap to the far face** (hover it or near its depth) for an exact through-punch; pushing **past** it tunnels through and continues as a capped protrusion |
 | Offset | F | faces and circles; inward ring becomes a face with a hole |
 | Resize Wall | W | Revit-style: click a wall, the distance to the opposite wall is shown; type a new size (e.g. `4`) or `+1`/`-0.5`; connected walls stretch |
@@ -423,7 +468,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 332 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 350 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and
