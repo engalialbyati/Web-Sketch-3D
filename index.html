@@ -42,6 +42,7 @@
         <option value="circumscribed">Circumscribed</option>
       </select>
       <button class="dchip" data-prim="circle" title="Circle (VCB = radius)">Circle</button>
+      <button class="dchip" data-prim="ellipse" title="Ellipse: center, semi-major axis, semi-minor extent (VCB = a, or a x b)">Ellipse</button>
       <button class="dchip" data-prim="arc_ser" title="Arc: start, end, bulge (VCB = radius)">Arc</button>
       <button class="dchip" data-prim="arc_ce" title="Arc: center, start, sweep (VCB = angle)">Arc•C</button>
       <button class="dchip" data-prim="fillet" title="Fillet: two lines + radius (trims)">Fillet</button>
@@ -121,24 +122,24 @@
 <script src="js/GridLine.js?v=11"></script>
 <script src="js/GridManager.js?v=9"></script>
 <script src="js/SnapSystem.js?v=2"></script>
-<script src="js/model.js?v=58gc"></script>
+<script src="js/model.js?v=59tf"></script>
 <script src="js/db.js?v=5dsgn"></script>
 <script src="js/BimElement.js?v=12"></script>
-<script src="js/render.js?v=48shadow"></script>
+<script src="js/render.js?v=49guides"></script>
 <script src="js/assets.js?v=2"></script>
 <script src="js/tools/base.js?v=23"></script>
-<script src="js/tools/free.js?v=61"></script>
-<script src="js/tools/bim.js?v=64join"></script>
+<script src="js/tools/free.js?v=62tools"></script>
+<script src="js/tools/bim.js?v=65dyn"></script>
 <script src="js/tools/assets.js?v=1"></script>
 <script src="js/tools/script.js?v=3"></script>
-<script src="js/tools/draw.js?v=14"></script>
-    <script src="js/tools/registry.js?v=31"></script>
+<script src="js/tools/draw.js?v=15ellipse"></script>
+    <script src="js/tools/registry.js?v=32"></script>
 <script src="js/engine/api.js?v=1"></script>
 <script src="js/script-elements.js?v=2"></script>
 <script src="js/features/column.js?v=13dup"></script>
 <script src="js/features/foundation.js?v=1"></script>
 <script src="js/features/stairs.js?v=1"></script>
-<script src="js/features/roof.js?v=1"></script>
+<script src="js/features/roof.js?v=2"></script>
 <script src="js/features/demo-r5.js?v=2"></script>
 <script src="js/features/demo5.js?v=2"></script>
 <script src="js/ui-schedules.js?v=1"></script>
@@ -150,7 +151,7 @@
 <script src="js/features/measure-area.js?v=2"></script>
 <script src="js/edit-inplace.js?v=1"></script>
 <script src="js/StructuralManager.js?v=12"></script>
-<script src="js/app.js?v=116snap"></script>
+<script src="js/app.js?v=117tools"></script>
     <script src="js/families.js?v=2"></script>
     <script src="js/families-loader.js?v=1"></script>
     <script src="js/ui-cad.js?v=23"></script>

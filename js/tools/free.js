@@ -626,6 +626,9 @@ class LineTool extends Tool {
     view.clearPreview();
     if (this.anchor) {
       view.previewLine([this.anchor, useP], 0x2b2b2b);
+      // dynamic-input guides: dashed in-plane horizontal reference + angle
+      // sweep arc + bearing label (OpenCADStudio-style)
+      view.polarGuides(this.anchor, useP, this.plane ? this.plane.n : null);
       const s = view.toScreen(useP);
       view.stickyLabel(useP, fmtLen(G.dist(this.anchor, useP)), '#333', 0, 0);
       showCursorCoords(view, s, inf, useP);
@@ -1712,6 +1715,256 @@ class ScaleTool extends Tool {
   }
 }
 
+// =========================================================== mirror
+// OpenCADStudio MIRROR adapted to the B-Rep: two clicked points define the
+// mirror axis; the mirror plane is the vertical plane through it. Default
+// COPIES (the source stays — a reflection is disorienting enough without also
+// losing the original); Ctrl at the placing click MOVES (source deleted).
+// Mirrored faces get their rings reversed so normals stay outward, and arc /
+// circle metadata transforms with the geometry.
+class MirrorTool extends Tool {
+  static id = 'mirror';
+  activate() { this.stage = 0; this.A = null; this.B = null; this.snapshot = null; this.orig = null; }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    if (this.stage === 0) return 'Mirror: click the first point of the mirror axis (selects geometry if nothing is selected).';
+    if (this.stage === 1) return 'Mirror: click the second axis point — the ghost flips live. Default copies; Ctrl at the placing click deletes the source.';
+    return 'Mirror: click to place. Ctrl = move (delete the source); default copies.';
+  }
+  // reflection through the vertical plane containing A->B
+  _tf() {
+    if (!this.A || !this.B) return null;
+    const d = G.sub(this.B, this.A);
+    if (G.len(d) < 1e-6) return null;
+    const m = G.v(-d.y, d.x, 0); // plane normal: axis perpendicular, horizontal
+    if (G.len(m) < 1e-9) return null; // plumb axis: no vertical mirror plane
+    const mn = G.norm(m);
+    const refl = q => G.sub(q, G.mul(mn, 2 * G.dot(G.sub(q, this.A), mn)));
+    return { p: refl, n: refl, flip: true };
+  }
+  _tfFor(B) { const keep = this.B; this.B = B; const tf = this._tf(); this.B = keep; return tf; }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    if (this.stage === 0) {
+      if (!app.sel.faces.size && !app.sel.edges.size) {
+        const pick = app.pickEntity(ev);
+        if (pick.group != null) app.selectGroup(pick.group);
+        else if (pick.face != null) app.sel = { edges: new Set(), faces: new Set([pick.face]) };
+        else if (pick.edges && pick.edges.length) app.sel = { edges: new Set(pick.edges), faces: new Set() };
+        else { app.toast('Select something to mirror first'); return; }
+        app.onSelectionChanged();
+      }
+      this.A = app.inferPoint(ev, null).p;
+      this.snapshot = app.snapshotSelection();
+      this.orig = app.selectionVerts();
+      this.stage = 1;
+    } else if (this.stage === 1) {
+      const p = app.inferPoint(ev, this.A).p;
+      if (G.dist(p, this.A) < 1e-6) return;
+      if (!this._tfFor(p)) { app.toast('Mirror axis cannot be vertical'); return; }
+      this.B = p; this.stage = 2;
+    } else {
+      this._commit(ev.ctrlKey);
+    }
+    this.status();
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    view.showSnapDot(null);
+    if (this.stage === 1) {
+      view.previewLine([this.A, app.inferPoint(ev, this.A).p], 0x9a9a9a, true);
+      return;
+    }
+    if (this.stage !== 2) return;
+    const tf = this._tf();
+    if (!tf) return;
+    view.previewLine([this.A, this.B], 0x5a6673, true);
+    app.renderGhost(this.snapshot, tf.p);
+    const s = view.toScreen(G.mul(G.add(this.A, this.B), 0.5));
+    if (s) view.hudLabel(s.x, s.y, 'mirror');
+  }
+  _commit(deleteSource) {
+    const app = this.app;
+    const tf = this._tf();
+    if (!tf) { app.toast('Mirror axis is degenerate'); return; }
+    const n = app.sel.faces.size;
+    if (deleteSource) {
+      app.run('mirror', m => {
+        m.transformVertices(this.orig, tf.p);
+        m.transformCurves([...app.sel.edges], tf);
+        m.flipRingOrientation([...app.sel.faces]);
+        m.clearExtrudes();
+      });
+    } else {
+      app.run('mirror copy', m => m.importSubset(m.serializeSubset(app.sel), G.v(), tf));
+    }
+    app.toast(`Mirrored ${n} face${n === 1 ? '' : 's'}${deleteSource ? ' — source deleted' : ' (copy)'}`);
+    this.activate();
+    app.view.clearPreview();
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
+    return false;
+  }
+}
+
+// =========================================================== array
+// OpenCADStudio ARRAY adapted: one tool, two flavors. LINEAR (default): click
+// a base point, click the step vector — copies march along it; "N x M" in the
+// VCB grids them (M rows along the perpendicular). POLAR: hold Ctrl at the
+// FIRST click — that point is the center, and the sweep you drag fans the
+// copies out evenly over the angle. VCB "N" sets the total count (source
+// included), default 4.
+class ArrayTool extends Tool {
+  static id = 'array';
+  activate() {
+    this.mode = null;        // 'linear' | 'polar' — set by the first click
+    this.stage = 0;
+    this.A = null;
+    this.step = null;        // linear: spacing vector between adjacent copies
+    this.count = 4; this.count2 = 1;
+    this.snapshot = null; this.orig = null;
+    this.axis = G.v(0, 0, 1);
+    this._total = null;      // polar: the swept angle frozen from the last move
+  }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    if (this.stage === 0) return 'Array: click the base point — hold Ctrl there for a POLAR array (that point is the center).';
+    if (this.stage === 1) return this.mode === 'polar'
+      ? 'Polar Array: sweep the total angle — copies fan out evenly. Click to finish. VCB = total count.'
+      : 'Array: click the STEP between adjacent copies. Click again to place. VCB = "N" or "N x M".';
+    return 'Array: click to place. Esc cancels.';
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    if (this.stage === 0) {
+      if (!app.sel.faces.size && !app.sel.edges.size) {
+        const pick = app.pickEntity(ev);
+        if (pick.group != null) app.selectGroup(pick.group);
+        else if (pick.face != null) app.sel = { edges: new Set(), faces: new Set([pick.face]) };
+        else if (pick.edges && pick.edges.length) app.sel = { edges: new Set(pick.edges), faces: new Set() };
+        else { app.toast('Select something to array first'); return; }
+        app.onSelectionChanged();
+      }
+      this.A = app.inferPoint(ev, null).p;
+      this.mode = ev.ctrlKey ? 'polar' : 'linear';
+      if (this.mode === 'polar') {
+        // on a face: fan about its normal, like RotateTool; the sweep previews
+        // live from here — no intermediate step click needed
+        const fid = app.view.pickFaceAt(app.view.eventPt(ev));
+        if (fid != null) this.axis = G.loopNormal(app.model.pts(app.model.faces.get(fid).loop));
+        else this.axis = G.v(0, 0, 1);
+        if (G.isZero(this.axis)) this.axis = G.v(0, 0, 1);
+      }
+      this.snapshot = app.snapshotSelection();
+      this.orig = app.selectionVerts();
+      this.stage = this.mode === 'polar' ? 2 : 1;
+      this.status();
+      return;
+    }
+    if (this.stage === 1) {
+      const p = app.inferPoint(ev, this.A).p;
+      if (this.mode === 'linear') {
+        const d = G.sub(p, this.A);
+        if (Math.hypot(d.x, d.y) < 1e-6 && Math.abs(d.z) < 1e-6) return;
+        this.step = d;
+      }
+      this.stage = 2;
+      this.status();
+      return;
+    }
+    this._commit();
+  }
+  _polarAngle(ev) {
+    // total sweep from in-plane +X to the cursor, about the array axis
+    const app = this.app;
+    const { u, v } = G.basisForNormal(this.axis);
+    const p = app.inferPoint(ev, null).p;
+    const d = G.sub(p, this.A);
+    return Math.atan2(G.dot(d, v), G.dot(d, u));
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    view.showSnapDot(null);
+    if (this.stage === 0) return;
+    if (this.stage === 1) {
+      if (this.mode === 'linear') view.previewLine([this.A, app.inferPoint(ev, this.A).p], 0x2b2b2b);
+      return;
+    }
+    const cap = Math.min(this.count, 10); // ghost previews capped: big arrays stay interactive
+    if (this.mode === 'linear') {
+      const perp = this.count2 > 1
+        ? G.v(-this.step.y, this.step.x, 0) : G.v();
+      const cap2 = Math.min(this.count2, 3);
+      for (let i = 0; i < cap; i++) for (let j = 0; j < cap2; j++) {
+        if (!i && !j) continue;
+        app.renderGhost(this.snapshot, p => G.add(p, G.add(G.mul(this.step, i), G.mul(perp, j))));
+      }
+      const s = view.toScreen(G.add(this.A, this.step));
+      if (s) view.hudLabel(s.x, s.y, `step ${fmtLen(G.len(this.step))} \u00B7 ${this.count}${this.count2 > 1 ? ' \u00D7 ' + this.count2 : ''} total`);
+    } else {
+      const total = this._polarAngle(ev);
+      this._total = total;
+      const step = this.count > 1 ? total / (this.count - 1) : total;
+      for (let k = 1; k < cap; k++)
+        app.renderGhost(this.snapshot, p => G.rotatePoint(p, this.A, this.axis, step * k));
+      const s = view.toScreen(this.A);
+      if (s) view.hudLabel(s.x, s.y, `sweep ${(total * 180 / Math.PI).toFixed(1)}\u00B0 \u00B7 step ${(step * 180 / Math.PI).toFixed(1)}\u00B0 \u00B7 ${this.count} total`);
+    }
+  }
+  _commit() {
+    const app = this.app;
+    if (this.mode === 'linear' && this.step) {
+      const perp = this.count2 > 1 ? G.v(-this.step.y, this.step.x, 0) : G.v();
+      app.run('array', m => {
+        const sub = m.serializeSubset(app.sel);
+        for (let i = 0; i < this.count; i++) for (let j = 0; j < this.count2; j++) {
+          if (!i && !j) continue; // (0,0) is the source itself
+          m.importSubset(sub, G.add(G.mul(this.step, i), G.mul(perp, j)));
+        }
+      });
+      const n = this.count * this.count2 - 1;
+      app.toast(`Arrayed ${n} cop${n === 1 ? 'y' : 'ies'} at ${fmtLen(G.len(this.step))} spacing`);
+    } else if (this.mode === 'polar') {
+      if (this._total == null || Math.abs(this._total) < 1e-4) {
+        app.toast('Sweep an angle with the mouse first');
+        return;
+      }
+      const step = this.count > 1 ? this._total / (this.count - 1) : this._total;
+      app.run('polar array', m => {
+        const sub = m.serializeSubset(app.sel);
+        for (let k = 1; k < this.count; k++)
+          m.importSubset(sub, G.v(), {
+            p: q => G.rotatePoint(q, this.A, this.axis, step * k),
+            n: v => G.rotatePoint(v, G.v(), this.axis, step * k),
+          });
+      });
+      app.toast(`Polar array: ${this.count} items over ${(Math.abs(total) * 180 / Math.PI).toFixed(1)}\u00B0`);
+    }
+    this.activate();
+    app.view.clearPreview();
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
+    return false;
+  }
+  onVCB(text) {
+    if (this.stage === 0) return false;
+    const parts = String(text).trim().split(/\s*[x,]\s*/).map(v => parseInt(v, 10));
+    const n = parts[0], m = parts.length >= 2 ? parts[1] : NaN;
+    if (isNaN(n) || n < 2 || n > 99) return false;
+    this.count = n;
+    if (this.mode === 'linear' && !isNaN(m) && m >= 1 && m <= 99) this.count2 = m;
+    if (this.stage === 2) { this._commit(); return true; }
+    this.app.toast(`Array: ${this.count}${this.count2 > 1 ? ' \u00D7 ' + this.count2 : ''} total — click to place`);
+    return true;
+  }
+}
+
 // =========================================================== paint bucket
 class PaintTool extends Tool {
   static id = 'paint';
@@ -2483,5 +2736,5 @@ class ExtrudeCurveTool extends Tool {
 window.FreeTools = {
   SelectTool, LineTool, RectTool, CircleTool, ArcTool, PushPullTool, MoveTool,
   RotateTool, ScaleTool, OffsetTool, PaintTool, EraserTool, TrimTool, TapeMeasureTool,
-  OrbitTool, PanTool, ZoomTool, ResizeTool, ExtrudeCurveTool,
+  OrbitTool, PanTool, ZoomTool, ResizeTool, ExtrudeCurveTool, MirrorTool, ArrayTool,
 };

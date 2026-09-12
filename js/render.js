@@ -953,13 +953,13 @@ class Viewport {
     }
     this.clearSticky(); // sticky labels share the preview lifecycle
   }
-  previewLine(pts, color = 0x2b2b2b, dashed = false) {
+  previewLine(pts, color = 0x2b2b2b, dashed = false, dashSize = 0.45, gapSize = 0.3) {
     this.invalidate();
     if (!pts || pts.length < 2) return null;
     const g = new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(p.x, p.y, p.z)));
     let mat;
     if (dashed) {
-      mat = new THREE.LineDashedMaterial({ color, dashSize: 0.45, gapSize: 0.3, depthTest: false });
+      mat = new THREE.LineDashedMaterial({ color, dashSize, gapSize, depthTest: false });
     } else {
       mat = new THREE.LineBasicMaterial({ color, depthTest: false });
     }
@@ -1036,6 +1036,54 @@ class Viewport {
     this.invalidate();
     if (!p || !text || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.z)) return;
     this.hudSticky.push({ x: p.x, y: p.y, z: p.z, text, color, dx, dy });
+  }
+  // OpenCADStudio-style dynamic-input guides for a live segment a->b: a dashed
+  // in-plane horizontal reference from the anchor, a dashed arc sweeping from
+  // that reference to the segment direction, and the polar-angle label at the
+  // mid-sweep. n = the drawing plane's normal (defaults to the ground plane).
+  // Pure overlay — callers keep their own length labels. Returns the polar
+  // angle in degrees (0..360 CCW from in-plane +X) or null when the segment
+  // has no in-plane extent (a plumb line) and nothing was drawn.
+  polarGuides(a, b, n = null) {
+    this.invalidate();
+    if (!a || !b) return null;
+    const nn = n && !G.isZero(n) ? G.norm(n) : G.v(0, 0, 1);
+    // in-plane frame: u = world X projected into the plane (world Y when the
+    // plane faces X), v = 90° CCW from u so the angle reads like a bearing
+    let u = G.sub(G.v(1, 0, 0), G.mul(nn, nn.x));
+    if (G.len(u) < 1e-6) u = G.sub(G.v(0, 1, 0), G.mul(nn, nn.y));
+    if (G.len(u) < 1e-6) return null;
+    u = G.norm(u);
+    const v = G.cross(nn, u);
+    const d = G.sub(b, a);
+    const du = G.dot(d, u), dv = G.dot(d, v);
+    const L = Math.hypot(du, dv);
+    if (L < 1e-6) return null; // plumb segment: no in-plane angle to show
+    const ang = Math.atan2(dv, du);
+    const deg = ((ang * 180 / Math.PI) % 360 + 360) % 360;
+    const GUIDE = 0x0a7d80, dash = Math.max(0.06, L * 0.02);
+    // horizontal reference from the anchor, along +X, as long as the segment
+    this.previewLine([a, G.add(a, G.mul(u, Math.max(L, 0.05)))], GUIDE, true, dash, dash * 0.7);
+    // sweep arc (skip when the segment already lies on the reference)
+    if (deg > 1.5 && deg < 358.5) {
+      const r = Math.min(Math.max(0.45 * L, 0.18), 1.6);
+      const segs = Math.max(8, Math.ceil(deg / 6));
+      const arc = [];
+      for (let i = 0; i <= segs; i++) {
+        const t = ang * i / segs;
+        arc.push(G.add(a, G.add(G.mul(u, Math.cos(t) * r), G.mul(v, Math.sin(t) * r))));
+      }
+      this.previewLine(arc, GUIDE, true, dash, dash * 0.7);
+      // angle label just outside the arc's mid-sweep
+      const m = ang / 2;
+      const lp = G.add(a, G.add(G.mul(u, Math.cos(m) * r), G.mul(v, Math.sin(m) * r)));
+      const sa = this.toScreen(a), sp = this.toScreen(lp);
+      if (sa && sp) {
+        const dxs = sp.x - sa.x, dys = sp.y - sa.y, dl = Math.hypot(dxs, dys) || 1;
+        this.stickyLabel(lp, `${deg.toFixed(1)}\u00B0`, '#0a5f61', dxs / dl * 15, dys / dl * 15);
+      }
+    }
+    return { angleDeg: deg, len: L };
   }
   clearSticky() { this.hudSticky.length = 0; this.invalidate(); }
   /**

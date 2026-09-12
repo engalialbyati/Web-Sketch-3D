@@ -272,7 +272,7 @@
         }
       }
       this.engine = new DrawPrimitiveEngine(this.app, {
-        primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'pick'],
+        primitives: ['line', 'rect', 'polygon', 'circle', 'ellipse', 'arc_ser', 'arc_ce', 'pick'],
         getOptions: () => this.app.bimOptions,
         planePoint: ev => this._pt(ev),
         onCommit: r => this._addPath(r),

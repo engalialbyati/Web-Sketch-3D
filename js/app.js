@@ -139,6 +139,9 @@ const ICONS = {
   layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z"/><path d="M3.5 12.5L12 17l8.5-4.5" opacity=".65"/><path d="M3.5 16.5L12 21l8.5-4.5" opacity=".35"/></svg>',
   blenderkit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/><path d="M17.5 3.5v4M15.5 5.5h4" stroke-width="1.5"/></svg>',
   measurearea: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V9l5-5h10v10l-5 5z"/><path d="M4 9l5 5 6-6 5 5" opacity=".6"/><path d="M9 4v5h5" opacity=".6"/></svg>',
+  mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v20" stroke-dasharray="3 2.4"/><path d="M9 6L3 12l6 6z"/><path d="M15 6l6 6-6 6z" opacity=".45"/></svg>',
+  array: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6" opacity=".45"/><rect x="3" y="15" width="6" height="6" opacity=".45"/><rect x="15" y="15" width="6" height="6" opacity=".45"/></svg>',
+  ellipse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path d="M12 12h9" opacity=".5"/></svg>',
 };
 
 // command aliases contributed by SDK features (command -> tool id)
@@ -162,6 +165,8 @@ const TOOL_DEFS = {
     { id: 'move', label: 'Move', key: 'M' },
     { id: 'rotate', label: 'Rotate', key: 'Q' },
     { id: 'scale', label: 'Scale', key: 'S' },
+    { id: 'mirror', label: 'Mirror', key: 'I' },
+    { id: 'array', label: 'Array', key: 'Y' },
     'sep',
     { id: 'paint', label: 'Paint Bucket', key: 'B' },
     { id: 'eraser', label: 'Eraser', key: 'E' },
@@ -187,6 +192,8 @@ const TOOL_DEFS = {
     'sep',
     { id: 'pushpull', label: 'Push/Pull', key: 'P' },
     { id: 'move', label: 'Move', key: 'M' },
+    { id: 'mirror', label: 'Mirror', key: 'I' },
+    { id: 'array', label: 'Array', key: 'Y' },
     'sep',
     { id: 'eraser', label: 'Eraser', key: 'E' },
     { id: 'trim', label: 'Trim', key: 'X' },
@@ -218,8 +225,8 @@ const RIBBON_GROUPS = {
   free: [
     { title: 'Select', tools: ['select'] },
     { title: 'Draw', tools: ['line', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
-    { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale'] },
-    { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea'] },
+    { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale', 'mirror', 'array'] },
+    { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea', 'area'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
@@ -227,10 +234,12 @@ const RIBBON_GROUPS = {
   ],
   bim: [
     { title: 'Select', tools: ['select'] },
-    { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'levelview'] },
+    { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'levelview'] },
     { title: 'Build', tools: ['draw', 'wall', 'floor', 'convert'] },
+    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof'] },
+    { title: 'Circulation', tools: ['stairs', 'handrail'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
-    { title: 'Modify', tools: ['pushpull', 'move'] },
+    { title: 'Modify', tools: ['pushpull', 'move', 'mirror', 'array'] },
     { title: 'Tools', tools: ['eraser', 'trim', 'tape', 'measurearea'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
@@ -2718,22 +2727,28 @@ class App {
     // rebuildable types — everything else (stairs, scripts, hosted openings,
     // assets) KEEPS its geometry: never wipe what you cannot restore
     const CAN = { foundation: 1, column: 1, wall: 1, slab: 1, floor: 1, beam: 1, roof: 1 };
+    // rebuildable = parametric entities only; FIXED converted elements keep
+    // their drawn geometry (it IS the design — nothing to rebuild from)
+    const canRebuild = e => !!CAN[e.type] && !(e.params && e.params.fixed);
     const wipe = mm => {
-      const keepFaces = new Set(), keepEdges = new Set();
+      // wipe ONLY what the rebuildable entities own — everything else
+      // (other entities' geometry AND unclaimed Free Drawing faces/edges)
+      // stays: a stray drawn line must survive a parametric rebuild
+      const wipeFaces = new Set(), wipeEdges = new Set();
       for (const e of this.bim.entities) {
-        if (CAN[e.type]) continue;
-        for (const fid of e.faces) keepFaces.add(fid);
-        for (const eid of e.edges) keepEdges.add(eid);
+        if (!canRebuild(e)) continue;
+        for (const fid of e.faces) wipeFaces.add(fid);
+        for (const eid of e.edges) wipeEdges.add(eid);
       }
-      for (const [fid, f] of [...mm.faces]) if (!keepFaces.has(fid)) mm.faces.delete(fid);
-      for (const [eid, e2] of [...mm.edges]) if (!keepEdges.has(eid)) mm.edges.delete(eid);
+      for (const [fid, f] of [...mm.faces]) if (wipeFaces.has(fid)) mm.faces.delete(fid);
+      for (const [eid, e2] of [...mm.edges]) if (wipeEdges.has(eid)) mm.edges.delete(eid);
       mm.gc();
       // recreate ring edges survivors may share with the wiped set
       for (const f of mm.faces.values()) {
         mm.edgesForRing(f.loop, true);
         for (const h of (f.holes || [])) mm.edgesForRing(h, true);
       }
-      for (const e of this.bim.entities) if (CAN[e.type]) { e.faces = []; e.edges = []; }
+      for (const e of this.bim.entities) if (canRebuild(e)) { e.faces = []; e.edges = []; }
     };
     const adopt = (mm, ent, rolesOf) => {
       const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
@@ -2757,6 +2772,9 @@ class App {
     const rebuildOne = mm => d => {
       const ent = this.bim.getEntityById(d.id);
       if (!ent) return;
+      // FIXED converted elements have no parametric form to rebuild from —
+      // their drawn geometry survived wipe and stays as-is
+      if (ent.params && ent.params.fixed) return;
       try {
         if (d.type === 'foundation') {
           this.structural.buildFooting(G, mm, d.params);
@@ -3321,7 +3339,7 @@ class App {
           typeId: meta.typeId,
           levelId: (ent.params && ent.params.baseLevel) || null,
           transformMatrix: BimDatabase.IDENTITY, // world-space B-Rep — no instance transform yet
-          name: `${meta.categoryName} ${String(ent.id).replace(/^[a-z]+_/, '')}`,
+          name: (ent.params && ent.params.name) || `${meta.categoryName} ${String(ent.id).replace(/^[a-z]+_/, '')}`,
           parameters: { ...(ent.params || {}), quantities: q },
           brepData: { ...sub, roles },
         });
@@ -3357,7 +3375,7 @@ class App {
       } else {
         await this.db.createElement({
           id: ent.id, typeId: meta.typeId, levelId: (ent.params && ent.params.baseLevel) || null,
-          name: `${meta.categoryName} ${String(ent.id).replace(/^[a-z]+_/, '')}`,
+          name: (ent.params && ent.params.name) || `${meta.categoryName} ${String(ent.id).replace(/^[a-z]+_/, '')}`,
           parameters: { ...(ent.params || {}), quantities: q },
           brepData: { ...sub, roles },
         });
@@ -4188,6 +4206,20 @@ class App {
   _buildToolbar() {
     const bar = document.getElementById('toolbar');
     bar.innerHTML = ''; // full ribbon swap per mode
+    // current open group body — every factory appends here, the group closes
+    // when the next group starts (OpenCADStudio-style titled panels)
+    let body = null;
+    const openGroup = (title) => {
+      const g = document.createElement('div');
+      g.className = 'tgroup';
+      body = document.createElement('div');
+      body.className = 'tg-body';
+      const label = document.createElement('div');
+      label.className = 'tg-title';
+      label.textContent = title;
+      g.appendChild(body); g.appendChild(label);
+      bar.appendChild(g);
+    };
     const mk = (html, title, cls = '', dataset = '', click = null) => {
       const b = document.createElement('button');
       b.className = 'tbtn ' + cls;
@@ -4195,41 +4227,52 @@ class App {
       b.title = title;
       if (dataset) for (const [k, v] of Object.entries(JSON.parse(dataset))) b.dataset[k] = v;
       if (click) b.addEventListener('click', click);
-      bar.appendChild(b);
+      body.appendChild(b);
       return b;
     };
-    for (const t of TOOL_DEFS[this.mode]) {
-      if (t === 'sep') { const s = document.createElement('div'); s.className = 'tsep'; bar.appendChild(s); continue; }
-      const key = t.key ? ` (${t.key === 'Space' ? 'Space' : t.key})` : '';
-      mk(ICONS[t.id], t.label + key, '', JSON.stringify({ tool: t.id }), () => this.setTool(t.id));
+    // resolve this mode's groups; Engine-registered tools absent from the
+    // static map land in a trailing catch-all group so nothing disappears
+    const defs = TOOL_DEFS[this.mode].filter(t => t !== 'sep');
+    const groups = (RIBBON_GROUPS[this.mode] || []).map(g => ({ ...g }));
+    const assigned = new Set(groups.flatMap(g => g.tools));
+    const leftover = defs.filter(t => !assigned.has(t.id)).map(t => t.id);
+    if (leftover.length) groups.push({ title: 'Tools', tools: leftover });
+    const byId = new Map(defs.map(t => [t.id, t]));
+    for (const grp of groups) {
+      const tools = grp.tools.filter(id => id !== 'levelview' || this.mode === 'bim');
+      if (!tools.length) continue;
+      openGroup(grp.title);
+      for (const id of tools) {
+        if (id === 'undo') { this.btnUndo = mk(ICONS.undo, 'Undo (Ctrl+Z)', '', '{}', () => this.undo()); continue; }
+        if (id === 'redo') { this.btnRedo = mk(ICONS.redo, 'Redo (Ctrl+Y)', '', '{}', () => this.redo()); continue; }
+        if (id === 'zoomext') { this.btnExtents = mk(ICONS.zoomext, 'Zoom Extents (Ctrl+Shift+E)', '', '{}', () => this.view.zoomExtents()); continue; }
+        if (id === 'shadows') { this.btnShadow = mk(ICONS.shadow, 'Toggle Shadows', 'toggle on', '{}', () => this.action('toggleShadows')); continue; }
+        if (id === 'xray') { this.btnXray = mk(ICONS.xray, 'Toggle X-Ray', 'toggle', '{}', () => this.action('toggleXray')); continue; }
+        if (id === 'wire') { this.btnWire = mk(ICONS.wire, 'Face Style: Shaded / Monochrome / Wireframe', 'toggle', '{}', () => this.action('cycleFaceStyle')); continue; }
+        if (id === 'browser') { this.btnBrowser = mk(ICONS.browser || ICONS.levels, 'Element Browser — Category ➔ Family ➔ Type palette (drag a type into the viewport to place it)', 'toggle', '{}', () => this.toggleElementBrowser()); continue; }
+        if (id === 'layers') { this.btnLayers = mk(ICONS.layers || ICONS.browser, 'Layers — AutoCAD-style layer manager (assign elements, on/off, lock, color, current layer)', 'toggle', '{}', () => this.toggleLayersPanel()); continue; }
+        if (id === 'families') { this.btnFamilies = mk(ICONS.families || ICONS.browser, 'Families — parametric design catalog (column styles: classical, regional, modern, structural); size one and place it', 'toggle', '{}', () => this.toggleFamiliesPanel()); continue; }
+        if (id === 'kit') { this.btnKit = mk(ICONS.blenderkit, 'BlenderKit Assets — search free models and drop them into the scene (needs the local bridge: npm run bridge; GLB-badged models import without Blender)', 'toggle', '{}', () => this.toggleBlenderKit()); continue; }
+        if (id === 'levelsbtn') { mk(ICONS.levels, 'Levels — view / add / edit project levels', '', '{}', () => this.levelsDialog()); continue; }
+        if (id === 'gridsbtn') { mk(ICONS.grids, 'Grids — generate / edit the grid system (snap targets)', '', '{}', () => this.gridsDialog()); continue; }
+        if (id === 'levelview') {
+          // Level View: per-level plan isolation — appears only while a
+          // standard camera view (Top/Front/…) is locked; pick a level to
+          // show just it
+          const lvSel = document.createElement('select');
+          lvSel.id = 'levelview';
+          lvSel.title = 'Level View — show only one level while a standard view (Top/Front…) is active';
+          lvSel.style.display = 'none';
+          lvSel.addEventListener('change', () => { this.levelView = lvSel.value; this._applyLevelView(); });
+          body.appendChild(lvSel);
+          continue;
+        }
+        const t = byId.get(id);
+        if (!t) continue;
+        const key = t.key ? ` (${t.key === 'Space' ? 'Space' : t.key})` : '';
+        mk(ICONS[t.id], t.label + key, '', JSON.stringify({ tool: t.id }), () => this.setTool(t.id));
+      }
     }
-    // project levels live in Precise Drawing mode — icon opens the manager
-    if (this.mode === 'bim') {
-      bar.appendChild(Object.assign(document.createElement('div'), { className: 'tsep' }));
-      mk(ICONS.levels, 'Levels — view / add / edit project levels', '', '{}', () => this.levelsDialog());
-      mk(ICONS.grids, 'Grids — generate / edit the grid system (snap targets)', '', '{}', () => this.gridsDialog());
-      // Level View: per-level plan isolation — appears only while a standard
-      // camera view (Top/Front/…) is locked; pick a level to show just it
-      const lvSel = document.createElement('select');
-      lvSel.id = 'levelview';
-      lvSel.title = 'Level View — show only one level while a standard view (Top/Front…) is active';
-      lvSel.style.display = 'none';
-      lvSel.addEventListener('change', () => { this.levelView = lvSel.value; this._applyLevelView(); });
-      bar.appendChild(lvSel);
-    }
-    bar.appendChild(Object.assign(document.createElement('div'), { className: 'tsep' }));
-    this.btnExtents = mk(ICONS.zoomext, 'Zoom Extents (Ctrl+Shift+E)', '', '{}', () => this.view.zoomExtents());
-    this.btnUndo = mk(ICONS.undo, 'Undo (Ctrl+Z)', '', '{}', () => this.undo());
-    this.btnRedo = mk(ICONS.redo, 'Redo (Ctrl+Y)', '', '{}', () => this.redo());
-    bar.appendChild(Object.assign(document.createElement('div'), { className: 'tsep' }));
-    this.btnShadow = mk(ICONS.shadow, 'Toggle Shadows', 'toggle on', '{}', () => this.action('toggleShadows'));
-    this.btnXray = mk(ICONS.xray, 'Toggle X-Ray', 'toggle', '{}', () => this.action('toggleXray'));
-    this.btnWire = mk(ICONS.wire, 'Face Style: Shaded / Monochrome / Wireframe', 'toggle', '{}', () => this.action('cycleFaceStyle'));
-    bar.appendChild(Object.assign(document.createElement('div'), { className: 'tsep' }));
-    this.btnBrowser = mk(ICONS.browser || ICONS.levels, 'Element Browser — Category ➔ Family ➔ Type palette (drag a type into the viewport to place it)', 'toggle', '{}', () => this.toggleElementBrowser());
-    this.btnLayers = mk(ICONS.layers || ICONS.browser, 'Layers — AutoCAD-style layer manager (assign elements, on/off, lock, color, current layer)', 'toggle', '{}', () => this.toggleLayersPanel());
-    this.btnFamilies = mk(ICONS.families || ICONS.browser, 'Families — parametric design catalog (column styles: classical, regional, modern, structural); size one and place it', 'toggle', '{}', () => this.toggleFamiliesPanel());
-    this.btnKit = mk(ICONS.blenderkit, 'BlenderKit Assets — search free models and drop them into the scene (needs the local bridge: npm run bridge; GLB-badged models import without Blender)', 'toggle', '{}', () => this.toggleBlenderKit());
     this._syncLevelViewControl(); // populate/show the Level View select if a standard view is locked
     this.refreshToolbar();
   }
@@ -4949,6 +4992,16 @@ class App {
             ? 'Convert to Element…'
             : `Convert ${selFaces.length} Faces to Element…`,
             () => this.convertToElementDialog(selFaces.map(f => f.id))]);
+        } else if (selFaces.length && selFaces.some(f => f.userData && f.userData.bimEntityId)) {
+          // selection is already element-owned: no Convert entry is possible,
+          // but the menu must not go silent — say WHY (the "nothing happens"
+          // confusion: converted faces can only be re-converted after Erase
+          // breaks the element claim, or on fresh free geometry)
+          const ent = this.bim.getEntityForFace(selFaces.find(f => f.userData && f.userData.bimEntityId));
+          items.push([ent
+            ? `${ent.type} ${ent.id} — already an element`
+            : 'Selection already belongs to elements', () =>
+            this.toast('These faces already form an element — convert works on free (unclaimed) faces only', true)]);
         }
       }
       items.push([`Erase Selection (Del)`, () => this.deleteSelection()]);
@@ -5079,6 +5132,9 @@ class App {
       ['beam', 'Beam', 'prismatic member swept along the normal'],
     ];
     this.dialog(multi ? `Convert ${ids.length} Faces to Element` : 'Convert to Element', `
+      <div class="ob-lab">Element name — the type shown in the Element Browser</div>
+      <input type="text" id="cv-name" placeholder="e.g. Fluted Column 300x300"
+        style="width:100%;margin:2px 0 10px;padding:5px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
       <div class="ob-lab">Element type</div>
       <div id="cv-types" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:4px 0 10px">
         ${types.map(([v, n, d], i) => `
@@ -5094,7 +5150,7 @@ class App {
           </span>
         </label>
       </div>
-      ${multi ? `<p style="opacity:.75;margin:0 0 6px">No geometry is created — the ${ids.length} selected faces are claimed as the element's body.</p>` : `
+      ${multi ? `<p style="opacity:.75;margin:0 0 6px">No geometry is created — the ${ids.length} selected faces are claimed as the element's body. The element is <b>fixed</b>: its drawn geometry is the design, dimensions are display-only.</p>` : `
       <div class="ob-lab">Height / depth (m) — for the swept types</div>
       <input type="number" id="cv-height" step="0.05" min="0.05" value="${(+defH).toFixed(2)}"
         style="width:120px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">`}
@@ -5108,18 +5164,23 @@ class App {
           if (!name) { this.toast('Type a name for the custom element', true); return; }
           mode = name;
         }
+        // the user's element name — an existing catalog type with the same
+        // name in the chosen family is reused; otherwise it is created
+        const nameEl = document.getElementById('cv-name');
+        const name = nameEl ? nameEl.value.trim() : '';
+        if (!name) { this.toast('Give the element a name', true); return; }
         if (!(window.BimTools && BimTools.ConvertTool)) return;
         if (multi) {
           const faces = ids.map(id => this.model.faces.get(id)).filter(Boolean)
             .filter(f => !(f.userData && f.userData.bimEntityId));
           if (!faces.length) { this.toast('Those faces are gone or already claimed', true); return; }
-          BimTools.ConvertTool.convertFaces(this, faces, mode);
+          BimTools.ConvertTool.convertFaces(this, faces, mode, { name });
         } else {
           const hEl = document.getElementById('cv-height');
           const h = hEl ? parseFloat(hEl.value) : NaN;
           const ff = this.model.faces.get(ids[0]);
           if (!ff) { this.toast('That face is gone', true); return; }
-          BimTools.ConvertTool.convertFace(this, ff, mode, { height: isNaN(h) ? undefined : h });
+          BimTools.ConvertTool.convertFace(this, ff, mode, { name, height: isNaN(h) ? undefined : h });
         }
         this.clearSelection();
       }],
@@ -5942,6 +6003,9 @@ class App {
   // geometry from it — params are truth, the B-Rep is cache.
   _bimParamFields(ent) {
     const p = ent.params || {};
+    // FIXED converted elements: the drawn geometry IS the design — no
+    // parametric regeneration, dimensions are display-only
+    if (p.fixed) return [];
     const num = (key, label, step) => (p[key] != null
       ? { key, label, kind: 'number', step, value: +(+p[key]).toFixed(4) } : null);
     const rot = { key: 'rotation', label: 'Rotation °', kind: 'number', step: 1,
@@ -6152,6 +6216,7 @@ class App {
       el.innerHTML = `
         <div class="gi-name"><span class="gi-cat">${(info && info.categoryName) || ent.type}</span> <span class="gi-eid">${ent.id}</span></div>
         ${lineage ? `<div class="stats dim">Piece of ${lineage} — heals only within this lineage</div>` : ''}
+        ${p.fixed ? `<div class="stats dim">Fixed element — the drawn geometry is the design${p.name ? ` · “${p.name}”` : ''}</div>` : ''}
         <div class="stats">${fam}</div>
         <div class="gi-typerow"><span class="gi-tylab">Type</span>${typeOpts}</div>
         <div class="stats">${q.faces} faces · ${q.openings > 0.0005
@@ -6203,6 +6268,7 @@ class App {
       });
       const tsel = el.querySelector('#gi-type');
       if (tsel) tsel.addEventListener('change', () => {
+        if (p.fixed) { this.toast('Fixed element — its geometry is the drawn design', true); tsel.value = info.typeId; return; }
         const t = siblings.find(x => x.id === tsel.value);
         if (t) this.applyElementType(ent, t);
       });

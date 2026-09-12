@@ -3178,15 +3178,26 @@ class Model {
     };
   }
 
-  importSubset(data, offset = G.v()) {
+  // tf (optional) copies through more than a translation: { p(point)->point,
+  // n(normal)->normal, flip } — rotation about a point (polar array), or a
+  // reflection (mirror). `flip` reverses copied rings so a mirrored face keeps
+  // its outward normal; `n` mirrors/rotates arc + circle metadata so the
+  // analytic center stays consistent with the tessellated edges.
+  importSubset(data, offset = G.v(), tf = null) {
     const vmap = new Map();
-    for (const [oldId, x, y, z] of data.v)
-      vmap.set(oldId, this.vertexAt(G.add(G.v(x, y, z), offset)));
+    for (const [oldId, x, y, z] of data.v) {
+      const p0 = G.v(x, y, z);
+      vmap.set(oldId, this.vertexAt(G.add(tf ? tf.p(p0) : p0, offset)));
+    }
     const cmap = new Map();
     for (const [oldId, meta] of (data.c || [])) {
       const nc = nid();
       cmap.set(oldId, nc);
-      this.curves.set(nc, meta);
+      this.curves.set(nc, !tf ? meta : {
+        ...meta,
+        center: meta.center ? tf.p(G.clone(meta.center)) : meta.center,
+        normal: meta.normal && tf.n ? tf.n(G.clone(meta.normal)) : meta.normal,
+      });
     }
     for (const [, oa, ob, cid] of data.e) {
       const a = vmap.get(oa), b = vmap.get(ob);
@@ -3202,6 +3213,7 @@ class Model {
       const loop = x.loop.map(v => vmap.get(v)).filter(Boolean);
       const holes = (x.holes || []).map(h => h.map(v => vmap.get(v)).filter(Boolean)).filter(h => h.length >= 3);
       if (new Set(loop).size < 3) continue;
+      if (tf && tf.flip) { loop.reverse(); holes.forEach(h => h.reverse()); }
       this.edgesForRing(loop, true);
       holes.forEach(h => this.edgesForRing(h, true));
       const f = { id: nid(), loop, holes, color: x.color, alpha: x.alpha, hidden: false, extrude: null };
@@ -3209,6 +3221,34 @@ class Model {
       out.push(f);
     }
     return out;
+  }
+  // In-place orientation flip for faces whose vertices were transformed by a
+  // reflection (mirror-move): the ring order survives the vertex move, so the
+  // face normal inverts unless the ring is walked the other way.
+  flipRingOrientation(faceIds) {
+    for (const id of faceIds) {
+      const f = this.faces.get(id);
+      if (!f) continue;
+      f.loop = f.loop.slice().reverse();
+      f.holes = (f.holes || []).map(h => h.slice().reverse());
+    }
+  }
+  // Transform the analytic metadata (center / normal) of the curves owned by
+  // the given edges — the vertex mover knows nothing about them.
+  transformCurves(edgeIds, tf) {
+    const done = new Set();
+    for (const id of edgeIds) {
+      const e = this.edges.get(id);
+      if (!e || !e.curveId || done.has(e.curveId)) continue;
+      const c = this.curves.get(e.curveId);
+      if (!c) continue;
+      done.add(e.curveId);
+      this.curves.set(e.curveId, {
+        ...c,
+        center: c.center ? tf.p(G.clone(c.center)) : c.center,
+        normal: c.normal && tf.n ? tf.n(G.clone(c.normal)) : c.normal,
+      });
+    }
   }
 
   // ------------------------------------------------------------ invariants

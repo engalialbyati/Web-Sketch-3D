@@ -155,6 +155,20 @@ class DrawGeom {
     return d;
   }
 
+  // Closed ellipse ring (center + semi-axes a/b + rotation of the a axis), as
+  // a plain polyline loop — the kernel keeps it a straight-edge polygon ring
+  // that sketches, walls and floors consume like any closed path.
+  static ellipseRing(G, c, a, b, rot, segs = 64) {
+    const co = Math.cos(rot), si = Math.sin(rot);
+    const pts = [];
+    for (let i = 0; i < segs; i++) {
+      const t = i / segs * Math.PI * 2;
+      const x = Math.cos(t) * a, y = Math.sin(t) * b;
+      pts.push(G.v(c.x + x * co - y * si, c.y + x * si + y * co, c.z));
+    }
+    return pts;
+  }
+
   // In-plane intersection of two 3D segments (projected to xy). Returns the
   // corner point (z from segment A) and each segment's far endpoint as seen
   // from the corner, or null when parallel / non-intersecting rays.
@@ -306,6 +320,7 @@ class DrawPrimitiveEngine {
     this.edgeA = null;        // fillet: first picked edge
     this.hoverEdge = null;    // fillet/pick: last hovered model edge
     this.filletRadius = null;
+    this._dynPt = null;       // dynamic-input override point (typed length/angle)
   }
   get busy() { return this.stage > 0 || this.chainStart != null || !!this.edgeA; }
 
@@ -316,7 +331,10 @@ class DrawPrimitiveEngine {
   }
 
   // ------------------------------------------------ screen-space dimensions
-  _dimFor(a, b) {
+  // withAngle (line segments): OpenCADStudio-style polar feedback — the length
+  // rides the segment midpoint and a dashed horizontal reference + angle-sweep
+  // arc with the live bearing grows from the start point
+  _dimFor(a, b, withAngle = false) {
     const view = this.app.view;
     const sa = view.toScreen(a), sb = view.toScreen(b);
     if (!sa || !sb) return;
@@ -324,23 +342,27 @@ class DrawPrimitiveEngine {
     // sticky: the label persists while the pointer rests, anchored in space
     const mid = G.mul(G.add(a, b), 0.5);
     view.stickyLabel(mid, fmtLen(G.dist(a, b)), '#6a1fb0', -dy / L * 14, dx / L * 14);
-    if (this.app.lockAxis) return;
-    const ang = DrawGeom.axisAngleDeg(a, b);
-    if (ang > 2 && ang < 43)
-      view.stickyLabel(a, `\u2220 ${ang.toFixed(1)}\u00B0`, '#0a5f61', -dy / L * 28, dx / L * 28);
+    if (withAngle && !this.app.lockAxis) view.polarGuides(a, b);
   }
 
   // ------------------------------------------------------------ interaction
   onMove(ev) {
     const view = this.app.view;
     view.showSnapDot(null); // cleared BEFORE planePoint — tools may re-show it for a live snap
-    this.cur = this.cfg.planePoint(ev);
+    // AutoCAD dynamic input: a typed point owns the preview; mouse moves only
+    // refresh the live Length/Angle fields
+    if (this.app.dyn && this.app.dyn.open) {
+      const focused = document.activeElement === this.app.dynLen || document.activeElement === this.app.dynAng;
+      if (!focused) this._dynPt = null;
+    } else this._dynPt = null;
+    this.cur = this._dynPt || this.cfg.planePoint(ev);
     view.clearPreview();
     if (this.primitive === 'pick') { this._pickHover(ev); return; }
     if (this.primitive === 'fillet') { this._filletMove(ev); return; }
     this._preview();
     const s = view.toScreen(this.cur);
     showCursorCoords(view, s, null, this.cur);
+    if (this.app.dyn && this.app.dyn.open) this.app.dynFillFromTool();
   }
   onDown(ev) {
     if (ev.button !== 0) return;
@@ -404,6 +426,26 @@ class DrawPrimitiveEngine {
         return true;
       }
     }
+    if (this.primitive === 'ellipse' && this.stage === 1 && this.cur) {
+      const L = parseLen(s); // exact first-axis length along the current direction
+      if (L != null && L > 1e-4) {
+        const dir = G.sub(this.cur, this.p1);
+        if (G.len(dir) > 1e-9) { this._click(G.add(this.p1, G.mul(G.norm(dir), L))); return true; }
+      }
+    }
+    if (this.primitive === 'ellipse' && this.stage === 2 && this.p1 && this.p2) {
+      // "b" sets the semi-minor; "a x b" re-sets both axes (negatives flip)
+      const parts = s.split(/\s*[x,]\s*/).map(parseFloat);
+      const rot = Math.atan2(this.p2.y - this.p1.y, this.p2.x - this.p1.x);
+      const two = parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1]);
+      const a = two ? Math.abs(parts[0]) : G.dist(this.p1, this.p2);
+      const b = two ? Math.abs(parts[1]) : (isNaN(parts[0]) ? 0 : Math.abs(parts[0]));
+      if (a > 1e-4 && b > 1e-4) {
+        this._emit('ellipse', DrawGeom.ellipseRing(G, this.p1, a, b, rot), true);
+        this.stage = 0; this.p1 = this.p2 = null;
+        return true;
+      }
+    }
     if (this.primitive === 'arc_ce' && this.stage === 2 && this.p1 && this.p2) {
       const ang = parseAngle(s); // typed sweep (deg) goes CCW from the start
       if (ang != null && Math.abs(ang) > 1e-3) {
@@ -435,6 +477,39 @@ class DrawPrimitiveEngine {
     return false;
   }
 
+  // ---- AutoCAD dynamic input: typed Length + Angle drive the live line ----
+  // The host tool forwards app.dynSpec/dynApply/dynCommit here (the engine is
+  // not the active Tool). Angle is the plan bearing from +X, matching the
+  // polar guides the preview draws.
+  dynSpec() {
+    if (this.primitive !== 'line') return null;
+    const a = this.stage === 1 ? this.p1 : this.chainStart;
+    const b = this._dynPt || this.cur;
+    if (!a || !b) return null;
+    const d = G.sub(b, a);
+    return { length: Math.hypot(d.x, d.y), angle: Math.atan2(d.y, d.x) * 180 / Math.PI };
+  }
+  dynApply(v) {
+    if (this.primitive !== 'line') return;
+    const a = this.stage === 1 ? this.p1 : this.chainStart;
+    if (!a) return;
+    const t = v.angle * Math.PI / 180;
+    this._dynPt = G.v(a.x + Math.cos(t) * v.length, a.y + Math.sin(t) * v.length, a.z);
+    this._dynRedraw();
+  }
+  _dynRedraw() {
+    const view = this.app.view;
+    view.clearPreview();
+    this._preview();
+    view.showSnapDot(null);
+  }
+  dynCommit() {
+    if (this.primitive !== 'line' || !this._dynPt) return;
+    const p = this._dynPt;
+    this._dynPt = null;
+    this._click(p);
+  }
+
   // ------------------------------------------------------------- primitives
   _click(p) {
     const prim = this.primitive;
@@ -453,6 +528,22 @@ class DrawPrimitiveEngine {
           this.p1 = p;
         } else { this.chainStart = null; this.stage = 0; this.p1 = null; }
         if (this.cfg.onModeChange) this.cfg.onModeChange();
+      }
+    } else if (prim === 'ellipse') {
+      if (this.stage === 0) {
+        this.p1 = p; this.stage = 1;
+        this.app.setStatus('Ellipse: click the end of the first (semi-major) axis, or type its length.');
+      } else if (this.stage === 1) {
+        if (G.dist(this.p1, p) < 1e-3) { this.app.toast('Axis is too small'); return; }
+        this.p2 = p; this.stage = 2;
+        this.app.setStatus('Ellipse: click the perpendicular extent (semi-minor), or type "b" / "a x b".');
+      } else {
+        const rot = Math.atan2(this.p2.y - this.p1.y, this.p2.x - this.p1.x);
+        const a = G.dist(this.p1, this.p2);
+        const b = Math.abs(G.dot(G.sub(p, this.p1), G.v(-Math.sin(rot), Math.cos(rot), 0)));
+        if (b < 1e-3) { this.app.toast('Second axis is too small'); return; }
+        this._emit('ellipse', DrawGeom.ellipseRing(G, this.p1, a, b, rot), true);
+        this.stage = 0; this.p1 = this.p2 = null;
       }
     } else if (prim === 'rect') {
       if (this.stage === 0) { this.p1 = p; this.stage = 1; }
@@ -525,12 +616,26 @@ class DrawPrimitiveEngine {
     // chained line: the next segment already has its start
     if (prim === 'line' && this.stage === 0 && this.chainStart) {
       view.previewLine([this.chainStart, p], this.cfg.color);
-      this._dimFor(this.chainStart, p);
+      this._dimFor(this.chainStart, p, true);
       return;
     }
     if (prim === 'line' && this.stage === 1) {
       view.previewLine([this.p1, p], this.cfg.color);
-      this._dimFor(this.p1, p);
+      this._dimFor(this.p1, p, true);
+    } else if (prim === 'ellipse') {
+      if (this.stage === 1) {
+        view.previewLine([this.p1, p], this.cfg.color);
+        this._dimFor(this.p1, p, true); // semi-major + its bearing
+      } else if (this.stage === 2) {
+        const rot = Math.atan2(this.p2.y - this.p1.y, this.p2.x - this.p1.x);
+        const a = G.dist(this.p1, this.p2);
+        const b = Math.abs(G.dot(G.sub(p, this.p1), G.v(-Math.sin(rot), Math.cos(rot), 0)));
+        if (b > 1e-4) {
+          const ring = DrawGeom.ellipseRing(G, this.p1, a, b, rot);
+          view.previewLoop(ring, this.cfg.color); fill(ring);
+          view.stickyLabel(p, `${fmtLen(a)} \u00D7 ${fmtLen(b)} m`, '#6a1fb0', 0, -34);
+        }
+      }
     } else if (prim === 'rect' && this.stage === 1) {
       const z = this.p1.z;
       const q = [this.p1, G.v(p.x, this.p1.y, z), G.v(p.x, p.y, z), G.v(this.p1.x, p.y, z)];
@@ -774,7 +879,7 @@ class DrawTool extends Tool {
   static id = 'draw';
   activate() {
     this.engine = new DrawPrimitiveEngine(this.app, {
-      primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'fillet', 'pick'],
+      primitives: ['line', 'rect', 'polygon', 'circle', 'ellipse', 'arc_ser', 'arc_ce', 'fillet', 'pick'],
       getOptions: () => this.app.bimOptions,
       planePoint: ev => this._pt(ev),
       onCommit: r => this._commit(r),
@@ -784,8 +889,8 @@ class DrawTool extends Tool {
     this.status();
   }
   get hint() {
-    const names = { line: 'Line', rect: 'Rectangle', polygon: 'Polygon', circle: 'Circle', arc_ser: 'Arc (start-end-bulge)', arc_ce: 'Arc (center-ends)', fillet: 'Fillet', pick: 'Pick Lines' };
-    return `Draw (${names[this.app.bimOptions.primitive] || '?'}): sketch on the active level or on any face (walls, columns, slabs — lines paint on top). VCB types lengths / radii / angles; Esc breaks a chain, Esc again exits.`;
+    const names = { line: 'Line', rect: 'Rectangle', polygon: 'Polygon', circle: 'Circle', ellipse: 'Ellipse', arc_ser: 'Arc (start-end-bulge)', arc_ce: 'Arc (center-ends)', fillet: 'Fillet', pick: 'Pick Lines' };
+    return `Draw (${names[this.app.bimOptions.primitive] || '?'}): sketch on the active level or on any face (walls, columns, slabs — lines paint on top). While drawing a line its length + angle show live (type numbers for exact input). VCB types lengths / radii / angles; Esc breaks a chain, Esc again exits.`;
   }
   _pt(ev) {
     // anchor the axis lock on the first segment too (p1), not just chains
@@ -890,6 +995,10 @@ class DrawTool extends Tool {
   onUp(ev) { this.engine.onUp(ev); }
   onKey(ev) { return this.engine.onKey(ev); }
   onVCB(t) { return this.engine.onVCB(t); }
+  // ---- AutoCAD dynamic input (typed Length + Angle on the live line) ----
+  dynSpec() { return this.engine.dynSpec(); }
+  dynApply(v) { return this.engine.dynApply(v); }
+  dynCommit() { return this.engine.dynCommit(); }
   deactivate() { this.app.view.setHoverEdges(null); super.deactivate(); }
 }
 window.BimTools = Object.assign(window.BimTools || {}, { DrawTool, DrawPrimitiveEngine, DrawGeom });

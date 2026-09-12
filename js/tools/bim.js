@@ -195,7 +195,7 @@ static gridColumnTrim(G, A, B, colA, colB) {
 
   activate() {
     this.engine = new DrawPrimitiveEngine(this.app, {
-      primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'pick'],
+      primitives: ['line', 'rect', 'polygon', 'circle', 'ellipse', 'arc_ser', 'arc_ce', 'pick'],
       getOptions: () => this.app.bimOptions,
       planePoint: ev => this._pt(ev),
       onCommit: r => this._commit(r),
@@ -589,9 +589,13 @@ static gridColumnTrim(G, A, B, colA, colB) {
   }
   onMove(ev) {
     this.engine.onMove(ev);
-    // solid preview: extrude the live band of a line baseline (at the height
-    // it will actually get — clearance included), trimmed to the columns when
-    // the run sits on grids between carrying intersections
+    this._bandPreview();
+  }
+  // solid preview: extrude the live band of a line baseline (at the height it
+  // will actually get — clearance included), trimmed to the columns when the
+  // run sits on grids between carrying intersections. Also called by
+  // dynApply(): a typed Length/Angle redraws the band without a mouse move.
+  _bandPreview() {
     const e = this.engine, view = this.app.view;
     const start = e.stage === 1 ? e.p1 : e.chainStart;
     if (e.primitive === 'line' && start && e.cur) {
@@ -604,10 +608,22 @@ static gridColumnTrim(G, A, B, colA, colB) {
       const top = ring.map(q => G.add(q, G.v(0, 0, h)));
       view.previewFill([{ outer: top }], 0x7b3fa0, 0.25);
       view.previewLoop(top, 0x6a1fb0);
-      if (tr) view.stickyLabel(G.mul(G.add(pvA, pvB), 0.5),
-        `wall ${fmtLen(tr.len1)} (${fmtLen(tr.len0)} − columns)`, '#5b3fa8', 0, -42);
+      // dynamic-input guides + bearing on the baseline (the drawn wall's info)
+      const mid = G.mul(G.add(pvA, pvB), 0.5);
+      const pg = view.polarGuides(pvA, pvB);
+      const bearing = pg ? ` @ ${pg.angleDeg.toFixed(1)}\u00B0` : '';
+      if (tr) view.stickyLabel(mid,
+        `wall ${fmtLen(tr.len1)} (${fmtLen(tr.len0)} − columns)${bearing}`, '#5b3fa8', 0, -42);
+      else view.stickyLabel(mid, `wall ${fmtLen(G.dist(pvA, pvB))}${bearing}`, '#5b3fa8', 0, -42);
     }
   }
+  // ---- AutoCAD dynamic input: typed Length + Angle drive the live wall ----
+  dynSpec() { return this.engine.dynSpec(); }
+  dynApply(v) {
+    this.engine.dynApply(v);
+    this._bandPreview(); // the engine redraw only covers the baseline
+  }
+  dynCommit() { return this.engine.dynCommit(); }
   onDown(ev) { this.engine.onDown(ev); }
   onUp(ev) { this.engine.onUp(ev); }
   onKey(ev) {
@@ -647,7 +663,7 @@ class FloorTool extends Tool {
       }
     }
     this.engine = new DrawPrimitiveEngine(this.app, {
-      primitives: ['line', 'rect', 'polygon', 'circle', 'arc_ser', 'arc_ce', 'pick'],
+      primitives: ['line', 'rect', 'polygon', 'circle', 'ellipse', 'arc_ser', 'arc_ce', 'pick'],
       getOptions: () => this.app.bimOptions,
       planePoint: ev => this._pt(ev),
       onCommit: r => this._addPath(r),
@@ -919,6 +935,13 @@ class FloorTool extends Tool {
     }
     return this.engine.onVCB(text);
   }
+  // ---- AutoCAD dynamic input (typed Length + Angle on the live line) ----
+  dynSpec() { return this.engine.dynSpec(); }
+  dynApply(v) {
+    this.engine.dynApply(v);
+    this._drawSketch(); // keep the committed boundaries visible under the ghost
+  }
+  dynCommit() { return this.engine.dynCommit(); }
 }
 
 // Convert: Free Drawing geometry -> parametric BIM. Click a closed free face:
@@ -993,6 +1016,7 @@ class ConvertTool extends Tool {
         thickness: th, source: 'convert',
         // the custom shape itself is the regeneration source
         regions: [{ outer: path.map(p => [p.x, p.y, p.z]), holes: (f.holes || []).map(h => m.pts(h).map(p => [p.x, p.y, p.z])) }],
+        fixed: true, name: opts.name || null,
       }, roles, newEdges);
       if (app.syncStructuralWalls) app.syncStructuralWalls(); // walls under it trim
       if (app.syncDropPanels) app.syncDropPanels(); // drop heads hang under it
@@ -1021,6 +1045,7 @@ class ConvertTool extends Tool {
       baseLevel: app.bimOptions.baseLevel, topConstraint: app.bimOptions.topConstraint,
       height: h, thickness: 0, locationLine: 'centerline', primitive: 'convert',
       footprint: path.map(p => [p.x, p.y, p.z]),
+      fixed: true, name: opts.name || null,
     }, roles, newEdges);
     app.toast('Converted to wall');
     if (app._dbSyncDebounced) app._dbSyncDebounced();
@@ -1075,6 +1100,10 @@ class ConvertTool extends Tool {
       profile: path.map(p => [p.x, p.y, p.z]),
       baseLevel: app.bimOptions.baseLevel,
       topConstraint: app.bimOptions.topConstraint,
+      // FIXED ELEMENT: converted bodies keep their drawn geometry as-is —
+      // no parametric regeneration, dimensions are display-only
+      fixed: true,
+      name: opts.name || null,
     };
     if (mode === 'column') {
       params.base = [cx, cy, dir > 0 ? zLo : zHi - h];
@@ -1136,6 +1165,9 @@ class ConvertTool extends Tool {
       height: Math.max(1e-4, zHi - zLo),
       profile,
       bbox: { x0, y0, x1, y1, zLo, zHi },
+      // FIXED ELEMENT: claimed bodies keep their drawn geometry as-is
+      fixed: true,
+      name: opts.name || null,
     };
     if (mode === 'column') params.base = [cx, cy, zLo];
     else if (mode === 'beam') {
