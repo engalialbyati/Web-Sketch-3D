@@ -6508,10 +6508,10 @@ class App {
     if (!this.structural) return 0;
     return this.syncStructuralWalls([pendingEnt]);
   }
-  // v0.6 BEARING SYNC — columns follow beams the way walls follow structure:
-  // a column tops out at a capping beam's soffit (+ELEMENT_EPS overlap) and
-  // grows back when the beam leaves. Elements never cut each other — the
-  // column simply regenerates from its own params against the beam grid.
+  // v0.7 COLUMN SYNC — columns run THROUGH the beam zone to their top
+  // constraint (the joint cube is filled by the column; beams stop at its
+  // faces via the framing trim). Elements never cut each other — the
+  // column simply regenerates from its own params against the structure.
   syncColumnBearing(pool = null) {
     if (!this.structural || !this.structural.columnBearingTop) return 0;
     if (this._syncingColumns) return 0;

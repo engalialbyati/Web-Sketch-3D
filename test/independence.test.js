@@ -6,9 +6,10 @@
 //      by ELEMENT_EPS instead of welding/splitting into each other;
 //   2. a closed loop of ELEMENT edges (four walls) creates NO face at the
 //      ground — face auto-creation belongs to free-drawn lines only;
-//   3. BEARING: a column tops out at the capping beam's soffit, a beam
-//      hangs from its level, a slab tops at its level — real-life stacking
-//      with EPS overlaps, never cuts.
+//   3. BEARING (v0.7): a column runs THROUGH the beam zone to its top
+//      constraint (the joint cube is filled by the column — beams stop at
+//      its faces), a beam hangs from its level, a slab tops at its level —
+//      real-life stacking with EPS overlaps, never cuts.
 // ---------------------------------------------------------------------------
 module.exports = h => {
   const fs = require('node:fs');
@@ -126,16 +127,15 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('bearing: a beam above shortens the column to its soffit (+EPS)', () => {
+  test('bearing (v0.7): a beam above never caps the column — it runs through to its constraint', () => {
     const w = makeWorld();
     beam(w, 0, 6, 'lvl_2', 0.4);           // hangs [3 - 0.4 - eps, 3 - eps]
     const col = column(w, 3, 0, 0.4, 0.4, 0, 3);  // nominal [0, 3]
     const S = w.app.structural;
     const top = S.columnBearingTop(col.params);
-    // beamBounds gives the NOMINAL soffit (3 - 0.4); the built beam's own
-    // zDrop buries its bottom face EPS lower, so a column topping at
-    // soffit + EPS overlaps it by 2*EPS — bearing, never a cut
-    near(top, 2.6 + 1e-4, 1e-6, 'column top = nominal soffit + EPS overlap');
+    // v0.7 continuous columns: the intersection cube belongs to the column
+    // (the beam stops at its faces) — no soffit cap, no void at the joint
+    near(top, 3, 1e-9, 'column top = its own top constraint, through the beam');
     const base = S.columnBearingBase({ base: [3, 0, 3], width: 0.4, depth: 0.4, height: 3,
       baseLevelId: 'lvl_2', topLevelId: 'lvl_3' });
     near(base, 3 - 1e-4, 1e-6, 'a column based on the beam starts EPS into it');

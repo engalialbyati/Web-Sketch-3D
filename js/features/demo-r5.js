@@ -109,11 +109,11 @@
 
       stage('columns on grid intersections', () => {
         for (let s = 0; s < LEVELS - 1; s++) {
-          // v0.6 bearing: the column tops out at the capping beam's
-          // NOMINAL soffit (story top - beam depth) — the beam's own zDrop
-          // then buries its bottom face EPS inside the column top (overlap)
+          // v0.7 continuous columns: the full story height — the column
+          // fills the grid-intersection cube and the beams stop at its
+          // faces (the framing trim owns the joint)
           const z0 = +(s * STORY).toFixed(4);
-          const h = +(STORY - BEAM_H).toFixed(4);
+          const h = +STORY.toFixed(4);
           for (let i = 0; i < XS.length; i++) for (let j = 0; j < YS.length; j++) {
             const p = { base: [XS[i], YS[j], z0], width: COL, depth: COL, height: h,
               baseLevelId: lvl(s + 1), topLevelId: lvl(s + 2) };

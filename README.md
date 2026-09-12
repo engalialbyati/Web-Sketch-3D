@@ -37,8 +37,11 @@ zoom, no z-fighting, no reveal gaps.
   a column through a slab — all simply overlap. Connections are
   relationships, not booleans (exactly IFC's `IfcRelConnects` philosophy).
 - **Bearing rules (real-life stacking)**: beams hang from their level
-  `[L−h, L]`; columns top out at the capping beam's soffit and re-grow when
-  it leaves; slabs top at their level; walls run to the governing soffit.
+  `[L−h, L]`; **v0.7: columns run continuously through the beam zone to
+  their top constraint** (the joint cube is the column's — beams stop at
+  its faces; v0.6 capped columns at the beam soffit, which left a void at
+  every joint); slabs top at their level; walls run to the governing
+  soffit.
 - **Performance**: the independence gate also makes builds linear — the
   5-story demo builds **6× faster**, and Rebuild-from-Parameters is now
   staged (progress in the status bar, the UI never freezes) with a

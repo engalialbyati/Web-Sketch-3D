@@ -592,24 +592,15 @@
       };
     }
 
-    // v0.6 BEARING (the owner's rule, real-life construction): a column
-    // TOPS OUT at the soffit of the beam above it (story top − beam depth),
-    // and BASES on the beam directly under it when one sits at its level.
-    // Beams and columns then overlap by ELEMENT_EPS — bearing, never
-    // splitting. Returns the z the column's solid should reach.
+    // v0.7 CONTINUOUS COLUMNS (user rule): a column runs THROUGH the beam
+    // zone to its own top constraint — the grid-intersection cube is filled
+    // by the column, and the beams still stop at the column faces (the
+    // framing trim). Elements overlap, never cut (the independence rule).
+    // (v0.6 capped the column at the capping beam's soffit, which left a
+    // void at every column-beam joint.) Returns the z the column's solid
+    // should reach.
     columnBearingTop(p, pool = null) {
-      const b = this.columnBounds(p);
-      const cx = (p.base || p.center || [0, 0])[0], cy = (p.base || p.center || [0, 0])[1];
-      let top = b.zEnd;
-      for (const ent of pool || this.entities) {
-        if (!ent || ent.id === p.id || ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
-        const bb = this.beamBounds(ent.params);
-        if (bb.zBottom < b.zStart + 0.05) continue;      // beside/under it, not capping it
-        if (bb.zBottom > b.zEnd + 1e-3) continue;        // clearly above its top constraint
-        if (!this._beamCrossesPoint(ent.params, cx, cy)) continue;
-        top = Math.min(top, bb.zBottom + 1e-4);          // overlap INTO the beam above
-      }
-      return top;
+      return this.columnBounds(p).zEnd;
     }
     /** A beam top directly under this column's base (within a tolerance):
      *  the column then starts EPS INTO that beam (no coplanar faces). */
