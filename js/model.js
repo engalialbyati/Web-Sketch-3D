@@ -2137,10 +2137,21 @@ class Model {
           // pushed to the same height, or a second pocket opening onto an
           // existing one). The partition is DELETED so the volumes union —
           // SketchUp leaves no wall between them and no sheet behind.
+          // v0.7 ELEMENT INDEPENDENCE: when the pushed face and the twin
+          // belong to DIFFERENT elements, the merge is refused — it deleted
+          // the host's join-partition piece and skipped the new side,
+          // leaving the T-joined/chained stub wall with only top+bottom
+          // sheets (a wall that reads as "not built" until a params
+          // rebuild restores its sides). Unstamped (free) geometry keeps
+          // the SketchUp union.
           {
+            const myStamp = face.userData && face.userData.bimEntityId;
             let twin = null;
             for (const f2 of this.faces.values()) {
-              if (f2.id !== face.id && this.sameRing(f2.loop, loop)) { twin = f2; break; }
+              if (f2.id === face.id) continue;
+              const s2 = f2.userData && f2.userData.bimEntityId;
+              if (myStamp && s2 && s2 !== myStamp) continue; // two elements: never merge
+              if (this.sameRing(f2.loop, loop)) { twin = f2; break; }
             }
             if (twin) {
               culled.push({ fid: twin.id, loop: [...twin.loop], color: twin.color, alpha: twin.alpha });

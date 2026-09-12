@@ -517,6 +517,11 @@ static gridColumnTrim(G, A, B, colA, colB) {
       try {
         const f = app.model.addFaceFromRings(footprint.map(p => G.clone(p)));
         if (!f) throw new Error('degenerate wall footprint');
+        // pre-stamp JOINED walls: the extrusion's born faces carry the id
+        // (pushPull inheritance), so the twin-cull can tell element-vs-
+        //element coincidences from free-mode unions — a chained/T-joined
+        // stub must never merge its sides away against the host's pieces
+        if (ent) f.userData = { bimEntityId: ent.id, bimType: 'wall' };
         if (!app.model.pushPull(f, wallH)) throw new Error('wall extrusion failed');
         ok = true;
       } finally { app.model.bimHold = false; }

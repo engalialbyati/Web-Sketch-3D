@@ -159,6 +159,32 @@ module.exports = h => {
     ok(!w.toasts.some(t => t.isErr), 'no error toasts: ' + JSON.stringify(w.toasts.map(t => t.msg)));
   });
 
+  test('a near-collinear chained stub keeps its SIDE faces (the paper-thin wall regression)', () => {
+    // v0.7 element independence in the twin-cull: the stub's side quads land
+    // exactly on the host's join-partitioned side pieces — the old cull
+    // deleted the host piece AND skipped the stub's side, leaving a wall of
+    // top+bottom sheets that read as "not built" until a params rebuild
+    const w = makeWorld();
+    buildWall(w, [0, 0, 0], [6, 0, 0]);
+    const n = w.bim.entities.length;
+    commit(w, [6, 0, 0], [6.44, 0.18, 0]); // short near-collinear continuation
+    eq(w.bim.entities.length, n + 1, 'stub registered');
+    const stub = w.bim.entities[w.bim.entities.length - 1];
+    const roles = {};
+    for (const id of stub.faces) {
+      const f = w.m.faces.get(id);
+      ok(!!f, 'stub face list is all live');
+      const r = f && f.userData && f.userData.role;
+      roles[r] = (roles[r] || 0) + 1;
+    }
+    ok((roles.exterior || 0) + (roles.interior || 0) >= 2, 'stub has its side faces: ' + JSON.stringify(roles));
+    ok(roles.top >= 1 && roles.bottom >= 1, 'stub capped top and bottom');
+    const host = w.bim.entities[0];
+    const hostLive = host.faces.every(id => w.m.faces.has(id));
+    ok(hostLive, 'the host wall lost no faces to the join');
+    ok(w.m.validate().ok, 'model valid');
+  });
+
   test('a 90° corner wall survives create-time opDone (the orphan-faces regression)', () => {
     const w = makeWorld();
     buildWall(w, [0, 0, 0], [4, 0, 0]);
