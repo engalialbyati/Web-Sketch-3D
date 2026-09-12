@@ -37,6 +37,8 @@ class Viewport {
     container.appendChild(this.hud);
     this.hudCtx = this.hud.getContext('2d');
     this.hudItems = [];
+    this.hudGlyphs = []; // AutoCAD osnap markers (endpoint square, midpoint triangle, center circle)
+    this.snapMarks = []; // tool-placed point markers (e.g. an arc's start/end)
     // Persistent, world-anchored labels (listening dimensions, badges, flip
     // buttons). Unlike hudItems — which live for one frame and so are only
     // visible while something keeps pushing them (a moving mouse) — these are
@@ -391,6 +393,9 @@ class Viewport {
 
   // -------------------------------------------------------------- build model
   rebuild() {
+    // geometry changed: a stale osnap glyph may point at deleted geometry
+    // (the "endpoint still there after erase" freeze) — drop it now
+    this.hideSnapDot();
     // no-op gate: rebuild runs on every opDone(), but ops that changed
     // nothing (no-op transactions, notification-triggered refreshes) leave
     // the B-Rep and the view filters untouched — the scene is already in
@@ -1136,8 +1141,44 @@ class Viewport {
     this.snapDot.geometry.attributes.position.setXYZ(0, p.x, p.y, p.z);
     this.snapDot.geometry.attributes.position.needsUpdate = true;
     this.snapDot.visible = true;
+    // AutoCAD osnap marker: the shape rides the snap point in SCREEN space —
+    // a small square at an endpoint, a triangle at a midpoint, a circle at a
+    // center — so it stays crisp at any zoom (world-space shapes shrink).
+    // Remembered and re-projected every frame so the glyph survives a
+    // resting mouse (hudItems alone live only during motion).
+    if (['endpoint', 'midpoint', 'center', 'edge'].includes(kind)) {
+      this._lastSnap = { p: { x: p.x, y: p.y, z: p.z }, kind };
+    }
   }
-  hideSnapDot() { this.snapDot.visible = false; }
+  // re-project the remembered osnap marker for this frame (camera may move)
+  _repushSnapGlyph() {
+    const s0 = this._lastSnap;
+    if (!s0 || !this.snapDot.visible) return;
+    const s = this.toScreen(s0.p);
+    if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: s0.kind });
+  }
+  // one AutoCAD marker frame: endpoint □, midpoint △, center ○, edge ▢(diamond)
+  _drawSnapGlyph(ctx, x, y, kind) {
+    const col = { endpoint: '#1a7f37', midpoint: '#1a7f37', center: '#b35900', edge: '#d23c2e' }[kind] || '#475569';
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (kind === 'endpoint') {
+      ctx.rect(x - 5, y - 5, 10, 10);
+    } else if (kind === 'midpoint') {
+      ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath();
+    } else if (kind === 'center') {
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+    } else { // edge: nearest-on-line — a small diamond
+      ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath();
+    }
+    ctx.stroke();
+  }
+  hideSnapDot() { this.snapDot.visible = false; this._lastSnap = null; }
+  /** Tool-placed point markers: [{p, kind}] — squares at the arc's placed
+   *  points, drawn like the osnap glyphs and re-projected every frame. */
+  setSnapMarks(marks) { this.snapMarks = marks || []; this.invalidate(); }
+  clearSnapMarks() { if (this.snapMarks.length) { this.snapMarks = []; this.invalidate(); } }
   hudLabel(sx, sy, text, color = '#333') {
     if (!text || !isFinite(sx) || !isFinite(sy)) return;
     this.hudItems.push({ sx, sy, text, color });
@@ -1735,6 +1776,15 @@ class Viewport {
     ctx.font = '600 12.5px system-ui, sans-serif';
     for (const it of this.hudItems) this._drawHudItem(ctx, it.sx, it.sy, it.text, it.color);
     this.hudItems = [];
+    this._repushSnapGlyph();
+    // tool-placed point marks (arc start/end …): re-projected every frame
+    // so they survive a resting mouse and camera moves, like sticky labels
+    for (const mk of this.snapMarks || []) {
+      const s = this.toScreen(mk.p);
+      if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: mk.kind || 'endpoint' });
+    }
+    for (const g of this.hudGlyphs) this._drawSnapGlyph(ctx, g.sx, g.sy, g.kind);
+    this.hudGlyphs = [];
     // persistent labels: re-project the world anchor each frame so they stay
     // visible while the pointer rests and follow the camera
     const cam = this.activeCamera();

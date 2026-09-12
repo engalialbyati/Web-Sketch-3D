@@ -331,6 +331,16 @@ class SelectTool extends Tool {
           const poly = gl.grid.polyline().map(p => G.v(p[0], p[1], gl.z));
           this.app.view.previewLine(poly, gl.grid.id === this.app.selGridId ? 0xf59e0b : 0x0ea5e9, true);
         }
+        // OSNAP MARKERS ON HOVER (AutoCAD): endpoints, midpoints, centers and
+        // on-edge points of EVERYTHING — lines, rectangles, arcs, circles,
+        // polylines, element edges — not just while drawing. The inference
+        // candidates already cover the whole model's geometry.
+        if (!gl) {
+          const inf = this.app.inferPoint(ev, null);
+          this.app.view.showSnapDot(
+            inf && ['endpoint', 'midpoint', 'center', 'edge'].includes(inf.kind) ? inf.p : null,
+            inf ? inf.kind : null);
+        } else this.app.view.hideSnapDot();
       }
     }
     if (!this._bandStart) return;
@@ -583,12 +593,12 @@ class SelectTool extends Tool {
 // =========================================================== line
 class LineTool extends Tool {
   static id = 'line';
-  activate() { this.anchor = null; this.previewEnd = null; this.plane = null; }
-  cleanup() { super.cleanup(); this.anchor = null; this.previewEnd = null; this.plane = null; }
+  activate() { this.anchor = null; this.previewEnd = null; this.plane = null; this._plid = null; }
+  cleanup() { super.cleanup(); this.anchor = null; this.previewEnd = null; this.plane = null; this._plid = null; }
   get hint() {
     return this.anchor
-      ? 'Line: type a length, Tab switches to the angle, Enter draws it (AutoCAD dynamic input). Or click to finish. V + X/Y/Z locks axes. Esc ends the chain.'
-      : 'Line: click to set the first point — or click an existing endpoint (green dot) to continue drawing from it. Then type length + Tab + angle + Enter. Closing a loop of lines creates a face.';
+      ? 'Polyline: click the next point (chains until Esc). Type a length, Tab for the angle, Enter draws. Arrow keys (→ X, ← Y, ↑ Z) lock axes — draw in 3D by snapping endpoint dots.'
+      : 'Polyline/Line: click the first point — click an existing endpoint (green dot) to continue from it or draw in 3D. Chains click to click; Esc ends. Closing a loop creates a face.';
   }
   _point(ev) {
     const app = this.app;
@@ -609,7 +619,33 @@ class LineTool extends Tool {
     }
     if (this.anchor && app.lockAxis) {
       const ax = AXES[app.lockAxis];
-      p = G.add(this.anchor, G.mul(ax, G.dot(G.sub(p, this.anchor), ax)));
+      // VERTICAL LOCKS NEED THE CURSOR RAY: projecting the inferred point
+      // (which lands on the ground plane) onto a vertical axis yields ~0
+      // length — "I pressed Z and nothing happened". Use the closest
+      // approach of the mouse ray to the axis line through the anchor
+      // (the Extrude tool's _dragDist math) so mouse height maps to the
+      // locked axis; fall back to plane projection for horizontal axes.
+      let t = null;
+      let rayParallel = false;
+      const view = app.view;
+      if (ev && view && view.rayFrom && view.eventPt) {
+        try {
+          const { ro, rd } = view.rayFrom(view.eventPt(ev));
+          const r = G.sub(ro, this.anchor);
+          const b = G.dot(ax, rd);
+          const den = 1 - b * b;
+          if (Math.abs(den) > 1e-6) t = (G.dot(ax, r) - b * G.dot(rd, r)) / den;
+          else rayParallel = true;
+        } catch (err) { }
+      }
+      if (t == null) t = G.dot(G.sub(p, this.anchor), ax);
+      // a TOP-DOWN camera cannot aim a vertical line (the cursor ray runs
+      // parallel to Z) — say so instead of silently drawing nothing
+      if (rayParallel && Math.abs(ax.z) > 0.9 && Math.abs(t) < 0.05 && !this._topViewHinted) {
+        this._topViewHinted = true;
+        app.toast('Top view can\'t aim a vertical line — orbit to a 3D view, or type the length (e.g. 3) + Enter');
+      }
+      p = G.add(this.anchor, G.mul(ax, t));
     }
     return { p, inf };
   }
@@ -654,10 +690,21 @@ class LineTool extends Tool {
   }
   dynApply(v) {
     const a = (v.angle || 0) * Math.PI / 180;
-    let end = G.add(this.anchor, G.mul(G.v(Math.cos(a), Math.sin(a), 0), v.length));
-    if (this.plane) { // keep the typed point on the drawing plane
-      const dd = G.dot(this.plane.n, end) - this.plane.d;
-      end = G.sub(end, G.mul(this.plane.n, dd));
+    let end;
+    if (this.app.lockAxis) {
+      // axis-locked typing (arrow keys or the input bar's axis button): the
+      // typed LENGTH runs along the locked axis — Z draws vertically. Sign
+      // follows the live preview side (mouse/last typed point).
+      const ax = AXES[this.app.lockAxis];
+      const cur = this._dynPt || this.previewEnd;
+      const s = (cur && Math.sign(G.dot(G.sub(cur, this.anchor), ax))) || 1;
+      end = G.add(this.anchor, G.mul(ax, s * v.length));
+    } else {
+      end = G.add(this.anchor, G.mul(G.v(Math.cos(a), Math.sin(a), 0), v.length));
+      if (this.plane) { // keep the typed point on the drawing plane
+        const dd = G.dot(this.plane.n, end) - this.plane.d;
+        end = G.sub(end, G.mul(this.plane.n, dd));
+      }
     }
     this._dynPt = end;
     this._dynRedraw();
@@ -680,6 +727,16 @@ class LineTool extends Tool {
     const app = this.app;
     if (app.dynHide) app.dynHide();
     const e = app.run('line', m => m.addEdge(this.anchor, p));
+    // POLYLINE ENTITY (AutoCAD semantics): all segments of one drawing
+    // session share a curveId chain — click-selecting any segment grabs
+    // the whole polyline, extrude/convert/offset chain it end to end
+    if (e && !e.curveId) {
+      if (!this._plid) {
+        this._plid = Date.now();
+        app.model.curves.set(this._plid, { type: 'polyline' });
+      }
+      e.curveId = this._plid;
+    }
     this.anchor = e ? p : null;
     this.status();
   }
@@ -723,12 +780,36 @@ class LineTool extends Tool {
 // =========================================================== rectangle
 class RectTool extends Tool {
   static id = 'rect';
-  activate() { this.p1 = null; this.plane = null; this.cur = null; }
+  activate() { this.p1 = null; this.plane = null; this.cur = null; this._vert = false; this._captured = null; }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
     return this.p1
-      ? 'Rectangle: click the opposite corner. Type "3,4" (width,height) + Enter for exact size. Esc cancels.'
-      : 'Rectangle: click a corner (on the ground or on any face).';
+      ? 'Rectangle: click the opposite corner. Type "3,4" (width,height) + Enter for exact size. V flips the plane vertical. Esc cancels.'
+      : 'Rectangle: click a corner (on the ground, on any face — or set the corner, press V, and draw a vertical rectangle).';
+  }
+  // V cycles the sketch plane: captured (ground/face) ↔ the vertical plane
+  // through the first corner facing the camera — vertical rectangles for 3D
+  // construction (boxes, elevations) without pre-existing faces
+  _cyclePlane() {
+    const app = this.app;
+    if (!this.p1) return;
+    if (this._vert) {
+      this.plane = this._captured || { n: G.v(0, 0, 1), d: 0 };
+      this._vert = false;
+      app.setStatus('Rectangle plane: ground/face');
+    } else {
+      // camera-facing horizontal normal through p1
+      const dir = app.view.activeCamera().getWorldDirection
+        ? app.view.activeCamera().getWorldDirection(new THREE.Vector3())
+        : G.v(0, -1, 0);
+      let n = G.v(dir.x, dir.y, 0);
+      if (G.len(n) < 1e-6) n = G.v(0, 1, 0);
+      n = G.norm(n);
+      this._captured = this._captured || this.plane;
+      this.plane = { n, d: G.dot(n, this.p1) };
+      this._vert = true;
+      app.setStatus('Rectangle plane: vertical (facing camera)');
+    }
   }
   _planePick(ev) {
     const app = this.app;
@@ -763,7 +844,15 @@ class RectTool extends Tool {
   }
   onMove(ev) {
     const app = this.app, view = app.view;
-    if (!this.p1) { view.clearPreview(); return; }
+    if (!this.p1) {
+      view.clearPreview();
+      // placing the FIRST corner: show the osnap markers (endpoint square,
+      // midpoint triangle, center…) so snapping onto existing geometry is
+      // visible before the first click — same feedback as after it
+      const inf0 = app.inferPoint(ev, null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      return;
+    }
     const inf = app.inferPoint(ev, this.p1);
     let p = projectToPlane(inf.p, this.plane);
     // axis-parallel square hint: infer equal sides from on-plane move
@@ -813,6 +902,7 @@ class RectTool extends Tool {
   _commit() { const { a, b } = this._dims(this.cur); this._commitFrom(a, b); }
   onKey(ev) {
     if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
+    if (ev.key === 'v' || ev.key === 'V') { this._cyclePlane(); return true; }
     return false;
   }
   onVCB(text) {
@@ -904,7 +994,13 @@ class CircleTool extends Tool {
   }
   onMove(ev) {
     const app = this.app, view = app.view;
-    if (!this.center) { view.clearPreview(); return; }
+    if (!this.center) {
+      view.clearPreview();
+      // placing the CENTER: osnap markers show before the first click too
+      const inf0 = app.inferPoint(ev, null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      return;
+    }
     // two-axis lock re-aims the sketch plane through the center (vertical /
     // angled circles)
     const lp = app.lockedPlane(this.center);
@@ -967,35 +1063,57 @@ class CircleTool extends Tool {
 // =========================================================== arc
 class ArcTool extends Tool {
   static id = 'arc';
-  activate() { this.s = null; this.e = null; this.plane = null; this.bulge = null; this._vert = false; }
+  activate() {
+    this.s = null; this.e = null; this.plane = null; this.bulge = null; this._vert = false;
+    this.app.view.clearSnapMarks(); // placed-point markers follow the tool's life
+  }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
     if (!this.s) return 'Arc: click the start point.';
     if (!this.e) return 'Arc: click the end point (chord). V flips the plane vertical (arcs in Z).';
     return 'Arc: move to set the bulge, click to finish. Type radius or bulge + Enter.';
   }
-  // V cycles the sketch plane: ground (or picked face) ↔ the vertical plane
-  // through the start facing the camera — Z-axis arcs without the two-axis
-  // lock (which still works: V + X/Z etc. re-aims through the start)
+  // V cycles the sketch plane: ground (or picked face) ↔ a vertical plane —
+  // WITHOUT moving the placed points. The vertical plane is built THROUGH
+  // THE CHORD: normal = (p2 − p1) × Z, so it contains p1 and p2 exactly and
+  // their world coordinates stay locked; only the bulge re-projects onto
+  // the new plane. No geometry is ever recalculated from the global origin.
   _cyclePlane() {
     const app = this.app;
     if (!this.s) return;
+    const chord = this.e ? G.sub(this.e, this.s) : null;
     if (this._vert) {
-      this.plane = this._ground || { n: G.v(0, 0, 1), d: 0 };
-      this._vert = false;
-      if (this.e) this.e = projectToPlane(this.e, this.plane);
-      app.setStatus('Arc plane: ground');
+      // back to the captured ground/face plane — only if the chord lies in
+      // it (otherwise returning would have to move p2; refuse instead)
+      const gp = this._ground || { n: G.v(0, 0, 1), d: 0 };
+      const onPlane = p => Math.abs(G.dot(gp.n, p) - gp.d) < 1e-6;
+      if (!this.e || (onPlane(this.s) && onPlane(this.e))) {
+        this.plane = gp;
+        this._vert = false;
+        if (this.bulge) this.bulge = projectToPlane(this.bulge, gp);
+        app.setStatus('Arc plane: ground/face');
+      } else {
+        app.toast('The chord is off that plane — keeping the vertical plane (p1/p2 stay locked)', true);
+      }
     } else {
-      const cam = app.view.activeCamera();
-      const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.s);
-      toCam.z = 0;
-      const u = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
-      const n = G.cross(u, G.v(0, 0, 1));
+      // vertical plane THROUGH the chord: n = (p2 − p1) × Z contains both
+      // points by construction; degenerate for a vertical chord, where any
+      // vertical plane works — pick the camera-facing one through the chord
+      let n = chord ? G.cross(chord, G.v(0, 0, 1)) : null;
+      if (!n || G.isZero(n)) {
+        const cam = app.view.activeCamera();
+        const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.s);
+        toCam.z = 0;
+        n = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
+      } else n = G.norm(n);
       this.plane = { n, d: G.dot(n, this.s) };
       this._vert = true;
-      if (this.e) this.e = projectToPlane(this.e, this.plane);
-      app.setStatus('Arc plane: VERTICAL (V again for ground)');
+      if (this.bulge) this.bulge = projectToPlane(this.bulge, this.plane);
+      app.setStatus('Arc plane: VERTICAL through the chord (V again for ground)');
     }
+    // s and e are NEVER re-projected — their world coordinates are locked.
+    // The preview recomputes from the new plane on the next move.
+    this._arcData = null;
   }
   onDown(ev) {
     if (ev.button !== 0) return;
@@ -1006,6 +1124,9 @@ class ArcTool extends Tool {
       this._ground = this.plane; // V cycles back here from the vertical plane
       this._vert = false;
       this.s = projectToPlane(app.inferPoint(ev, null).p, this.plane);
+      // PLACED-POINT MARKERS (like the line tool's visible points): the
+      // start — and below the end — carry an endpoint square until commit
+      app.view.setSnapMarks([{ p: this.s, kind: 'endpoint' }]);
     } else if (!this.e) {
       // a two-axis lock (V + X/Z, V + Y/Z, ...) re-aims the sketch plane
       // through the start point — vertical and angled arcs
@@ -1013,6 +1134,7 @@ class ArcTool extends Tool {
       if (lp) this.plane = lp;
       this.e = projectToPlane(app.inferPoint(ev, this.s).p, this.plane);
       if (G.dist(this.s, this.e) < 1e-6) { this.e = null; app.toast('Arc end too close to start'); }
+      else app.view.setSnapMarks([{ p: this.s, kind: 'endpoint' }, { p: this.e, kind: 'endpoint' }]);
     } else {
       this._commit(this.bulge);
     }
@@ -1058,6 +1180,7 @@ class ArcTool extends Tool {
       if (lp) this.plane = lp;
       const inf0 = app.inferPoint(ev, this.s || null);
       const p0 = this.plane ? projectToPlane(inf0.p, this.plane) : inf0.p;
+      if (this.s && !this.e) this._chordPt = p0; // dynamic input reads the live chord end
       const s0 = view.toScreen(p0);
       showCursorCoords(view, s0, inf0, p0);
       view.showSnapDot(inf0.kind === 'axis' || inf0.kind === 'free' ? null : inf0.p, inf0.kind);
@@ -1090,6 +1213,96 @@ class ArcTool extends Tool {
     if (ev.key === 'v' && this.s) { this._cyclePlane(); return true; }
     if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
     return false;
+  }
+  // ---- AutoCAD dynamic input ----
+  // Stage 2 (chord): Length + Angle type the chord end, in the sketch plane.
+  // Stage 3 (bulge): Length = radius (or bulge when < half-chord), Angle =
+  // included sweep in degrees. Whichever field the user last edited wins.
+  dynLabels() { return this.s && this.e ? ['Radius', 'Sweep °'] : null; }
+  dynSpec() {
+    if (!this.s) return null;
+    const pn = this.plane ? this.plane.n : G.v(0, 0, 1);
+    if (!this.e) {
+      const p = this._chordPt || this.s;
+      const d = G.sub(p, this.s);
+      const { u, v } = G.basisForNormal(pn);
+      return { length: G.len(d), angle: Math.atan2(G.dot(d, v), G.dot(d, u)) * 180 / Math.PI };
+    }
+    const arc = this._arcData;
+    if (!arc) return null;
+    const chord = G.dist(this.s, this.e);
+    const half = chord / 2;
+    const sag = arc.radius - Math.sqrt(Math.max(arc.radius * arc.radius - half * half, 0));
+    const sweep = 2 * Math.asin(Math.min(1, half / Math.max(arc.radius, 1e-9))) * 180 / Math.PI;
+    const spec = { length: this._bulgeMode === 'bulge' ? sag : arc.radius, angle: +sweep.toFixed(1) };
+    this._specSnap = spec;
+    return spec;
+  }
+  _bulgeFromValues(v) {
+    const chord = G.dist(this.s, this.e);
+    const half = chord / 2;
+    const pn = this.plane.n;
+    const dir = G.norm(G.cross(pn, G.sub(this.e, this.s)));
+    const mid = G.mul(G.add(this.s, this.e), 0.5);
+    const side = Math.sign(G.dot(G.sub(this.bulge || mid, mid), dir)) || 1;
+    let sag;
+    const spec = this._specSnap || {};
+    const angleEdited = v.angle != null && Math.abs(v.angle - (spec.angle || 0)) > 1e-6;
+    if (angleEdited && isFinite(v.angle) && v.angle > 0 && v.angle < 180) {
+      // sweep angle drives the radius: r = (chord/2)/sin(θ/2)
+      const r = half / Math.sin(v.angle * Math.PI / 360);
+      sag = r - Math.sqrt(Math.max(r * r - half * half, 0));
+      this._bulgeMode = 'radius';
+    } else if (isFinite(v.length) && v.length > 0) {
+      if (v.length >= half) { // radius
+        const r = v.length;
+        sag = r - Math.sqrt(Math.max(r * r - half * half, 0));
+        this._bulgeMode = 'radius';
+      } else { sag = v.length; this._bulgeMode = 'bulge'; } // bulge/sagitta
+    } else return null;
+    return G.add(mid, G.mul(dir, side * sag));
+  }
+  dynApply(v) {
+    if (!this.s) return;
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    if (!this.e) {
+      const pn = this.plane ? this.plane.n : G.v(0, 0, 1);
+      const b = G.basisForNormal(pn);
+      const a = (v.angle || 0) * Math.PI / 180;
+      let end = G.add(this.s, G.mul(b.u, Math.cos(a) * v.length));
+      end = G.add(end, G.mul(b.v, Math.sin(a) * v.length));
+      this._chordPt = end;
+      view.previewLine([this.s, end], 0x2b2b2b);
+      view.stickyLabel(end, fmtLen(G.dist(this.s, end)) + ` @ ${(+app.dynAng.value || 0)}\u00B0`, '#0a5f61', 0, 0);
+    } else {
+      const bulgePt = this._bulgeFromValues(v);
+      if (!bulgePt) return;
+      const arc = this._arc(bulgePt);
+      this.bulge = bulgePt;
+      this._arcData = arc;
+      if (arc) {
+        view.previewLine(arc.pts, 0x2b2b2b);
+        const half = G.dist(this.s, this.e) / 2;
+        const sag = arc.radius - Math.sqrt(Math.max(arc.radius * arc.radius - half * half, 0));
+        view.stickyLabel(bulgePt, `r ${fmtLen(arc.radius)} · bulge ${fmtLen(sag)}`, '#0a5f61', 0, 0);
+      }
+    }
+  }
+  dynCommit() {
+    if (!this.s) return;
+    if (!this.e) {
+      const p = this._chordPt;
+      if (!p || G.dist(this.s, p) < 1e-6) return;
+      this.e = p;
+      this.bulge = null;
+      this._arcData = null;
+      this.status();
+      return;
+    }
+    const bulgePt = this.bulge || (this._dynPt && this._arc(this._dynPt) ? this._dynPt : null);
+    if (!bulgePt) { this.app.toast('Arc is degenerate'); return; }
+    this._commit(bulgePt);
   }
   onVCB(text) {
     if (!this.s || !this.e || !this.bulge) return false;
@@ -2634,8 +2847,8 @@ class ExtrudeCurveTool extends Tool {
   activate() { this.pts = null; this.dir = null; this.dist = 0; this.status(); }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
-    if (!this.pts) return 'Extrude Curve: click a line or arc, then drag or type a distance. V + X/Y/Z sets the direction — default is straight up.';
-    return `Extrude: drag or type the distance — ${fmtLen(Math.abs(this.dist))} along ${this._dirName()}. Esc cancels.`;
+    if (!this.pts) return 'Extrude Curve: click a line or arc, then drag or type a distance. Arrow keys (→ X, ← Y, ↑ Z) lock the direction — default is up for horizontal curves, sideways for vertical ones.';
+    return `Extrude: drag or type the distance — ${fmtLen(Math.abs(this.dist))} along ${this._dirName()}. Arrow keys re-lock the axis; Esc cancels.`;
   }
   _dirName() {
     const d = this.dir;
@@ -2682,26 +2895,65 @@ class ExtrudeCurveTool extends Tool {
     if (path.length < 2) return null;
     return path.map(v => G.clone(m.vp(v)));
   }
-  // extrusion direction: the locked axis, else the drag itself aims it
-  // (Blender-style edge extrude — a horizontal pull drags the ribbon toward
-  // the cursor, a vertical pull stays up), else the horizontal perpendicular
-  // when the curve itself is vertical
+  // extrusion direction: an explicit arrow-key lock gives the WORLD axis —
+  // otherwise the DEFAULT is the profile's LOCAL PLANE NORMAL, computed as
+  // N = normalize(Σ (Pᵢ−C) × (Pᵢ₊₁−C)) (the cross of the curve's chord
+  // vectors), signed toward the camera. This replaces the old world-space
+  // fallbacks (chord × +X etc.) that skewed vertical arcs onto +X. Only a
+  // degenerate straight line (no definable plane) falls back to the
+  // slope-following / drag-aimed behavior.
   _direction(ev) {
     const app = this.app;
-    if (app.lockAxis) return G.clone(AXES[app.lockAxis]);
+    if (app.lockAxis) return G.clone(AXES[app.lockAxis]); // explicit world axis only
+    // LOCAL NORMAL of the curve's own plane
+    const P = this.pts;
+    if (P && P.length >= 3) {
+      let C = G.v(0, 0, 0);
+      for (const p of P) C = G.add(C, p);
+      C = G.mul(C, 1 / P.length);
+      let nn = G.v(0, 0, 0);
+      for (let i = 0; i + 1 < P.length; i++)
+        nn = G.add(nn, G.cross(G.sub(P[i], C), G.sub(P[i + 1], C)));
+      nn = G.norm(nn);
+      if (!G.isZero(nn)) {
+        // sign toward the camera: the sweep faces the user (ground arcs
+        // viewed from above extrude UP, wall arcs extrude out of the wall)
+        try {
+          const cam = app.view.activeCamera();
+          const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), C);
+          if (G.dot(nn, toCam) < 0) nn = G.neg(nn);
+        } catch (err) { if (nn.z < 0) nn = G.neg(nn); }
+        return nn;
+      }
+    }
+    // degenerate straight line: no profile plane — keep the legacy fallbacks
     const a = this.pts[0], b = this.pts[this.pts.length - 1];
     const chord = G.sub(b, a);
     const horiz = G.v(chord.x, chord.y, 0);
     if (G.len(horiz) < 1e-6) return G.v(0, 0, 1); // a point chain — degenerate, keep up
     const up = G.v(0, 0, 1);
-    const perp = G.norm(G.cross(G.norm(horiz), up)); // horizontal perpendicular
-    if (Math.abs(G.dot(G.norm(chord), up)) > 0.99) return perp; // vertical curve: extrude sideways
+    if (Math.abs(G.dot(G.norm(chord), up)) > 0.99) {
+      const perp = G.norm(G.cross(G.norm(horiz), up));
+      return G.isZero(perp) ? G.v(1, 0, 0) : perp; // vertical line: sideways
+    }
     if (ev) {
       const sum = this.pts.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
       const base = G.mul(sum, 1 / this.pts.length);
       const v = G.sub(app.inferPoint(ev, null).p, base);
       const vh = G.v(v.x, v.y, 0);
       if (G.len(vh) > Math.abs(v.z) * 1.2 && G.len(vh) > 0.05) return G.norm(vh);
+    }
+    // SLANTED curve: default to its own plane — the in-plane perpendicular
+    // follows the slope (the push/pull analogue), instead of a skewed
+    // world-up ribbon off a raked line
+    if (Math.abs(G.norm(chord).z) > 0.01) {
+      const d = G.norm(chord);
+      const nPlane = G.norm(G.cross(d, up));       // the curve's vertical-plane normal
+      let ip = G.cross(nPlane, d);                  // in-plane, ⊥ the curve
+      if (!G.isZero(ip)) {
+        if (ip.z < 0) ip = G.neg(ip);
+        return G.norm(ip);
+      }
     }
     return up;
   }

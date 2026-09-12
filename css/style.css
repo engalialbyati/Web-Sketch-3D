@@ -471,6 +471,21 @@ body.mode-bim #menubar { border-bottom-color: #cfc8e2; }
   border-radius: 3px;
   padding: 1px 4px;
 }
+#dyninput .dax {
+  font: 600 10px system-ui, sans-serif;
+  color: #9fc3e0;
+  background: #16222d;
+  border: 1px solid #40586d;
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+}
+#dyninput .dax:hover { background: #1e2f3d; }
+#dyninput .dax.on {
+  color: #fff;
+  background: #1d4f9c;
+  border-color: #3a76c4;
+}
 
 /* ==========================================================================
    Professional CAD shell (Revit-style) — options bar, properties palette,

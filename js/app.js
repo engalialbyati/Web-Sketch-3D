@@ -102,6 +102,7 @@ const FEATURES = [
 const ICONS = {
   select: '<svg viewBox="0 0 24 24"><path d="M6 3l7 16 2.2-6.4L21 10.4z" fill="currentColor" stroke="none"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
+  polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
   rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/></svg>',
   circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
   polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4l7 5-2.6 8H7.6L5 9z"/></svg>',
@@ -155,6 +156,7 @@ const TOOL_DEFS = {
     { id: 'select', label: 'Select', key: 'Space' },
     'sep',
     { id: 'line', label: 'Line', key: 'L' },
+    { id: 'polyline', label: 'Polyline', key: '' },
     { id: 'rect', label: 'Rectangle', key: 'R' },
     { id: 'circle', label: 'Circle', key: 'C' },
     { id: 'arc', label: 'Arc', key: 'A' },
@@ -228,7 +230,7 @@ const TOOL_DEFS = {
 const RIBBON_GROUPS = {
   free: [
     { title: 'Select', tools: ['select'] },
-    { title: 'Draw', tools: ['line', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
+    { title: 'Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
     { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale', 'mirror', 'array'] },
     { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea', 'area'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
@@ -269,7 +271,7 @@ const RIBBON_GROUPS = {
 const RIBBON_TABS = {
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select'] },
-    { title: '2D Draw', tools: ['line', 'rect', 'circle', 'arc', 'polygon'] },
+    { title: '2D Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
     { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'convert'] },
     { title: 'Modify', tools: ['trim', 'offset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
   ] },
@@ -315,6 +317,94 @@ const RIBBON_TABS = {
 // exceptions). opDone()/undo()/redo() remain, but only the transaction layer
 // and undo/redo call them — tools never touch raw undo state.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// AimExtrudeTool — the "toward the mouse" extrude mode's click phase: a live
+// ribbon preview follows the cursor for every selected edge; the click that
+// ends it extrudes each edge toward the picked point (perpendicular to the
+// edge — aiming along an edge can never go degenerate). Esc cancels.
+// ---------------------------------------------------------------------------
+class AimExtrudeTool extends Tool {
+  constructor(app, eids, dist) {
+    super(app);
+    this.eids = eids;
+    this.dist = dist;
+  }
+  activate() { this.app.view.clearPreview(); this.status(); }
+  get hint() {
+    return `Extrude toward mouse: click where the extrude should go — ${this.dist.toFixed(2)} m sweep, live preview. Esc cancels.`;
+  }
+  // AIM POINT FROM THE CURSOR RAY, not the ground plane: aiming UP at empty
+  // sky must work (a ground-inferred point can never sit above the model).
+  // The ray point closest to the selection's center is the aim target.
+  _aimPoint(ev) {
+    const app = this.app, m = app.model;
+    let fallback = null;
+    try {
+      const inf = app.inferPoint(ev, null);
+      fallback = inf && inf.p;
+    } catch (err) { }
+    try {
+      const view = app.view;
+      const { ro, rd } = view.rayFrom(view.eventPt(ev));
+      // center of the selected edges
+      let c = null, n = 0;
+      for (const eid of this.eids) {
+        const e = m.edges.get(eid);
+        if (!e) continue;
+        const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
+        if (!A || !B) continue;
+        c = c ? G.add(c, G.add(A, B)) : G.add(A, B);
+        n += 2;
+      }
+      if (!n) return fallback;
+      c = G.mul(c, 1 / n);
+      const s = G.dot(G.sub(c, ro), rd);
+      if (!isFinite(s) || s <= 0.05) return fallback;
+      return G.add(ro, G.mul(rd, s));
+    } catch (err) {
+      return fallback;
+    }
+  }
+  _dirFor(e, p) {
+    const m = this.app.model;
+    const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
+    if (!A || !B) return null;
+    const mid = G.mul(G.add(A, B), 0.5);
+    const ed = G.norm(G.sub(B, A));
+    let v = G.sub(p, mid);
+    v = G.sub(v, G.mul(ed, G.dot(v, ed)));
+    return G.len(v) < 1e-6 ? null : G.norm(v);
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view, m = app.model;
+    const p = this._aimPoint(ev);
+    if (!p) { view.clearPreview(); return; }
+    view.clearPreview();
+    for (const eid of this.eids) {
+      const e = m.edges.get(eid);
+      if (!e) continue;
+      const dir = this._dirFor(e, p);
+      if (!dir) continue;
+      const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
+      view.previewQuadsBetween([A, B], [G.add(A, G.mul(dir, this.dist)), G.add(B, G.mul(dir, this.dist))]);
+    }
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    const p = this._aimPoint(ev);
+    app.view.clearPreview();
+    if (!p) { app.toast('Aim at a point away from the edges', true); return; }
+    const live = this.eids.filter(id => app.model.edges.has(id));
+    app.extrudeEdgesToward(live, p, this.dist);
+    app.setTool('select');
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.app.view.clearPreview(); this.app.setTool('select'); return true; }
+    return false;
+  }
+}
+
 class Transaction {
   static MAX_UNDO = 100;
   constructor(app, label) {
@@ -4152,6 +4242,25 @@ class App {
         : `Locked to the ${axes.join('+').toUpperCase()} plane — press an axis to drop it, V exits`;
     this.setStatus(chip.textContent);
   }
+  // arrow-key axis lock feedback: reuses the V-lock chip so the state is
+  // visible in the viewport for as long as the lock is held
+  _axisChip() {
+    let chip = document.getElementById('axislockchip');
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.id = 'axislockchip';
+      document.getElementById('viewport').appendChild(chip);
+    }
+    if (this.axisLockMode) { this._axisLockUI(); return; } // V-mode owns the chip
+    if (!this.lockAxis) {
+      if (!this.axisLockMode) { chip.style.display = 'none'; chip.textContent = ''; }
+      return;
+    }
+    chip.style.display = 'block';
+    chip.className = 'on ' + this.lockAxis;
+    const names = { x: 'X (red)', y: 'Y (green)', z: 'Z (blue)' };
+    chip.textContent = `Locked to ${names[this.lockAxis]} — ArrowDown clears`;
+  }
   // ---- AutoCAD-style dynamic input -------------------------------------
   // A length/angle tooltip near the cursor while a drawing tool has a live
   // segment: typing digits opens it on the Length field, Tab toggles
@@ -4161,14 +4270,37 @@ class App {
     const vp = document.getElementById('viewport');
     const box = document.createElement('div');
     box.id = 'dyninput';
-    box.innerHTML = '<span class="dlab">Length</span><input id="dyn-len" autocomplete="off" spellcheck="false">'
-      + '<span class="dlab">Angle</span><input id="dyn-ang" autocomplete="off" spellcheck="false">'
+    box.innerHTML = '<span class="dlab" id="dyn-lab1">Length</span><input id="dyn-len" autocomplete="off" spellcheck="false">'
+      + '<span class="dlab" id="dyn-lab2">Angle</span><input id="dyn-ang" autocomplete="off" spellcheck="false">'
+      + '<button id="dyn-ax" class="dax" title="Axis lock — click to cycle X ➔ Y ➔ Z ➔ off. Z draws vertically (same as the arrow keys)">Z: off</button>'
       + '<span class="dtab">Tab</span>';
     vp.appendChild(box);
     box.style.display = 'none';
     this.dynEl = box;
     this.dynLen = box.querySelector('#dyn-len');
     this.dynAng = box.querySelector('#dyn-ang');
+    this.dynLab1 = box.querySelector('#dyn-lab1');
+    this.dynLab2 = box.querySelector('#dyn-lab2');
+    // AXIS BUTTON in the input bar: a visible, clickable axis lock — solves
+    // the "first segment can't go vertical" case without touching the
+    // keyboard (focus in these inputs eats arrow keys). Cycles X ➔ Y ➔ Z ➔ off.
+    const axBtn = box.querySelector('#dyn-ax');
+    axBtn.addEventListener('pointerdown', e => e.stopPropagation());
+    axBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const order = [null, 'x', 'y', 'z'];
+      const cur = order.indexOf(this.lockAxis && !this.axisLockMode ? this.lockAxis : null);
+      this.lockAxis = order[(cur + 1) % order.length];
+      this._axisChip();
+      axBtn.textContent = this.lockAxis ? this.lockAxis.toUpperCase() + ': on' : 'Z: off';
+      axBtn.classList.toggle('on', !!this.lockAxis);
+      // the preview/typed values follow the new axis immediately
+      if (this.tool && this.tool._dynRedraw) { this.dynApply(); this.tool._dynRedraw(); }
+      else if (this.tool && typeof this.tool.onMove === 'function' && this._dynPos) {
+        this.tool.onMove({ clientX: this._dynPos.x, clientY: this._dynPos.y });
+      }
+    });
+    this.dynAxBtn = axBtn;
     this.dyn = { open: false, focus: 'len' };
     vp.addEventListener('pointermove', e => {
       this._dynPos = { x: e.clientX, y: e.clientY };
@@ -4209,6 +4341,18 @@ class App {
   }
   dynFillFromTool() {
     const spec = this.dynSupported();
+    // field labels follow the tool's stage (e.g. Arc: Radius / Sweep °)
+    if (this.dynLab1) {
+      const labels = this.tool && typeof this.tool.dynLabels === 'function' ? this.tool.dynLabels() : null;
+      this.dynLab1.textContent = labels ? labels[0] : 'Length';
+      this.dynLab2.textContent = labels ? (labels[1] || 'Angle') : 'Angle';
+    }
+    // keep the axis button's label in step with the live lock state (arrow
+    // keys may have changed it since the bar last showed)
+    if (this.dynAxBtn) {
+      this.dynAxBtn.textContent = this.lockAxis ? this.lockAxis.toUpperCase() + ': on' : 'Z: off';
+      this.dynAxBtn.classList.toggle('on', !!this.lockAxis);
+    }
     if (!spec) return;
     if (document.activeElement !== this.dynLen && this.dyn.focus !== 'len')
       this.dynLen.value = spec.length != null ? (+spec.length.toFixed(3)).toString() : '';
@@ -4330,6 +4474,7 @@ class App {
     }
     this.lockAxis = null;
     this.clearAxisLocks();
+    this._axisChip();
     if (this.dynHide) this.dynHide();
     this.view.clearPreview();
     this.view.hideSnapDot();
@@ -4997,11 +5142,12 @@ class App {
         return;
       }
 
-      // arrows: axis lock
-      if (k === 'ArrowRight') { this.lockAxis = 'x'; ev.preventDefault(); return; }
-      if (k === 'ArrowLeft') { this.lockAxis = 'y'; ev.preventDefault(); return; }
-      if (k === 'ArrowUp') { this.lockAxis = 'z'; ev.preventDefault(); return; }
-      if (k === 'ArrowDown') { this.lockAxis = null; ev.preventDefault(); return; }
+      // arrows: axis lock — the chip in the status bar makes the state
+      // visible (and survives until cleared; ArrowDown or tool switch)
+      if (k === 'ArrowRight') { this.lockAxis = 'x'; this._axisChip(); ev.preventDefault(); return; }
+      if (k === 'ArrowLeft') { this.lockAxis = 'y'; this._axisChip(); ev.preventDefault(); return; }
+      if (k === 'ArrowUp') { this.lockAxis = 'z'; this._axisChip(); ev.preventDefault(); return; }
+      if (k === 'ArrowDown') { this.lockAxis = null; this._axisChip(); ev.preventDefault(); return; }
 
       if ((ev.ctrlKey || ev.metaKey) && !ev.shiftKey) {
         const kl = k.toLowerCase();
@@ -5172,6 +5318,10 @@ class App {
             ? 'Extrude Edge…'
             : `Extrude ${selEdges.length} Edges…`,
             () => this.extrudeEdgeDialog(selEdges.map(e => e.id))]);
+        // JOIN: weld gaps + fuse collinear runs — separate lines become one
+        // chain that extrudes/converts as a single polyline
+        if (selEdges.length >= 2)
+          items.push(['Join Edges into Polyline', () => this.joinSelectedEdges(selEdges.map(e => e.id))]);
       }
       // EDGE ➔ ELEMENT: free line(s) convert directly into solid members —
       // the line becomes the element's centerline (no face needed first)
@@ -5425,7 +5575,12 @@ class App {
         style="width:120px;margin:2px 0 10px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
       <div class="ob-lab">Direction</div>
       <select id="ee-dir" style="margin:4px 0 10px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
-        <option value="auto" selected>Auto — up for horizontal lines, sideways for vertical</option>
+        <option value="aim" selected>Toward the mouse — click a point to aim the extrude</option>
+        <option value="auto">Auto — curve normal: 90° to the profile's own plane (slope/up/sideways for single lines)</option>
+        <option value="normal">Curve normal — perpendicular to the curve's plane, along its normal vector</option>
+        <option value="edgeplane">In the edge's plane — perpendicular to the edge, following its slope</option>
+        <option value="localperp">Local perpendicular — 90° to the edge, sideways out of its plane</option>
+        <option value="parallel">Parallel to the edge — along a curve's span (vaults, sweeps)</option>
         <option value="up">+Z (up)</option>
         <option value="down">−Z (down)</option>
         <option value="px">+X</option>
@@ -5433,30 +5588,189 @@ class App {
         <option value="py">+Y</option>
         <option value="ny">−Y</option>
       </select>
-      <p style="opacity:.75;margin:2px 0 0">Each edge becomes a ribbon face. The edge stays — Push/Pull the face to give it thickness.</p>
+      <p style="opacity:.75;margin:2px 0 0">Each edge becomes a ribbon face (a live preview follows the mouse in Aim mode). The edge stays — Push/Pull the face to give it thickness.</p>
     `, [
       ['Cancel', null],
       ['Extrude', () => {
         const d = parseFloat(document.getElementById('ee-dist').value);
         if (!isFinite(d) || Math.abs(d) < 1e-4) { this.toast('Type an extrude distance', true); return; }
-        const dirMap = { up: G.v(0, 0, 1), down: G.v(0, 0, -1), px: G.v(1, 0, 0), nx: G.v(-1, 0, 0), py: G.v(0, 1, 0), ny: G.v(0, -1, 0) };
         const dirChoice = document.getElementById('ee-dir').value;
+        // AIM mode hands over to the click-to-aim tool: a live preview
+        // follows the mouse, the next click extrudes toward that point
+        if (dirChoice === 'aim') { this.extrudeTowardMouse(ids, d); return; }
+        const dirMap = { up: G.v(0, 0, 1), down: G.v(0, 0, -1), px: G.v(1, 0, 0), nx: G.v(-1, 0, 0), py: G.v(0, 1, 0), ny: G.v(0, -1, 0) };
         const m = this.model;
         let n = 0;
         this.transaction.run('extrude edges', mm => {
+          // expand each selection to its whole curve (an arc picked by one
+          // edge extrudes as ONE ribbon, segment by segment — same quads the
+          // Extrude Curve tool builds)
+          const seen = new Set();
+          const segs = [];
           for (const eid of ids) {
-            const e = m.edges.get(eid);
-            if (!e) continue;
+            const e0 = m.edges.get(eid);
+            if (!e0) continue;
+            const chain = e0.curveId
+              ? [...m.edges.values()].filter(x => x.curveId === e0.curveId)
+              : [e0];
+            for (const e of chain) if (!seen.has(e.id)) { seen.add(e.id); segs.push(e); }
+          }
+          // CONNECTED-CHAIN DATA (always computed): the ordered path through
+          // the selected edges feeds two derived directions —
+          //   spanDir:   first ➔ last point (parallel/vault sweeps)
+          //   normalDir: the curve's LOCAL PLANE NORMAL, Newell-style (Σ of
+          //              cross products about the centroid) — the direction
+          //              perpendicular (90°) to the profile's own plane, in
+          //              2D or 3D, independent of world X/Y/Z
+          let spanDir = null, normalDir = null, pathLen = 0, chainPts = null;
+          {
+            const adj = new Map();
+            for (const e of segs) for (const v of [e.a, e.b]) {
+              if (!adj.has(v)) adj.set(v, []);
+              adj.get(v).push(e);
+            }
+            const ends = [...adj.entries()].filter(([, es]) => es.length === 1).map(([v]) => v);
+            if (ends.length >= 2) {
+              const prev = new Map([[ends[0], null]]);
+              const q = [ends[0]];
+              while (q.length) {
+                const v = q.shift();
+                for (const e of adj.get(v) || []) {
+                  const w = e.a === v ? e.b : e.a;
+                  if (!prev.has(w)) { prev.set(w, v); q.push(w); }
+                }
+              }
+              if (prev.has(ends[1])) {
+                const path = [];
+                for (let v = ends[1]; v != null; v = prev.get(v)) path.push(v);
+                pathLen = path.length;
+                chainPts = path.map(v => m.vp(v)); // ordered stations for the sweep
+                if (path.length >= 3) {
+                  const s = G.sub(m.vertices.get(path[0]), m.vertices.get(path[path.length - 1]));
+                  if (!G.isZero(G.norm(s))) spanDir = G.norm(s);
+                  // Newell centroid-fan normal of the chain's points
+                  const pts = path.map(v => m.vp(v));
+                  let C = G.v(0, 0, 0);
+                  for (const p of pts) C = G.add(C, p);
+                  C = G.mul(C, 1 / pts.length);
+                  let nn = G.v(0, 0, 0);
+                  for (let i = 0; i + 1 < pts.length; i++)
+                    nn = G.add(nn, G.cross(G.sub(pts[i], C), G.sub(pts[i + 1], C)));
+                  nn = G.norm(nn);
+                  if (!G.isZero(nn)) {
+                    if (nn.z < 0) nn = G.neg(nn); // canonical: point upward
+                    normalDir = nn;
+                  }
+                }
+              }
+            }
+            if (dirChoice === 'parallel' && !spanDir) {
+              this.toast('Parallel extrude sweeps a CURVE along its span — a straight edge along itself makes no face. Use an axis direction for straight edges.', true);
+              return;
+            }
+            if (dirChoice === 'normal' && !normalDir) {
+              this.toast('Curve normal needs a CURVE (3+ points) — a single straight edge has no profile plane. Use Auto or an axis for straight edges.', true);
+              return;
+            }
+          }
+          // STATION-BASED LOCAL SWEEP (open-path boundary conditions):
+          // tangent-dependent modes sweep a multi-point chain station by
+          // station, with END TANGENTS CLAMPED to forward/backward
+          // differences — T0 = P1 − P0 and Tend = Pend − Pend−1, never a
+          // wrap-around — so the end caps square off perpendicular to the
+          // path's actual end direction (no skewed sliver faces at the open
+          // ends), and interior stations use the central difference so
+          // adjacent quads share offset vertices exactly (watertight joints).
+          const LOCAL_MODES = ['auto', 'normal', 'edgeplane', 'localperp', 'parallel'];
+          if (LOCAL_MODES.includes(dirChoice) && chainPts && pathLen >= 3) {
+            const P = chainPts;
+            const T = P.map((_, i) => {
+              if (i === 0) return G.norm(G.sub(P[1], P[0]));                          // clamped forward difference
+              if (i === P.length - 1) return G.norm(G.sub(P[P.length - 1], P[P.length - 2])); // clamped backward difference
+              return G.norm(G.sub(P[i + 1], P[i - 1]));                               // central difference
+            });
+            // per-station sweep direction from the STATION tangent (not the
+            // segment chord — that per-segment mismatch was the joint gap)
+            const dirAt = t => {
+              if (dirChoice === 'parallel') return spanDir;
+              if (dirChoice !== 'edgeplane' && normalDir) return normalDir;
+              const nPlane = G.cross(t, G.v(0, 0, 1));      // station's vertical-plane normal
+              let ip = G.isZero(nPlane) ? G.v(0, 0, 1) : G.cross(G.norm(nPlane), t); // in-plane ⊥
+              if (G.isZero(ip)) ip = G.v(0, 0, 1);
+              if (dirChoice === 'localperp') {
+                let w = G.cross(t, ip);
+                if (G.isZero(w)) w = G.v(0, 0, 1);
+                if (w.z < 0) w = G.neg(w);
+                return G.norm(w);
+              }
+              if (ip.z < 0) ip = G.neg(ip);                 // edgeplane: grow along the slope
+              return G.norm(ip);
+            };
+            const Q = P.map((p, i) => G.add(p, G.mul(dirAt(T[i]), d)));
+            let covered = null;
+            for (let i = 0; i + 1 < P.length; i++) {
+              // sliver guard: a station whose tangent runs along the sweep
+              // direction contributes a near-zero-area quad — skip it
+              // instead of emitting a distorted face
+              const dir = dirAt(T[i]);
+              if (Math.abs(G.dot(T[i], dir)) > 0.999) continue;
+              if (mm.addFaceFromRings([P[i], P[i + 1], Q[i + 1], Q[i]])) n++;
+            }
+            // edges already covered by the station sweep (both endpoints on
+            // the path as consecutive stations) must not sweep again; edges
+            // of OTHER chains in the selection fall through to the per-edge path
+            covered = new Set();
+            for (const e of segs) {
+              const ai = P.indexOf(m.vp(e.a)), bi = P.indexOf(m.vp(e.b));
+              if (ai >= 0 && bi >= 0 && Math.abs(ai - bi) === 1) covered.add(e.id);
+            }
+            this._extrudeCovered = covered;
+          } else this._extrudeCovered = null;
+          const coveredIds = this._extrudeCovered;
+          for (const e of segs) {
+            if (coveredIds && coveredIds.has(e.id)) continue;
             const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
             if (!A || !B) continue;
             let dir = dirMap[dirChoice];
-            if (dirChoice === 'auto') {
-              const chord = G.sub(B, A);
-              if (Math.abs(G.norm(chord).z) > 0.99) {
+            const chordEdge = G.sub(B, A);
+            const dUnit = G.norm(chordEdge);
+            // IN THE EDGE'S OWN PLANE: the sweep follows the edge's slope —
+            // perpendicular to the edge WITHIN its vertical plane (the push/
+            // pull analogue: a face extrudes along its normal; an edge along
+            // its in-plane perpendicular). Slanted edges keep their wall
+            // plane instead of a skewed world-axis ribbon.
+            const edgePlanePerp = () => {
+              const nPlane = G.cross(dUnit, G.v(0, 0, 1)); // the edge's vertical-plane normal
+              let ip = G.cross(G.norm(nPlane), dUnit);      // in-plane, ⊥ the edge
+              if (G.isZero(ip)) ip = G.v(0, 0, 1);
+              if (ip.z < 0) ip = G.neg(ip);                 // grow along the upward slope
+              return G.norm(ip);
+            };
+            if (dirChoice === 'auto' || dirChoice === 'edgeplane' || dirChoice === 'normal') {
+              // CURVE NORMAL first: a multi-point curve extrudes 90° to its
+              // OWN plane (Auto and the explicit option) — the Newell normal,
+              // never a world axis
+              if (dirChoice !== 'edgeplane' && normalDir && pathLen >= 3) {
+                dir = normalDir;
+              } else if (Math.abs(dUnit.z) > 0.99) {
                 // vertical line: extrude sideways (horizontal perpendicular)
-                dir = G.norm(G.cross(G.norm(chord), G.v(0, 0, 1)));
+                dir = G.norm(G.cross(dUnit, G.v(0, 0, 1)));
                 if (G.isZero(dir)) dir = G.v(1, 0, 0);
+              } else if (dirChoice === 'edgeplane' || Math.abs(dUnit.z) > 0.01) {
+                // slanted single edge (or explicitly chosen): follow its slope
+                dir = edgePlanePerp();
               } else dir = G.v(0, 0, 1);
+            } else if (dirChoice === 'parallel') {
+              dir = spanDir;
+            } else if (dirChoice === 'localperp') {
+              // LOCAL AXIS, 90° OUT OF THE EDGE'S PLANE: the edge's local
+              // frame is (along d, in-plane ⊥ = edgePlanePerp, out-of-plane
+              // ⊥ = d × in-plane). This sweeps sideways, perpendicular to
+              // both the edge and its slope — the world-axis options'
+              // local-space counterpart for single lines.
+              dir = G.norm(G.cross(dUnit, edgePlanePerp()));
+              if (G.isZero(dir)) dir = G.v(0, 0, 1);
+              if (dir.z < 0) dir = G.neg(dir); // grow upward-ish
             }
             const A2 = G.add(A, G.mul(dir, d)), B2 = G.add(B, G.mul(dir, d));
             if (mm.addFaceFromRings([A, B, B2, A2])) n++;
@@ -5467,6 +5781,148 @@ class App {
         this.clearSelection();
       }],
     ]);
+  }
+  // AIM-MODE EXTRUDE: after the dialog, the next click aims the sweep — a
+  // live preview follows the mouse; each edge extrudes toward the picked
+  // point (perpendicular to the edge, so aiming along an edge is never
+  // degenerate). Esc cancels back to Select.
+  extrudeTowardMouse(eids, dist) {
+    if (this.tool) this.tool.deactivate();
+    this.tool = new AimExtrudeTool(this, eids, dist);
+    this.tool.activate();
+    this.lockAxis = null;
+    this.clearAxisLocks();
+    this._axisChip();
+    this.view.clearPreview();
+    document.querySelectorAll('#toolbar .tbtn[data-tool]').forEach(b => b.classList.remove('active'));
+    this.setStatus(this.tool.hint);
+    this.toast('Aim mode — click in the viewport where the extrude should go (Esc cancels)');
+  }
+  extrudeEdgesToward(eids, targetPoint, dist) {
+    const m = this.model;
+    let n = 0;
+    this.transaction.run('extrude toward point', mm => {
+      const seen = new Set();
+      const segs = [];
+      for (const eid of eids) {
+        const e0 = m.edges.get(eid);
+        if (!e0) continue;
+        const chain = e0.curveId
+          ? [...m.edges.values()].filter(x => x.curveId === e0.curveId)
+          : [e0];
+        for (const e of chain) if (!seen.has(e.id)) { seen.add(e.id); segs.push(e); }
+      }
+      for (const e of segs) {
+        const A = m.vertices.get(e.a), B = m.vertices.get(e.b);
+        if (!A || !B) continue;
+        // aim = (target − midpoint) with the along-edge component removed:
+        // the sweep goes toward the mouse, never along the edge itself
+        const mid = G.mul(G.add(A, B), 0.5);
+        const ed = G.norm(G.sub(B, A));
+        let v = G.sub(targetPoint, mid);
+        v = G.sub(v, G.mul(ed, G.dot(v, ed)));
+        if (G.len(v) < 1e-6) continue;
+        const dir = G.norm(v);
+        const A2 = G.add(A, G.mul(dir, dist)), B2 = G.add(B, G.mul(dir, dist));
+        if (mm.addFaceFromRings([A, B, B2, A2])) n++;
+      }
+    });
+    if (!n) this.toast('Could not extrude toward that point — aim more sideways from the edges', true);
+    else this.toast(`Extruded ${n} edge${n > 1 ? 's' : ''} toward the point — ${Math.abs(dist).toFixed(2)} m`);
+    this.clearSelection();
+    return n;
+  }
+  // Join selected free EDGE(S) into one polyline: endpoint gaps within 2 cm
+  // weld shut, and collinear consecutive segments fuse into single edges.
+  // The result behaves as one chain everywhere (Extrude, Convert, chains).
+  joinSelectedEdges(eids) {
+    const m = this.model;
+    const EPS = 0.02; // gap weld tolerance
+    let welded = 0, merged = 0;
+    const ok = this.transaction.run('join edges', () => {
+      const work = [...new Set(eids)];
+      // edges that bound faces cannot be re-wired (that would break face
+      // rings) — they still join the chain, just keep their own segments
+      const faceBound = new Set();
+      for (const f of m.faces.values()) for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+        const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+        if (e) faceBound.add(e.id);
+      }
+      const live = () => work.map(id => m.edges.get(id)).filter(e => e && !(e.userData && e.userData.bimEntityId) && !faceBound.has(e.id));
+      // 1) WELD endpoint gaps: two free endpoints of different edges within
+      // EPS merge onto the same vertex (delete + re-add snapped)
+      let progress = true, guard = 0;
+      while (progress && guard++ < 50) {
+        progress = false;
+        const list = live();
+        outer1:
+        for (let i = 0; i < list.length; i++) for (let j = 0; j < list.length; j++) {
+          if (i === j) continue;
+          const e1 = list[i], e2 = list[j];
+          for (const [k1, p1] of [['a', m.vp(e1.a)], ['b', m.vp(e1.b)]])
+            for (const [k2, p2] of [['a', m.vp(e2.a)], ['b', m.vp(e2.b)]]) {
+              if (e1[k1] === e2[k2]) continue;
+              const d = G.dist(p1, p2);
+              if (d > 1e-9 && d <= EPS) {
+                const other = k1 === 'a' ? m.vp(e1.b) : m.vp(e1.a);
+                m.deleteEdgeIds([e1.id]);
+                work.splice(work.indexOf(e1.id), 1);
+                const ne = m.addEdge(other, p2);
+                if (ne) work.push(ne.id);
+                welded++; progress = true;
+                break outer1;
+              }
+            }
+        }
+      }
+      // 2) FUSE collinear runs: A→V + V→C pointing the same way become A→C
+      progress = true; guard = 0;
+      while (progress && guard++ < 50) {
+        progress = false;
+        const list = live();
+        outer2:
+        for (let i = 0; i < list.length; i++) for (let j = 0; j < list.length; j++) {
+          if (i === j) continue;
+          const e1 = list[i], e2 = list[j];
+          for (const v of [e1.a, e1.b]) {
+            if (!(e2.a === v || e2.b === v)) continue;
+            const A = e1.a === v ? e1.b : e1.a;
+            const C = e2.a === v ? e2.b : e2.a;
+            if (A === C) continue;
+            const pA = m.vp(A), pV = m.vp(v), pC = m.vp(C);
+            const d1 = G.sub(pV, pA), d2 = G.sub(pC, pV);
+            if (G.len(d1) < 1e-9 || G.len(d2) < 1e-9) continue;
+            if (G.len(G.cross(G.norm(d1), G.norm(d2))) > 1e-3) continue; // not collinear
+            if (G.dot(d1, d2) <= 0) continue; // V must sit between A and C
+            m.deleteEdgeIds([e1.id, e2.id]);
+          work.splice(work.indexOf(e1.id), 1); work.splice(work.indexOf(e2.id), 1);
+            const ne = m.addEdge(pA, pC);
+            if (ne) work.push(ne.id);
+            merged++; progress = true;
+            break outer2;
+          }
+        }
+      }
+      // 3) TAG the chain as ONE POLYLINE (AutoCAD semantics): every touched
+      // free edge of the connected selection shares one curveId, so click-
+      // selecting any segment selects the whole polyline, and extrude /
+      // convert / offset treat it as a single chain. Lines that merely touch
+      // (nothing to weld or fuse) STILL become a polyline — that is the point.
+      let tagged = 0;
+      {
+        const list = work.map(id => m.edges.get(id)).filter(e => e && !e.curveId);
+        if (list.length >= 2) {
+          // numeric chain id outside the kernel's nid() counter space
+          const cid = Date.now();
+          m.curves.set(cid, { type: 'polyline' });
+          for (const e of list) { e.curveId = cid; tagged++; }
+        }
+      }
+      return welded + merged + tagged > 0;
+    });
+    if (!ok) { this.toast('Pick two or more free edges that touch (or nearly touch) to join', true); return; }
+    this.toast(`Joined into a polyline${welded || merged ? ` — ${welded} gap${welded === 1 ? '' : 's'} welded, ${merged} segment${merged === 1 ? '' : 's'} fused` : ''} — click any segment to select the whole chain`);
+    this.clearSelection();
   }
   convertEdgeDialog(eids) {
     const ids = Array.isArray(eids) ? eids : [eids];
@@ -7005,7 +7461,23 @@ class App {
     if (!faces.length && !edges.length) { this.clearSelection(); return; }
     this.run('delete', m => {
       for (const id of faces) m.deleteFace(id);
-      const edgeIds = edges.filter(id => m.edges.has(id));
+      // EDGE-DESTRUCTION GUARD: an edge shared with a face's boundary IS
+      // that face's geometry — deleting it would cascade-delete the face
+      // (the "drew a rect over my line, deleting the line killed the rect"
+      // case: the rect welded onto the pre-existing line). Edges between
+      // exactly TWO faces still delete (the faces merge/heal); free wire
+      // edges delete; face-boundary edges are skipped with an explanation.
+      // The Eraser tool remains the deliberate destructive path.
+      const edgeIds = [];
+      let guarded = 0;
+      for (const id of edges) {
+        if (!m.edges.has(id)) continue;
+        const e = m.edges.get(id);
+        const adj = m.facesAdjacentToEdge ? m.facesAdjacentToEdge(e) : [];
+        if (adj.length === 2 || adj.length === 0) edgeIds.push(id);
+        else guarded++;
+      }
+      if (guarded) this.toast(`Skipped ${guarded} edge${guarded === 1 ? '' : 's'} — ${guarded === 1 ? 'it borders' : 'they border'} a face; deleting would remove the face too. Use the Eraser to dissolve deliberately.`, true);
       if (edgeIds.length) m.deleteEdgeIds(edgeIds);
     });
     this.sel = { edges: new Set(), faces: new Set() };

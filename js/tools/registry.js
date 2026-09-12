@@ -7,6 +7,9 @@
 const TOOLS = {
   // tools/free/*
   select: FreeTools.SelectTool, line: FreeTools.LineTool, rect: FreeTools.RectTool,
+  // polyline = the Line tool's chained mode under its own name (click-click-
+  // click chains; Esc/double-click ends) — one entry point, discoverable
+  polyline: FreeTools.LineTool,
   circle: FreeTools.CircleTool, arc: FreeTools.ArcTool, pushpull: FreeTools.PushPullTool,
   move: FreeTools.MoveTool, rotate: FreeTools.RotateTool, scale: FreeTools.ScaleTool,
   offset: FreeTools.OffsetTool, paint: FreeTools.PaintTool, eraser: FreeTools.EraserTool,

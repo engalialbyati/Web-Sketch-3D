@@ -1,8 +1,8 @@
 {
   "name": "websketch3d",
   "private": true,
-  "version": "0.3.0",
-  "description": "WebSketch 3D — a SketchUp-style drawing app. Static site; tests run on Node.",
+  "version": "0.7.0",
+  "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app. First working product.",
   "scripts": {
     "test": "node test/run.js",
     "bridge": "node server/blenderkitBridge.js"
