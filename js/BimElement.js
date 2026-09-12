@@ -263,6 +263,48 @@
         return { catId, famId, typeName, defaults };
       };
       let sel = null;
+      // FIXED CONVERTED ELEMENTS (Convert Faces to Element dialog): the user
+      // named the element and picked a kind — the kind selects the family,
+      // the NAME selects the type. A type with that name in the family is
+      // REUSED (Revit-style); otherwise the catalog grows it, so converted
+      // custom shapes become first-class placeable types. Custom kinds get
+      // their own family under a "Custom Elements" category.
+      if (p.fixed && p.name) {
+        const kindFam = {
+          column: 'fam_col_rect', beam: 'fam_beam_framing', wall: 'fam_wall_basic',
+          slab: 'fam_slab_structural', floor: 'fam_floor_generic',
+        };
+        let famId = kindFam[ent.type];
+        if (!famId) {
+          // custom kind: family named after the kind, created on first use
+          famId = 'fam_custom_' + ent.type;
+          if (!this._catalog.families.some(f => f.id === famId)) {
+            const catId = 'cat_custom';
+            if (!this._catalog.categories.some(c => c.id === catId) && db.putCategory) {
+              await db.putCategory({ id: catId, name: 'Custom Elements' });
+              this._catalog.categories.push({ id: catId, name: 'Custom Elements' });
+            }
+            if (db.putFamily) {
+              const kindName = ent.type[0].toUpperCase() + ent.type.slice(1);
+              await db.putFamily({ id: famId, categoryId: catId, name: kindName });
+              this._catalog.families.push({ id: famId, categoryId: catId, name: kindName });
+            }
+          }
+        } else if (famId === 'fam_beam_framing'
+          && !this._catalog.families.some(f => f.id === famId) && db.putFamily) {
+          const catId = 'cat_framing';
+          if (!this._catalog.categories.some(c => c.id === catId)) {
+            await db.putCategory({ id: catId, name: 'Structural Framing' });
+            this._catalog.categories.push({ id: catId, name: 'Structural Framing' });
+          }
+          await db.putFamily({ id: famId, categoryId: catId, name: 'Concrete Beam' });
+          this._catalog.families.push({ id: famId, categoryId: catId, name: 'Concrete Beam' });
+        }
+        const known = this._catalog.types.find(x => x.familyId === famId && x.name === p.name);
+        sel = known
+          ? pick(null, famId, known.name, known.defaultParameters)
+          : pick(null, famId, p.name, { fixed: true, profile: 'custom', material: 'Concrete' });
+      } else
       switch (ent.type) {
         case 'wall': {
           const fam = 'fam_wall_basic';
