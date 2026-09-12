@@ -204,6 +204,48 @@ const TOOL_DEFS = {
 };
 
 // ---------------------------------------------------------------------------
+// Ribbon groups — the OpenCADStudio pattern: the toolbar renders NAMED
+// GROUPS per mode (their RibbonGroup { title, tools }), not an anonymous
+// button row with separators. Each mode acts as a ribbon tab (the #modetabs
+// row); inside it every panel carries a title under its buttons.
+//
+// Group entries are tool ids, or one of the special tokens handled by
+// _buildToolbar: undo, redo, zoomext, shadows, xray, wire, browser, layers,
+// families, kit, levelsbtn, gridsbtn, levelview. Tools registered at runtime
+// by Engine features (and so absent here) fall into a trailing "Tools" group.
+// ---------------------------------------------------------------------------
+const RIBBON_GROUPS = {
+  free: [
+    { title: 'Select', tools: ['select'] },
+    { title: 'Draw', tools: ['line', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
+    { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale'] },
+    { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea'] },
+    { title: 'Navigate', tools: ['orbit', 'pan'] },
+    { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
+    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+    { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
+  ],
+  bim: [
+    { title: 'Select', tools: ['select'] },
+    { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'levelview'] },
+    { title: 'Build', tools: ['draw', 'wall', 'floor', 'convert'] },
+    { title: 'Hosts', tools: ['door', 'window', 'opening'] },
+    { title: 'Modify', tools: ['pushpull', 'move'] },
+    { title: 'Tools', tools: ['eraser', 'trim', 'tape', 'measurearea'] },
+    { title: 'Navigate', tools: ['orbit', 'pan'] },
+    { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
+    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+    { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
+  ],
+  design: [
+    { title: 'Select', tools: ['select'] },
+    { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
+    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+    { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
+  ],
+};
+
+// ---------------------------------------------------------------------------
 // Unit of work. Every model mutation happens inside a Transaction so undo
 // snapshots, snap-cache invalidation, view rebuilds, and UI syncs cannot be
 // forgotten by tool code.

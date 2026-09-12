@@ -18,7 +18,7 @@ module.exports = h => {
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
   const sandbox = { window: {}, console };
   const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
+  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/column.js']) {
     vm.runInContext(read(f), ctx, { filename: f });
   }
   // BimEntityManager lives in app.js between its class line and `class App`
@@ -183,6 +183,40 @@ module.exports = h => {
     const hostLive = host.faces.every(id => w.m.faces.has(id));
     ok(hostLive, 'the host wall lost no faces to the join');
     ok(w.m.validate().ok, 'model valid');
+  });
+
+  test('a four-wall room between four columns validates clean (the gc ring-collapse regression)', () => {
+    // the join rebuilds reap the split-chain edges; gc() then pruned the
+    // chain vertices from surviving rings WITHOUT recreating the direct
+    // adjacency — faces carried ring pairs with no edge, validate() failed,
+    // and every later edit guard-rolled back. gc() heals shrunk rings now.
+    const w = makeWorld();
+    sandbox.window.app = w.app;
+    const col = (x, y) => {
+      const made = sandbox.window.ColumnFeature.placeColumn(G, w.m, { x, y, z: 0 }, 0.3, 0.3, 3, 0, null);
+      const roles = {};
+      for (const f of made) roles[f.id] = 'side';
+      return w.bim.create('column', { base: [x, y, 0], width: 0.3, depth: 0.3, height: 3,
+        baseLevelId: 'lvl_1', topLevelId: null }, roles, []);
+    };
+    col(0, 0); col(6, 0); col(0, 5); col(6, 5);
+    buildWall(w, [0, 0, 0], [6, 0, 0]);
+    commit(w, [6, 0, 0], [6, 5, 0]);
+    commit(w, [6, 5, 0], [0, 5, 0]);
+    commit(w, [0, 5, 0], [0, 0, 0]);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 4, 'four walls registered');
+    // every wall keeps its full body (sides present, face lists live)
+    for (const e of walls) {
+      ok(e.faces.every(id => w.m.faces.has(id)), e.id + ' face list all live');
+      const sides = e.faces.filter(id => {
+        const f = w.m.faces.get(id);
+        return f && f.userData && (f.userData.role === 'exterior' || f.userData.role === 'interior');
+      });
+      ok(sides.length >= 1, e.id + ' has side faces');
+    }
+    const v = w.m.validate();
+    ok(v.ok, 'room model validates clean (no edge-less ring pairs): ' + (v.errors || []).slice(0, 2));
   });
 
   test('a 90° corner wall survives create-time opDone (the orphan-faces regression)', () => {

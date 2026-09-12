@@ -1074,8 +1074,17 @@ class Model {
     for (const e of this.edges.values()) { used.add(e.a); used.add(e.b); }
     for (const [id] of this.vertices) if (!used.has(id)) { this._vhRemove(id); this.vertices.delete(id); }
     for (const [id, f] of this.faces) {
-      f.loop = f.loop.filter(v => this.vertices.has(v));
-      f.holes = (f.holes || []).map(h => h.filter(v => this.vertices.has(v))).filter(h => h.length >= 3);
+      const L = f.loop.filter(v => this.vertices.has(v));
+      // a shrunk ring means pruned vertices COLLAPSED ring adjacencies —
+      // heal the boundary or the ring references vertex pairs with no edge
+      // (validate fails, later edits guard-rollback). edgesForRing chains
+      // through any surviving on-segment vertices, exactly like a fresh ring.
+      if (L.length !== f.loop.length) { f.loop = L; this.edgesForRing(f.loop, true); }
+      f.holes = (f.holes || []).map(h => {
+        const H = h.filter(v => this.vertices.has(v));
+        if (H.length !== h.length) this.edgesForRing(H, true);
+        return H;
+      }).filter(h => h.length >= 3);
       if (new Set(f.loop).size < 3 || G.loopArea(this.pts(f.loop)) < 1e-10) this.faces.delete(id);
     }
     // curves with no edges left
