@@ -1740,6 +1740,7 @@ class PaintTool extends Tool {
         const ff = m.faces.get(id);
         if (ff) { ff.color = app.currentMaterial.color; ff.alpha = app.currentMaterial.alpha; }
       }
+      m.touch(); // paint is display state — the rebuild gate must see it
     });
   }
 }
@@ -1782,6 +1783,7 @@ class EraserTool extends Tool {
       // SOFTEN: hide the line, keep the geometry — display-only, so faces,
       // lighting and exports are untouched (Edit > Unhide All brings them back)
       for (const id of ids) { const ed = app.model.edges.get(id); if (ed) ed.hidden = true; }
+      app.model.touch(); // display-only flag: no edge/vertex change to bump version
     } else {
       app.model.deleteEdgeIds(ids);
     }

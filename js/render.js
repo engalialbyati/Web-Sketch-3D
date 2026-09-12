@@ -308,11 +308,21 @@ class Viewport {
 
   // -------------------------------------------------------------- build model
   rebuild() {
+    // no-op gate: rebuild runs on every opDone(), but ops that changed
+    // nothing (no-op transactions, notification-triggered refreshes) leave
+    // the B-Rep and the view filters untouched — the scene is already in
+    // sync, so the whole triangulation pass is skipped. model.version is
+    // bumped by every kernel choke point and by touch() for in-place display
+    // edits (paint, hide/soften, entity/layer visibility).
+    const model = this.app.model;
+    const ff = this.faceFilter || null, ef = this.edgeFilter || null, elf = this.elementFilter || null;
+    const sig = model.version + '/' + model.faces.size + '/' + model.edges.size + '/' + model.vertices.size;
+    if (this._rbModel === model && this._rbSig === sig && this._rbFF === ff && this._rbEF === ef && this._rbELF === elf) return;
+    this._rbModel = model; this._rbSig = sig; this._rbVersion = model.version;
+    this._rbFF = ff; this._rbEF = ef; this._rbELF = elf;
     // scene geometry changed: re-render this frame AND refresh the cached
     // shadow map (element shadows track the model, not the camera)
     this.invalidate();
-    this.renderer.shadowMap.needsUpdate = true;
-    const model = this.app.model;
     // unified element Groups first: they claim their faces; the merged mesh
     // renders only the remaining (plain Free Drawing) geometry
     const elementFaceIds = (this.app.elements && this.app.elements.rebuild) ? this.app.elements.rebuild() : new Set();
@@ -331,38 +341,83 @@ class Viewport {
       }
     }
     // display-only view filters (Level View plan isolation) — never model state
-    const ff = this.faceFilter || null, ef = this.edgeFilter || null, elf = this.elementFilter || null;
     // hidden elements leave the render (and with it, picking) entirely —
     // isEntityHidden includes the entity's layer being OFF
     if (this.app.elements)
       for (const el of this.app.elements.list())
         el.group.visible = !this.app.isEntityHidden(el.entity.id) && (elf ? !!elf(el.entity) : true);
+    // per-face triangulation cache — the earcut in THREE.ShapeUtils is
+    // allocation-heavy and was re-run for EVERY face on EVERY commit; a
+    // commit that moves one wall re-triangulated the whole model. Entries are
+    // content-keyed (vertex ids + quantized coordinates + paint state), so
+    // correctness never depends on which code path mutated the face.
+    if (!this._triCache) this._triCache = new Map();
+    const cache = this._triCache;
+    // prune dead-face entries occasionally so long edit sessions cannot grow
+    // the cache without bound
+    if (cache.size > model.faces.size + 256)
+      for (const fid of cache.keys()) if (!model.faces.has(fid)) cache.delete(fid);
     const pos = [], col = [], nor = [];
     this.triangleFace = [];
-    const sel = this.app.sel;
+    this._mergedFaces = []; // [{id, aabb}] — picking broad-phase index
+    let geoChanged = false;
+    const prevFaceCount = this._rbFaceCount || 0;
     for (const f of model.faces.values()) {
       if (f.hidden || (ff && !ff(f)) || elementFaceIds.has(f.id)) continue;
-      const rings = model.rings(f);
-      const outer = model.pts(f.loop);
-      const n = G.loopNormal(outer);
-      if (G.isZero(n)) continue;
-      const { u, v } = G.basisForNormal(n);
-      const o = outer[0];
-      const contour = outer.map(p => new THREE.Vector2(G.to2D(p, o, u, v).x, G.to2D(p, o, u, v).y));
-      const holes = f.holes.map(h => model.pts(h).map(p => new THREE.Vector2(G.to2D(p, o, u, v).x, G.to2D(p, o, u, v).y)));
-      let tris = [];
-      try { tris = THREE.ShapeUtils.triangulateShape(contour, holes); } catch (e) { tris = []; }
-      const all = outer.concat(f.holes.flatMap(h => model.pts(h)));
-      const c = f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 };
-      const a = f.alpha == null ? 1 : f.alpha;
-      for (const t of tris) {
-        for (const idx of t) {
-          const p = all[idx];
-          pos.push(p.x, p.y, p.z); nor.push(n.x, n.y, n.z); col.push(c.r, c.g, c.b, a);
+      // content key: ring vertex ids + quantized coords + color/alpha
+      const parts = [];
+      for (const ring of model.rings(f)) {
+        const pts = model.pts(ring);
+        for (let j = 0; j < ring.length; j++) {
+          const p = pts[j];
+          parts.push(ring[j], Math.round(p.x * 1e5), Math.round(p.y * 1e5), Math.round(p.z * 1e5));
         }
-        this.triangleFace.push(f.id);
       }
+      const key = parts.join(',') + '|' + (f.color || '') + ',' + (f.alpha == null ? 1 : f.alpha);
+      let entry = cache.get(f.id);
+      if (!entry || entry.key !== key) {
+        const outer = model.pts(f.loop);
+        const n = G.loopNormal(outer);
+        if (G.isZero(n)) { cache.delete(f.id); continue; }
+        const { u, v } = G.basisForNormal(n);
+        const o = outer[0];
+        const contour = outer.map(p => new THREE.Vector2(G.to2D(p, o, u, v).x, G.to2D(p, o, u, v).y));
+        const holes = f.holes.map(h => model.pts(h).map(p => new THREE.Vector2(G.to2D(p, o, u, v).x, G.to2D(p, o, u, v).y)));
+        let tris = [];
+        try { tris = THREE.ShapeUtils.triangulateShape(contour, holes); } catch (e) { tris = []; }
+        const all = outer.concat(f.holes.flatMap(h => model.pts(h)));
+        const c = f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 };
+        const a = f.alpha == null ? 1 : f.alpha;
+        const tp = [];
+        let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+        for (const t of tris) {
+          for (const idx of t) {
+            const p = all[idx];
+            tp.push(p.x, p.y, p.z);
+            if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+            if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+            if (p.z < z0) z0 = p.z; if (p.z > z1) z1 = p.z;
+          }
+        }
+        entry = { key, pos: tp, n, r: c.r, g: c.g, b: c.b, a, aabb: [x0, y0, z0, x1, y1, z1] };
+        cache.set(f.id, entry);
+        geoChanged = true; // this face's triangles changed
+      }
+      for (let k = 0; k < entry.pos.length; k += 3) {
+        pos.push(entry.pos[k], entry.pos[k + 1], entry.pos[k + 2]);
+        nor.push(entry.n.x, entry.n.y, entry.n.z);
+        col.push(entry.r, entry.g, entry.b, entry.a);
+      }
+      const ntri = entry.pos.length / 9;
+      for (let k = 0; k < ntri; k++) this.triangleFace.push(f.id);
+      this._mergedFaces.push({ id: f.id, aabb: entry.aabb });
     }
+    this._rbFaceCount = this._mergedFaces.length;
+    if (this._rbFaceCount !== prevFaceCount) geoChanged = true; // faces born/died
+    // the shadow map only needs refreshing when triangles actually changed —
+    // paint jobs and selection passes were re-rendering 2048² shadows for
+    // nothing
+    if (geoChanged) this.renderer.shadowMap.needsUpdate = true;
     const fg = new THREE.BufferGeometry();
     fg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     fg.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
@@ -1118,35 +1173,96 @@ class Viewport {
     if (!this.faceMesh.visible) return null;
     this.applyCamera();
     this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
-    // the merged mesh AND every element's unified Group are pick targets;
-    // each mesh carries its own triangle -> faceId map in userData.
-    // Locked / hidden elements are not pick targets at all.
+    // the merged Free-Drawing mesh is picked through the rebuild()'s cached
+    // per-face AABB + triangle index instead of a Three.js raycast over the
+    // whole (single, huge) geometry — that O(all-triangles) scan was the
+    // hover/mouse-move cost in large Free-mode models. Element Groups are
+    // ordinary small meshes and stay on the raycaster; each carries its own
+    // triangle -> faceId map in userData. Locked / hidden elements are not
+    // pick targets at all.
     const app = this.app;
     const pickable = obj => {
       const eid = obj.userData && obj.userData.elementId;
       if (!eid) return true;
       return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
     };
-    const targets = [this.faceMesh];
-    if (this.elementsRoot) targets.push(...this.elementsRoot.children.filter(pickable));
-    const hits = this.raycaster.intersectObjects(targets, true);
-    if (!hits.length) return null;
+    const targets = this.elementsRoot ? this.elementsRoot.children.filter(pickable) : [];
+    const hits = targets.length ? this.raycaster.intersectObjects(targets, true) : [];
+    const ray = this.raycaster.ray;
+    const merged = this._pickMergedFaces(ray.origin, ray.direction);
+    if (!hits.length && !merged.length) return null;
     // on coincident (coplanar) hits prefer the smallest face — drawing over a
     // face should select the shape you just drew, not the face under it
-    const d0 = hits[0].distance;
+    const d0 = Math.min(hits.length ? hits[0].distance : Infinity, merged.length ? merged[0].t : Infinity);
     let best = null, bestArea = Infinity;
-    for (const h of hits) {
-      if (h.distance - d0 > 1e-4) break;
-      const map = (h.object.userData && h.object.userData.triangleFace) || this.triangleFace;
-      const fid = map[h.faceIndex];
-      if (fid == null) continue;
+    const consider = fid => {
+      if (fid == null) return;
       const f = this.app.model.faces.get(fid);
-      if (!f) continue;
-      if (this.app.isFaceLocked(f) || this.app.isEntityHidden(f.userData && f.userData.bimEntityId)) continue;
+      if (!f) return;
+      if (this.app.isFaceLocked(f) || this.app.isEntityHidden(f.userData && f.userData.bimEntityId)) return;
       const area = this.app.model.faceArea(f);
       if (area < bestArea) { bestArea = area; best = fid; }
+    };
+    for (const h of hits) {
+      if (h.distance - d0 > 1e-4) break;
+      const map = h.object.userData && h.object.userData.triangleFace;
+      if (map) consider(map[h.faceIndex]);
+    }
+    for (const m of merged) {
+      if (m.t - d0 > 1e-4) break;
+      consider(m.fid);
     }
     return best;
+  }
+  // Broad-phase ray pick over the merged mesh using the triangulation cache:
+  // per-face AABB slab test prunes the tree, Möller–Trumbore finds the entry
+  // hit per surviving face. Returns [{t, fid}] sorted by t — the same
+  // information intersectObjects produced for the merged mesh.
+  _pickMergedFaces(ro, rd) {
+    const out = [];
+    if (!this._mergedFaces || !this._triCache) return out;
+    for (const mf of this._mergedFaces) {
+      const e = this._triCache.get(mf.id);
+      if (!e || !e.pos.length) continue;
+      const b = mf.aabb;
+      let tmin = 0, tmax = Infinity, ok = true;
+      for (let ax = 0; ax < 3; ax++) {
+        const o = ax === 0 ? ro.x : ax === 1 ? ro.y : ro.z;
+        const d = ax === 0 ? rd.x : ax === 1 ? rd.y : rd.z;
+        const lo = b[ax], hi = b[ax + 3];
+        if (Math.abs(d) < 1e-12) {
+          if (o < lo || o > hi) { ok = false; break; }
+        } else {
+          let t1 = (lo - o) / d, t2 = (hi - o) / d;
+          if (t1 > t2) { const tt = t1; t1 = t2; t2 = tt; }
+          if (t1 > tmin) tmin = t1;
+          if (t2 < tmax) tmax = t2;
+          if (tmin > tmax) { ok = false; break; }
+        }
+      }
+      if (!ok) continue;
+      const p = e.pos;
+      let best = Infinity;
+      for (let i = 0; i < p.length; i += 9) {
+        const e1x = p[i + 3] - p[i], e1y = p[i + 4] - p[i + 1], e1z = p[i + 5] - p[i + 2];
+        const e2x = p[i + 6] - p[i], e2y = p[i + 7] - p[i + 1], e2z = p[i + 8] - p[i + 2];
+        const px = rd.y * e2z - rd.z * e2y, py = rd.z * e2x - rd.x * e2z, pz = rd.x * e2y - rd.y * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-12) continue;
+        const inv = 1 / det;
+        const tx = ro.x - p[i], ty = ro.y - p[i + 1], tz = ro.z - p[i + 2];
+        const u = (tx * px + ty * py + tz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+        const v = (rd.x * qx + rd.y * qy + rd.z * qz) * inv;
+        if (v < 0 || u + v > 1) continue;
+        const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (t >= 0 && t < best) best = t;
+      }
+      if (best < Infinity) out.push({ t: best, fid: mf.id });
+    }
+    out.sort((x, y) => x.t - y.t);
+    return out;
   }
   // Downloaded-asset instances (BlenderKit): the groups under the
   // blenderkit-assets root are real meshes, so a plain raycast finds them.

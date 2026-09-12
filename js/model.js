@@ -12,6 +12,12 @@ let __eid = 1;
 const nid = () => __eid++;
 // canonical key for the vertex pair of an edge (ids are numbers from nid())
 const edgePairKey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+// params must be deep-copied on every snapshot (they are mutated in place by
+// type changes and parametric edits). structuredClone is 2-5x faster than
+// the JSON round-trip and never was about parsing — fall back for old runtimes.
+const _deepClone = (typeof structuredClone === 'function')
+  ? structuredClone
+  : (o) => JSON.parse(JSON.stringify(o));
 
 class Model {
   constructor() {
@@ -52,7 +58,17 @@ class Model {
     // wasted work — and it was the dominant cost of dragging scripted
     // elements around in anything but an empty project
     this.noAutoIntersect = false;
+    // mutation counter — bumped by every choke point below (_addEdge,
+    // _delEdge, setVertex, deleteFace, load) and by touch() for display-only
+    // edits (paint, hide/soften) that mutate faces/edges in place. Consumers
+    // (view.rebuild early-exit, no-op transaction detection) compare it to
+    // skip work when nothing changed. NOT serialized: it is a change signal,
+    // not model state.
+    this.version = 0;
   }
+  /** Manually signal a mutation for edits that bypass the choke points
+   *  (face color/alpha, hidden flags, entity hide/lock, layer visibility). */
+  touch() { this.version++; }
   // BIM operations bracket their mutations with bimHold = true/false (a
   // depth counter: nested holds release only when the outermost one ends).
   // On final release, edges BORN during the hold and attached to no face
@@ -183,6 +199,7 @@ class Model {
     this._vhRemove(vid);
     this.vertices.set(vid, p);
     this._vhAdd(vid, p, Model.WELD_EPS * 2);
+    this.version++; // a move: cached triangulations/AABBs are stale
   }
 
   // B-rep invariant #2 — T-junction welding for drawn points: reuse a nearby
@@ -200,12 +217,14 @@ class Model {
   _addEdge(e) {
     this.edges.set(e.id, e);
     this._edgeIndex.set(edgePairKey(e.a, e.b), e.id);
+    this.version++;
     return e;
   }
   _delEdge(id) {
     const e = this.edges.get(id);
     if (!e) return;
     this.edges.delete(id);
+    this.version++;
     const k = edgePairKey(e.a, e.b);
     if (this._edgeIndex.get(k) === id) this._edgeIndex.delete(k);
   }
@@ -954,7 +973,7 @@ class Model {
     } catch (err) { return null; }
   }
 
-  deleteFace(id) { this.faces.delete(id); this.gc(); }
+  deleteFace(id) { this.faces.delete(id); this.version++; this.gc(); }
 
   // Wide construction sweep: bracket a whole tool commit (which may span
   // several nested bimHold sections — join rebuild, extrusion, stamping)
@@ -3044,7 +3063,7 @@ class Model {
       // params MUST be deep-copied: they are mutated in place by type changes
       // and parametric edits — sharing them would retroactively mutate every
       // live undo snapshot (the wall-thickness-after-undo bug)
-      bim: (this.bimEntities || []).map(x => ({ ...x, params: x.params ? JSON.parse(JSON.stringify(x.params)) : x.params, faces: [...(x.faces || [])], edges: [...(x.edges || [])] })),
+      bim: (this.bimEntities || []).map(x => ({ ...x, params: x.params ? _deepClone(x.params) : x.params, faces: [...(x.faces || [])], edges: [...(x.edges || [])] })),
       f: [...this.faces.values()].map(x => ({
         id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), gid: x.gid || 0,
         userData: x.userData || null,
@@ -3055,6 +3074,7 @@ class Model {
   }
   load(data) {
     if (!data || !data.v) return;
+    this.version++; // wholesale swap: every cached view of the model is stale
     this.vertices = new Map(data.v.map(([id, x, y, z]) => [id, { x, y, z }]));
     this.edges = new Map((data.e || []).map(([id, a, b, cid, gid, ud, hid]) => [id, { id, a, b, curveId: cid || 0, gid: gid || 0, userData: ud || null, hidden: !!hid }]));
     this._edgeIndex = new Map(); // derived from the edges, never serialized
@@ -3085,7 +3105,7 @@ class Model {
     // methods) — plain record copies would strip the GridSystem API
     this.grids = data.grid ? data.grid.map(g => (typeof GridLine === 'function' ? GridLine.fromRecord(g) : null) || { ...g }) : (this.grids || []);
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
-      ...x, params: x.params ? JSON.parse(JSON.stringify(x.params)) : x.params,
+      ...x, params: x.params ? _deepClone(x.params) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],
     }));
     // downloaded-asset instance list — the app diffs its THREE groups

@@ -476,7 +476,28 @@
   }
 
   // ------------------------------------------------------------------ tick
+  // The options bar / properties refresh was a blind 250 ms poll — DOM
+  // queries, innerHTML diffs and style writes four times a second that
+  // fought the geometry work for the main thread. A cheap state
+  // fingerprint skips both renders when nothing they depend on changed;
+  // the 2 s safety net catches anything the fingerprint misses.
+  let lastTickSig = null, lastTickAt = 0;
   function tick() {
+    const a = window.app;
+    let sig = '';
+    if (a) {
+      const o = a.bimOptions || {};
+      const h = o.hosted || {};
+      sig = [a.mode, a.tool && a.tool.id, a.sketchMode, o.thickness, o.baseLevel, o.topConstraint,
+        o.unconnectedHeight, o.locationLine, o.chain, o.primitive, o.family, o.convertMode,
+        h.width, h.height, h.sill, h.depth, h.count, h.spacing,
+        a.levelManager ? a.levelManager.levels.length : 0,
+        a.families ? a.families.list.length : 0].join('|');
+    }
+    const now = Date.now();
+    if (sig === lastTickSig && now - lastTickAt < 2000) return;
+    lastTickSig = sig;
+    lastTickAt = now;
     renderOptionsBar();
     renderProps();
   }

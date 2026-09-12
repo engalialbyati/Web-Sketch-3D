@@ -225,6 +225,8 @@ class Transaction {
     this.app = app;
     this.label = label;
     this.snapshot = app.model.serialize();
+    this.sig = app._undoSig();
+    this.snapshot._sig = this.sig; // dedupe key carried with the undo entry
     this.finished = false;
     this.rolledBack = false; // visible to callers: the tx-guard rollback in
                              // commit() restores geometry silently — entity
@@ -232,18 +234,26 @@ class Transaction {
   }
   commit() {
     if (this.finished) return;
+    const A = this.app;
+    // no-op commit: nothing undoable changed between begin() and now (guard
+    // refusals, aborted gestures, metadata-cleanups). Pushing the identical
+    // snapshot would only pollute the undo stack — Ctrl+Z would appear to
+    // "do nothing" once per no-op — and clearing redo for it destroys real
+    // history. Skip both; opDone still runs so UI/db stay in sync.
+    this._noop = A._undoSig() === this.sig;
     // Engine tx guard: a commit that INTRODUCES new structural errors rolls
     // back. Pre-existing errors (from an earlier crash or external edit) are
     // reported once but never block legitimate work on the model — the guard
     // compares the error state before vs after this edit, not the absolute.
-    if (window.Engine && Engine.txGuard && !this._validated) {
-      const after = this.app.model.validate();
+    // A no-op commit cannot have introduced anything — skip the validate.
+    if (window.Engine && Engine.txGuard && !this._validated && !this._noop) {
+      const after = A.model.validate();
       if (!after.ok && after.errors && after.errors.length) {
         // check whether these errors pre-date this edit: validate the
         // pre-transaction snapshot (a deep copy — safe to load into a scratch)
         let preExisting = 0;
         try {
-          const scratch = Object.create(Object.getPrototypeOf(this.app.model));
+          const scratch = Object.create(Object.getPrototypeOf(A.model));
           scratch.load(JSON.parse(JSON.stringify(this.snapshot)));
           const before = scratch.validate();
           preExisting = before.ok ? 0 : (before.errors || []).length;
@@ -251,7 +261,7 @@ class Transaction {
         if (after.errors.length > preExisting) {
           this.finished = true;
           this.rollback();
-          this.app.toast(`"${this.label}" rolled back — invalid geometry`, true);
+          A.toast(`"${this.label}" rolled back — invalid geometry`, true);
           console.error(`[tx-guard] ${this.label}:`, after.errors.slice(0, 3));
           return;
         }
@@ -263,13 +273,14 @@ class Transaction {
       }
     }
     this.finished = true;
-    const A = this.app;
-    A.undoStack.push(this.snapshot);
-    if (A.undoStack.length > Transaction.MAX_UNDO) A.undoStack.shift();
-    A.redoStack.length = 0;
+    if (!this._noop) {
+      A.undoStack.push(this.snapshot);
+      if (A.undoStack.length > Transaction.MAX_UNDO) A.undoStack.shift();
+      A.redoStack.length = 0;
+    }
     if (A.model && A.model.endEdgeSweep)
       while (A.model._sweepStack && A.model._sweepStack.length) A.model.endEdgeSweep(); // drain: an interrupted NESTED bracket must not shield residue
-    if (A.validateOnCommit) {
+    if (A.validateOnCommit && !this._noop) {
       const v = A.model.validate();
       if (!v.ok) console.error(`[${this.label}] model invalid after commit:`, v.errors);
     }
@@ -3390,6 +3401,7 @@ class App {
   /** Toggle lock/hidden on a BIM element, grid line, or level.
    * patch: { locked?: bool, hidden?: bool } */
   setItemFlags(kind, id, patch, lvlId) {
+    this.model.touch(); // display-state change: the rebuild no-op gate must see it
     // bulk master over a set of ELEMENTS (category header in the browser):
     // id is a comma-joined entity id list — one rebuild, one notification
     if (kind === 'elements') {
@@ -3691,6 +3703,7 @@ class App {
   }
   /** Post-layer-change sync: one rebuild + autosave + panel refreshes. */
   onLayersChanged() {
+    this.model.touch(); // visibility/ownership is display state the gate must see
     this.refreshEdgeStamps();
     this.view.rebuild();
     this._saveAutosave();
@@ -3825,6 +3838,7 @@ class App {
     if (typeof EditInPlace !== 'function') { this.toast('Edit-in-place module not loaded yet', true); return; }
     this._eip = new EditInPlace(this, ent, snapshot, hiddenF, hiddenE, preHiddenF, preHiddenE);
     this._eip.enter();
+    this.model.touch(); // isolation flipped hidden flags — bypass the rebuild gate
     this.view.rebuild();
     this.view.zoomExtents();
   }
@@ -4398,12 +4412,14 @@ class App {
         if (!A.sel.faces.size) return A.toast('Select faces to reverse');
         A.run('reverse faces', m => {
           for (const id of A.sel.faces) { const f = m.faces.get(id); if (f) f.loop.reverse(); }
+          m.touch(); // winding flip: no edge/vertex change, render must refresh
         });
       },
       hideSelected: () => {
         A.run('hide', m => {
           for (const id of A.sel.faces) { const f = m.faces.get(id); if (f) f.hidden = true; }
           for (const id of A.sel.edges) { const e = m.edges.get(id); if (e) e.hidden = true; }
+          m.touch();
         });
         A.clearSelection();
       },
@@ -4411,6 +4427,7 @@ class App {
         A.run('unhide', m => {
           for (const f of m.faces.values()) f.hidden = false;
           for (const e of m.edges.values()) e.hidden = false;
+          m.touch();
         });
       },
       toggleAxes: () => { A.axesOn = !A.axesOn; A.view.setAxes(A.axesOn); },
@@ -4797,7 +4814,7 @@ class App {
       const pent = f && this.bim.getEntityForFace(f);
       if (pent && !this._eip) items.push([`Edit In Place — ${pent.type} ${pent.id}`, () => this.enterEditInPlace(pent.id)]);
       items.push([`Paint (${this.currentMaterial.name})`, () => {
-        this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; } });
+        this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; } m.touch(); });
       }]);
       items.push(['Reverse Face', () => { this.run('reverse face', m => { const ff = m.faces.get(pick.face); if (ff) ff.loop.reverse(); }); }]);
       items.push(['Push/Pull', () => this.setTool('pushpull')]);
@@ -6539,6 +6556,25 @@ class App {
   }
 
   // ------------------------------------------------------------------ undo
+  /** Cheap identity of ALL undoable model state: the geometry mutation
+   *  counter, element counts, and the metadata transactions that change no
+   *  geometry (rename level/grid/layer/group, level elevation edits). Two
+   *  commits with the same signature have identical undo content, so the
+   *  second needs no duplicate snapshot on the undo stack. Entity PARAMETER
+   *  values are not listed individually — every parametric edit rebuilds
+   *  geometry, which bumps model.version. */
+  _undoSig() {
+    const m = this.model;
+    let s = m.version + '/' + m.faces.size + '/' + m.edges.size + '/' + m.vertices.size
+      + '/' + (m.bimEntities || []).length + '/' + (m.levels || []).length + '/' + (m.layers || []).length
+      + '/' + (m.grids || []).length;
+    for (const l of m.levels) s += '|L' + l.id + ':' + l.elevation + ':' + l.name;
+    for (const l of m.layers) s += '|Y' + l.id + ':' + l.name;
+    for (const [, g] of m.groups) s += '|G' + g.id + ':' + g.name;
+    for (const g of m.grids) s += '|R' + (g ? g.id + ':' + (g.name || '') : '');
+    for (const e of m.bimEntities) s += '|E' + e.id;
+    return s;
+  }
   undo() {
     if (!this.undoStack.length) { this.toast('Nothing to undo'); return; }
     this.redoStack.push(this.model.serialize());

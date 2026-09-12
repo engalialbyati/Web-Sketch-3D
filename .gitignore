@@ -12,3 +12,7 @@ cache/
 
 # ZCode session state (plans, artifacts)
 .zcode/
+
+# Rust build artifacts
+target/
+pkg/
