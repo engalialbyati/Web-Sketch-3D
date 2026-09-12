@@ -1185,6 +1185,101 @@ class ConvertTool extends Tool {
     if (app._dbSyncDebounced) app._dbSyncDebounced();
     return ent;
   }
+  // EDGE ➔ ELEMENT: a free line becomes a solid member directly — the edge is
+  // the element's centerline. A mostly-horizontal edge grows a beam-like
+  // prism (width across, height UP from the line); a vertical edge grows a
+  // column-like prism (width × depth centered on the line). The body is
+  // FIXED like every converted element: the drawn line IS the design.
+  static convertEdge(app, edge, mode, opts = {}) {
+    const m = app.model;
+    if (!edge || !m.edges.has(edge.id)) return null;
+    if (edge.userData && edge.userData.bimEntityId) { app.toast('That edge is already a BIM element', true); return null; }
+    const A = m.vertices.get(edge.a), B = m.vertices.get(edge.b);
+    if (!A || !B) return null;
+    const d = G.norm(G.sub(B, A));
+    if (G.isZero(d)) { app.toast('Pick a real edge — that one is degenerate', true); return null; }
+    const w = Math.max(0.01, opts.width != null ? opts.width : 0.2);
+    const h = Math.max(0.01, opts.height != null ? opts.height : 0.4);
+    // profile basis ⊥ the edge: horizontal edges get width across + height
+    // vertical (beam); vertical edges get width × depth centered (column)
+    const vertical = Math.abs(d.z) >= 0.9;
+    let profile; // per cap end (z-offset along the edge): [corner pts]
+    if (vertical) {
+      const u = Math.abs(d.z) > 0.999 ? G.v(1, 0, 0) : G.norm(G.cross(d, G.v(0, 0, 1)));
+      const v = G.norm(G.cross(d, u));
+      profile = e => [
+        G.add(G.add(e, G.mul(u, -w / 2)), G.mul(v, -h / 2)),
+        G.add(G.add(e, G.mul(u, w / 2)), G.mul(v, -h / 2)),
+        G.add(G.add(e, G.mul(u, w / 2)), G.mul(v, h / 2)),
+        G.add(G.add(e, G.mul(u, -w / 2)), G.mul(v, h / 2)),
+      ];
+    } else {
+      const u = G.norm(G.cross(d, G.v(0, 0, 1))); // horizontal, ⊥ the edge
+      const v = G.v(0, 0, 1);
+      profile = e => [
+        G.add(e, G.mul(u, -w / 2)),            // bottom left
+        G.add(e, G.mul(u, w / 2)),             // bottom right
+        G.add(G.add(e, G.mul(u, w / 2)), G.mul(v, h)), // top right
+        G.add(G.add(e, G.mul(u, -w / 2)), G.mul(v, h)), // top left
+      ];
+    }
+    const pA = profile(A), pB = profile(B);
+    // six rings of the prism (coordinate welds them into one body)
+    const rings = [
+      [pA[0], pA[1], pA[2], pA[3]],            // start cap
+      [pB[0], pB[3], pB[2], pB[1]],            // end cap
+      [pA[0], pB[0], pB[1], pA[1]],            // side 1
+      [pA[1], pB[1], pB[2], pA[2]],            // side 2
+      [pA[2], pB[2], pB[3], pA[3]],            // side 3
+      [pA[3], pB[3], pB[0], pA[0]],            // side 4
+    ];
+    const facesBefore = new Set(m.faces.keys());
+    let ok = false;
+    app.transaction.run('convert edge to ' + mode, mm => {
+      for (const ring of rings) mm.addFaceFromRings(ring);
+      // the drawn line is consumed: it becomes the member's centerline, and
+      // leaving it would draw a stray line through the new solid
+      if (mm.deleteEdgeIds) mm.deleteEdgeIds([edge.id]);
+      ok = true;
+    });
+    if (!ok) return null;
+    const newFaces = [...m.faces.keys()].filter(id => !facesBefore.has(id)).map(id => m.faces.get(id));
+    if (!newFaces.length) { app.toast('Could not build the member along that edge', true); return null; }
+    // orient every new face OUTWARD (rings above are wound per-side; a wrong
+    // winding would render as a reversed/blue face)
+    const center = G.mul(G.add(A, B), 0.5);
+    for (const f of newFaces) {
+      const n = G.loopNormal(m.pts(f.loop));
+      if (G.isZero(n)) continue;
+      const c = m.faceCentroid(f);
+      if (G.dot(n, G.sub(c, center)) < 0) f.loop.reverse();
+    }
+    const roles = {};
+    for (const f of newFaces) {
+      const c = m.faceCentroid(f);
+      const n = G.loopNormal(m.pts(f.loop));
+      roles[f.id] = Math.abs(n.z) > 0.9
+        ? (c.z < center.z ? 'bottom' : 'top')
+        : 'side';
+    }
+    const newEdges = [];
+    for (const f of newFaces) for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+      const e2 = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+      if (e2 && !e2.userData) newEdges.push(e2.id);
+    }
+    const ent = app.bim.create(mode, {
+      source: 'convert-edge',
+      fixed: true,
+      name: opts.name || null,
+      width: w, height: h,
+      baseline: [[A.x, A.y, A.z], [B.x, B.y, B.z]],
+      baseLevel: app.bimOptions.baseLevel,
+      topConstraint: app.bimOptions.topConstraint,
+    }, roles, [...new Set(newEdges)]);
+    app.toast(`Converted the edge to ${mode} — ${w.toFixed(2)} × ${h.toFixed(2)} m profile`);
+    if (app._dbSyncDebounced) app._dbSyncDebounced();
+    return ent;
+  }
   static heightFor(app) {
     const o = app.bimOptions;
     const baseZ = app.levelManager.getElevation(o.baseLevel);

@@ -5162,6 +5162,21 @@ class App {
             this.toast('These faces already form an element — convert works on free (unclaimed) faces only', true)]);
         }
       }
+      // EDGE ➔ ELEMENT: free line(s) convert directly into solid members —
+      // the line becomes the element's centerline (no face needed first)
+      if (!this.sel.faces.size && this.sel.edges.size
+        && window.BimTools && BimTools.ConvertTool) {
+        const selEdges = [...this.sel.edges].map(id => this.model.edges.get(id)).filter(Boolean);
+        const freeEdges = selEdges.filter(e => !(e.userData && e.userData.bimEntityId));
+        if (freeEdges.length)
+          items.push([freeEdges.length === 1
+            ? 'Convert Edge to Element…'
+            : `Convert ${freeEdges.length} Edges to Element…`,
+            () => this.convertEdgeDialog(freeEdges.map(e => e.id))]);
+        else if (selEdges.length)
+          items.push(['Edge already belongs to an element', () =>
+            this.toast('That edge is already part of an element — convert works on free (unclaimed) edges', true)]);
+      }
       items.push([`Erase Selection (Del)`, () => this.deleteSelection()]);
       if (this.sel.faces.size && !wholeGroup) items.push(['Reverse Faces', () => this.action('reverseFaces')]);
       items.push(['Hide', () => this.action('hideSelected')]);
@@ -5250,7 +5265,13 @@ class App {
       const b = document.createElement('button');
       b.className = 'dlg-btn' + (fn ? '' : ' secondary');
       b.textContent = label;
-      b.addEventListener('click', () => { this.closeDialog(); if (fn) fn(); });
+      // a handler may refuse (return exactly false) — its inputs were wrong,
+      // so the dialog STAYS OPEN for a correction instead of closing and
+      // leaving the user with a missed toast ("nothing happened")
+      b.addEventListener('click', () => {
+        const r = fn ? fn() : undefined;
+        if (r !== false) this.closeDialog();
+      });
       bwrap.appendChild(b);
     }
     dl.querySelector('.dlg-x').addEventListener('click', () => this.closeDialog());
@@ -5329,32 +5350,111 @@ class App {
         let mode = picked ? picked.value : 'column';
         if (mode === '__custom') {
           const name = (document.getElementById('cv-custom').value || '').trim().toLowerCase().replace(/\s+/g, '_');
-          if (!name) { this.toast('Type a name for the custom element', true); return; }
+          if (!name) { this.toast('Type a name for the custom element', true); return false; }
           mode = name;
         }
-        // the user's element name — an existing catalog type with the same
-        // name in the chosen family is reused; otherwise it is created
+        // the element's display name — an existing catalog type with the same
+        // name in the chosen family is reused; otherwise it is created. A
+        // BLANK name auto-generates (type label + count) so the flow never
+        // stalls waiting for input
         const nameEl = document.getElementById('cv-name');
-        const name = nameEl ? nameEl.value.trim() : '';
-        if (!name) { this.toast('Give the element a name', true); return; }
-        if (!(window.BimTools && BimTools.ConvertTool)) return;
+        const typed = nameEl ? nameEl.value.trim() : '';
+        const label = { floor: 'Finish Floor', slab: 'Structural Slab', wall: 'Wall', column: 'Column', beam: 'Beam' }[mode]
+          || (mode[0].toUpperCase() + mode.slice(1).replace(/_/g, ' '));
+        let name = typed;
+        if (!name) {
+          let n = 1;
+          while (this.bim.entities.some(e => (e.params || {}).name === `${label} ${n}`)) n++;
+          name = `${label} ${n}`;
+        }
+        if (!(window.BimTools && BimTools.ConvertTool)) return false;
         if (multi) {
           const faces = ids.map(id => this.model.faces.get(id)).filter(Boolean)
             .filter(f => !(f.userData && f.userData.bimEntityId));
-          if (!faces.length) { this.toast('Those faces are gone or already claimed', true); return; }
+          if (!faces.length) { this.toast('Those faces are gone or already claimed', true); return false; }
           BimTools.ConvertTool.convertFaces(this, faces, mode, { name });
         } else {
           const hEl = document.getElementById('cv-height');
           const h = hEl ? parseFloat(hEl.value) : NaN;
           const ff = this.model.faces.get(ids[0]);
-          if (!ff) { this.toast('That face is gone', true); return; }
+          if (!ff) { this.toast('That face is gone', true); return false; }
           BimTools.ConvertTool.convertFace(this, ff, mode, { name, height: isNaN(h) ? undefined : h });
         }
+        this.toast(typed ? `Converted — "${name}"` : `Converted — named "${name}" (type a name first to choose your own)`);
         this.clearSelection();
       }],
     ]);
     const custom = document.getElementById('cv-custom');
     if (custom) custom.addEventListener('click', e => e.stopPropagation());
+  }
+  // Convert selected free EDGE(S) into solid members directly — the line is
+  // the element's centerline: a horizontal line grows a beam-like prism
+  // (width across, height up), a vertical line grows a column-like prism
+  // (width × depth centered). The drawn line is CONSUMED by the conversion.
+  // Multiple edges become one member each, numbered from the shared name.
+  convertEdgeDialog(eids) {
+    const ids = Array.isArray(eids) ? eids : [eids];
+    const e0 = this.model.edges.get(ids[0]);
+    if (!e0) return;
+    const A = this.model.vertices.get(e0.a), B = this.model.vertices.get(e0.b);
+    const vertical = A && B && Math.abs(B.z - A.z) >= 0.9 * Math.hypot(B.x - A.x, B.y - A.y, B.z - A.z);
+    this.dialog(ids.length > 1 ? `Convert ${ids.length} Edges to Element` : 'Convert Edge to Element', `
+      <div class="ob-lab">Element name — the type shown in the Element Browser</div>
+      <input type="text" id="ce-name" placeholder="${vertical ? 'e.g. Steel Column SHS 200' : 'e.g. Concrete Beam 200x400'}"
+        style="width:100%;margin:2px 0 10px;padding:5px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+      <div class="ob-lab">Element type</div>
+      <div style="display:flex;gap:12px;align-items:center;margin:4px 0 10px;flex-wrap:wrap">
+        ${[['beam', 'Beam'], ['column', 'Column'], ['wall', 'Wall'], ['__custom', 'Custom…']].map(([v, n], i) => `
+        <label style="display:flex;gap:5px;align-items:center;cursor:pointer">
+          <input type="radio" name="cetype" value="${v}"${(vertical ? v === 'column' : v === 'beam') ? ' checked' : ''}> ${n}
+        </label>`).join('')}
+        <input type="text" id="ce-custom" placeholder="e.g. truss, bracing"
+          style="width:150px;padding:3px 6px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+      </div>
+      <div class="ob-lab">Profile (m) — ${vertical ? 'width × depth of the column' : 'width across × height of the beam'}</div>
+      <div style="display:flex;gap:8px;margin:4px 0 6px">
+        <input type="number" id="ce-width" step="0.05" min="0.01" value="${vertical ? 0.3 : 0.2}"
+          style="width:110px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+        <span style="align-self:center">×</span>
+        <input type="number" id="ce-height" step="0.05" min="0.01" value="${vertical ? 0.3 : 0.4}"
+          style="width:110px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">
+      </div>
+      <p style="opacity:.75;margin:2px 0 0">The line becomes the member's centerline and is consumed by the conversion. The element is <b>fixed</b>: its geometry is the design.</p>
+    `, [
+      ['Cancel', null],
+      ['Convert', () => {
+        const picked = document.querySelector('input[name="cetype"]:checked');
+        let mode = picked ? picked.value : 'beam';
+        if (mode === '__custom') {
+          const cname = (document.getElementById('ce-custom').value || '').trim().toLowerCase().replace(/\s+/g, '_');
+          if (!cname) { this.toast('Type a name for the custom element', true); return false; }
+          mode = cname;
+        }
+        // blank name auto-generates — the flow must never stall on input
+        const typed = (document.getElementById('ce-name').value || '').trim();
+        const label = { column: 'Column', beam: 'Beam' }[mode]
+          || (mode[0].toUpperCase() + mode.slice(1).replace(/_/g, ' '));
+        let name = typed;
+        if (!name) {
+          let k = 1;
+          while (this.bim.entities.some(e => (e.params || {}).name === `${label} ${k}`)) k++;
+          name = `${label} ${k}`;
+        }
+        const w = parseFloat(document.getElementById('ce-width').value);
+        const h = parseFloat(document.getElementById('ce-height').value);
+        if (!isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) { this.toast('Profile width and height must be positive', true); return false; }
+        if (!(window.BimTools && BimTools.ConvertTool)) return false;
+        let n = 0;
+        for (const eid of ids) {
+          const e = this.model.edges.get(eid);
+          if (!e || (e.userData && e.userData.bimEntityId)) continue;
+          const made = BimTools.ConvertTool.convertEdge(this, e, mode, { name: ids.length > 1 ? `${name} ${n + 1}` : name, width: w, height: h });
+          if (made) n++; // only successful members consume a numbered name
+        }
+        if (!n) { this.toast('Those edges are gone or already claimed', true); return false; }
+        this.clearSelection();
+      }],
+    ]);
   }
   showFeatures() {
     let html = '<div class="features">';
