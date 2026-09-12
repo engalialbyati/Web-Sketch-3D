@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "three-mesh-bvh": "^0.5.6"
   }
 }

@@ -63,6 +63,24 @@ class Viewport {
     this._buildModelGroups();
     this._buildOverlays();
 
+    // BVH-accelerated raycasts (the ThatOpen pattern): patch the prototype
+    // once, and every mesh whose geometry got a boundsTree raycasts in
+    // O(log n) instead of O(triangles). Element meshes get their tree in
+    // rebuildElement/_syncElementGeometry (BimElement.js) right after the
+    // buffers are filled; trees die with the geometry (disposeBoundsTree
+    // is wired into THREE's dispose below).
+    if (window.MeshBVHLib) {
+      THREE.Mesh.prototype.raycast = MeshBVHLib.acceleratedRaycast;
+      THREE.LineSegments.prototype.raycast = MeshBVHLib.acceleratedRaycast;
+      THREE.BufferGeometry.prototype.computeBoundsTree = MeshBVHLib.computeBoundsTree;
+      THREE.BufferGeometry.prototype.disposeBoundsTree = MeshBVHLib.disposeBoundsTree;
+      const _geoDispose = THREE.BufferGeometry.prototype.dispose;
+      THREE.BufferGeometry.prototype.dispose = function () {
+        if (this.boundsTree) this.disposeBoundsTree();
+        _geoDispose.call(this);
+      };
+    }
+
     this.raycaster = new THREE.Raycaster();
 
     this._resize();
@@ -422,6 +440,8 @@ class Viewport {
     fg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     fg.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
     fg.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+    if (fg.computeBoundsTree && pos.length > 9 * 64) // BVH pays off above a few dozen tris
+      fg.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
     this.faceMesh.geometry.dispose();
     this.faceMesh.geometry = fg;
 

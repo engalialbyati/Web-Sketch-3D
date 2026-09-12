@@ -70,6 +70,12 @@
         geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
         geo.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
         geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+        // BVH for picking: O(log n) raycasts against this element (the
+        // prototype.raycast patch in render.js routes through it). Built
+        // lazily-on-first-build; SAH strategy, leaf 1 — element meshes are
+        // small so this is cheap relative to the triangulation above.
+        if (geo.computeBoundsTree)
+          geo.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
         const mesh = new THREE.Mesh(geo, faceMaterial);
         mesh.castShadow = true;
         mesh.userData.elementId = this.entity.id;
