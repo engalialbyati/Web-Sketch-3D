@@ -241,6 +241,28 @@
       const p = pl.p;
       const { params } = this._boundsAt(p, inf.kind);
       params.rotation = pl.rot;
+      // DUPLICATE GUARD (walls/beams have existsLike): a second column at
+      // the same base + level shredded the first into partitioned rings
+      // with missing edges (invalid model, guard rollbacks on later edits)
+      // — grid-snapped re-clicks at one intersection hit this constantly.
+      // NOTE: inline loop, not bim.existsLike — that method returned false
+      // for exact column matches in live testing (works for walls/beams);
+      // revisit it separately.
+      {
+        const bl = params.baseLevelId || params.baseLevel;
+        const dup = app.bim.entities.some(e => {
+          if (e.type !== 'column' || !e.params || !e.params.base) return false;
+          const ebl = e.params.baseLevel || e.params.baseLevelId;
+          if (bl && ebl && bl !== ebl) return false;
+          return +e.params.base[0].toFixed(3) === +params.base[0].toFixed(3)
+            && +e.params.base[1].toFixed(3) === +params.base[1].toFixed(3)
+            && Math.abs((e.params.base[2] || 0) - (params.base[2] || 0)) < 1e-3;
+        });
+        if (dup) {
+          app.toast('A column already stands at this spot — move the cursor or delete it first', true);
+          return;
+        }
+      }
       const facesBefore = new Set(app.model.faces.keys());
       const edgesBefore = new Set(app.model.edges.keys());
       let ok = false;

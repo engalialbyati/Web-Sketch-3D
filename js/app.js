@@ -5219,6 +5219,20 @@ class App {
       }
       best = bestLive && bestLiveD <= bestD ? bestLive : best;
       if (best) {
+        // GRID-INTERSECTION PRIORITY over the artifacts of the column
+        // STANDING at that intersection: a tier-1 point on the column (face
+        // corners, band-edge midpoints, face picks) is an OFFSET of the
+        // intersection — the wall being drawn wants the intersection itself
+        // (params keep the centerline; FACE-STOP/grid trim retreats the
+        // geometry to the column faces). Without this, room-perimeter walls
+        // chained column-to-column zigzagged between face artifacts instead
+        // of closing the loop (0.8 m diagonal stubs where 6 m spans belong).
+        if (this.gridManager && this.gridManager.grids.length && typeof SnapSystem !== 'undefined') {
+          const gx = SnapSystem.snap(this, ev);
+          if (gx && gx.kind === 'gridX'
+            && Math.hypot(best.p.x - gx.p.x, best.p.y - gx.p.y) < 0.75)
+            return { p: G.clone(gx.p), kind: 'gridX', label: gx.label };
+        }
         // HIDDEN-CENTERLINE override: the wall's own band-edge MIDPOINTS are
         // tier-1 artifacts of its side faces — when the cursor is on the
         // wall, the parametric centerline is the intent (a column centers
