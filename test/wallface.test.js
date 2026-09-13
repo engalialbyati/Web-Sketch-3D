@@ -182,15 +182,17 @@ module.exports = h => {
     // plan-view click z of 0 both elements carry
     w.m.levels = [
       { id: 'lvl_1', name: 'L1', elevation: 0 },
-      { id: 'lvl_2', name: 'L2', elevation: 3.2 },
+      { id: 'lvl_2', name: 'L2', elevation: 3 },
     ];
     // a Level-1 column (params.base[2] = 0 — drawn in a plan view)
     const col = buildColumn(w, 4, 0, 0);
     col.params.baseLevelId = 'lvl_1';
-    // a Level-2 wall drawn right over it (params.base[2] = 0 as well)
+    // a Level-2 wall drawn right over it (params.base[2] = 0 as well): the
+    // spans TOUCH at the floor plane (col 0-3, wall 3-6) — bearing, not divide
     const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
     wall.params.baseLevel = 'lvl_2';
     runDirty(w);
+    w.bim.planTrimWall(wall.id);
     const walls = w.bim.entities.filter(e => e.type === 'wall');
     eq(walls.length, 1, 'the Level-2 wall never divides over a Level-1 column');
     const xs = allWallXs(w);

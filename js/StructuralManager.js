@@ -475,7 +475,11 @@
         // beam above a slab never reaches the wall): plan x/y alone can't
         // tell this floor's intruder from the one directly above it
         const wspan2 = this.wallSpanZ(p), wz0 = wspan2[0], wz1 = wspan2[1];
-        if (z1 < wz0 - 1e-3 || z0 > wz1 + 1e-3) continue;
+        // GENUINE overlap only: spans that merely TOUCH at a floor plane
+        // (a Level-1 column topping at z=3 under a Level-2 wall starting
+        // at z=3) are a bearing relationship — never a divide. Same logic
+        // as wallEndRetreats' gate.
+        if (z1 <= wz0 + 1e-3 || z0 >= wz1 - 1e-3) continue;
         // distance from intruder center to the wall baseline (cross-run)
         const rx = cx - ax, ry = cy - ay;
         const tAlong = rx * ux + ry * uy;
