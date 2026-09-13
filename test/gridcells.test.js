@@ -9,30 +9,21 @@
 // the options bar's Enter triggers.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of [
-    'js/geometry.js', 'js/model.js', 'js/GridLine.js', 'js/GridManager.js',
-    'js/StructuralManager.js', 'js/tools/base.js', 'js/tools/draw.js',
-    'js/tools/bim.js', 'js/features/gridplace.js',
-  ]) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const s0 = appSrc.indexOf('class BimEntityManager {');
-  const s1 = appSrc.indexOf('\nclass App {');
-  vm.runInContext(appSrc.slice(s0, s1), ctx, { filename: 'app.js#BimEntityManager' });
+  // everything loads through the harness's single audited vm loader
+  const L = h.loadModel([
+    'js/GridLine.js', 'js/GridManager.js',
+    'js/tools/base.js', 'js/tools/draw.js',
+    'js/tools/bim.js', 'js/features/gridplace.js', 'js/app.js',
+  ]);
+  const sandbox = L.sandbox;
+  const window = L.window;
 
-  const { G, Model, GridPlaceFeature } = sandbox.window;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
-  const GridManager = vm.runInContext('GridManager', ctx);
-  const StructuralManager = sandbox.window.StructuralManager;
+  const { G, Model, GridPlaceFeature } = window;
+  const BimEntityManager = window.BimEntityManager;
+  const GridManager = window.GridManager;
+  const StructuralManager = window.StructuralManager;
 
   const makeWorld = () => {
     const m = new Model();
@@ -90,7 +81,7 @@ module.exports = h => {
     const w = makeWorld();
     w.gm.generateOrthogonal({ xSpacings: [3], ySpacings: [3], origin: [0, 0] });
     eq(w.tool._cells().length, 1, 'one bay');
-    const GridLineC = sandbox.window.GridLine || vm.runInContext('GridLine', ctx);
+    const GridLineC = window.GridLine;
     w.gm.grids.push(new GridLineC({ name: 'X', start: [10, 0], end: [10, 6], isCurved: true, mid: [11, 3] }));
     eq(w.tool._cells().length, 1, 'curved neighbor adds no bay');
     const cell = w.tool._cells()[0];

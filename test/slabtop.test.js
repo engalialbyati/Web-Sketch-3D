@@ -7,23 +7,14 @@
 // an open top.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const s0 = appSrc.indexOf('class BimEntityManager {'), e0 = appSrc.indexOf('\nclass App {');
-  vm.runInContext(appSrc.slice(s0, e0), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/app.js']);
+  const sandbox = L.sandbox;
 
   const { G, Model } = sandbox.window;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
 
   const TH = 0.2, Z = 0;
   const makeWorld = () => {

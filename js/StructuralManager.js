@@ -237,6 +237,19 @@
         zEnd = zStart + Math.max(0.1, +p.height || 3);
       return { zStart, zEnd, height: zEnd - zStart };
     }
+    // LEVEL-SCOPED WALL SPAN: wall geometry builds at the LEVEL elevation,
+    // but params.base[2] stores the raw click z (0 in plan views). Every
+    // trim / split / retreat comparison resolves the span through the wall's
+    // baseLevel when present — a Level-2 wall never sees a Level-1 column.
+    wallSpanZ(p) {
+      let z0 = p && p.base ? p.base[2] : 0;
+      if (p && p.baseLevel != null) {
+        const lv = this.level(p.baseLevel);
+        if (lv) z0 = lv.elevation;
+      }
+      return [z0, z0 + Math.max(0.05, +((p && p.height) || 3))];
+    }
+    levelOf(id) { return this.level(id); }
     /** Beam vertical bounds. Top justification (default) hangs the beam
      *  DOWNWARD from the reference floor plane: [Z - h, Z]. */
     beamBounds(p) {
@@ -375,12 +388,14 @@
     // 1 mm reveal that keeps faces off shared planes). Returns null when the
     // baseline crosses nothing (the common case — cheap early-out).
     wallPlanTrims(wallParams, pending) {
-      // v0.6 ELEMENT INDEPENDENCE: a wall is NEVER split or trimmed by the
-      // columns and beams standing in its path — elements overlap by
-      // ELEMENT_EPS instead of dividing each other (the IFC contract:
-      // connections are relationships, not geometry). The vertical bearing
-      // (wall top under a beam/slab soffit) lives in wallClearance.
-      return null;
+      // v0.7 WALL FACE RULE (restored): a column landing on a wall's run
+      // DIVIDES the wall into independent wall pieces that retreat to its
+      // faces — delete the column and they heal back (the split is a
+      // parametric relationship, not a boolean cut). The display layer
+      // hides the junction seams, so the joint reads like Revit while each
+      // piece stays its own selectable element. Beams still only trim walls
+      // they CROSS (a beam riding a wall is bearing, not intrusion —
+      // wallClearance owns the vertical fit).
       const p = wallParams;
       if (!p.base || !p.end) return null;
       const ax = p.base[0], ay = p.base[1], bx = p.end[0], by = p.end[1];
@@ -405,9 +420,19 @@
         if (ent.type === 'column' && ent.params && ent.params.base) {
           cx = ent.params.base[0]; cy = ent.params.base[1];
           hw = (ent.params.width || 0.3) / 2; hd = (ent.params.depth || 0.3) / 2;
-          z0 = ent.params.base[2]; z1 = z0 + (ent.params.height || 3);
+          // LEVEL-SCOPED span: resolve through the column's levels (a click
+          // z of 0 in a plan view must not pull a Level-2 column down to
+          // Level 1's band)
+          const cb = this.columnBounds(ent.params);
+          z0 = cb.zStart; z1 = cb.zEnd;
           const rot = +ent.params.rotation || 0;
           rcs = Math.cos(rot); rsn = Math.sin(rot);
+        } else if (ent.type === 'beam') {
+          // v0.7: ONLY COLUMNS divide walls. A beam stays a BEARING
+          // relationship — it fits over the wall via wallClearance and never
+          // consumes the wall's run (riding spandrels and crossing framing
+          // alike). This keeps the beam/wall contract the suite pins down.
+          continue;
         } else if (ent.type === 'beam' && ent.params && ent.params.baseline) {
           const bl = ent.params.baseline;
           const A2 = bl[0], B2 = bl[bl.length - 1];
@@ -418,7 +443,7 @@
           const bhw = (prof.flangeWidth || prof.webWidth || 0.2) / 2;
           const bb = this.beamBounds(ent.params);
           z0 = bb.zBottom; z1 = bb.zBottom + (bb.height || 0.5);
-          const wz0a = p.base[2], wz1a = wz0a + (p.height || 3);
+          const wspan = this.wallSpanZ(p), wz0a = wspan[0], wz1a = wspan[1];
           // BEARING GATE: a beam whose soffit sits at (or above) the wall's
           // top RIDES ON the wall — the wall keeps its run and terminates
           // under the soffit (the clearance fit owns the vertical). Only a
@@ -449,7 +474,7 @@
         // its path; a slab between them lowers the wall top first, so a
         // beam above a slab never reaches the wall): plan x/y alone can't
         // tell this floor's intruder from the one directly above it
-        const wz0 = p.base[2], wz1 = wz0 + (p.height || 3);
+        const wspan2 = this.wallSpanZ(p), wz0 = wspan2[0], wz1 = wspan2[1];
         if (z1 < wz0 - 1e-3 || z0 > wz1 + 1e-3) continue;
         // distance from intruder center to the wall baseline (cross-run)
         const rx = cx - ax, ry = cy - ay;
@@ -638,8 +663,14 @@
       const halfBand = (p.thickness != null ? p.thickness : 0.2) / 2 + 0.02;
       const EPS = 1e-4;
       let t0 = 0, t1 = L, hit = false;
+      // LEVEL SCOPE: only columns whose vertical span overlaps the wall's
+      // (resolved through each side's levels) may retreat its ends — a
+      // Level-1 column must never shorten a Level-2 wall
+      const [wz0, wz1] = this.wallSpanZ(p);
       for (const ent of pool || this.entities) {
         if (!ent || ent.id === p.id || ent.type !== 'column' || !ent.params || !ent.params.base) continue;
+        const cb = this.columnBounds(ent.params);
+        if (cb.zEnd <= wz0 + 1e-3 || cb.zStart >= wz1 - 1e-3) continue; // different story
         const cx = ent.params.base[0], cy = ent.params.base[1];
         const hw = (ent.params.width || 0.3) / 2, hd = (ent.params.depth || 0.3) / 2;
         const rot = +ent.params.rotation || 0;

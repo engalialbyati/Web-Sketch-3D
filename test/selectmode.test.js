@@ -9,17 +9,11 @@
 // the pick result is injected so no canvas/view is needed.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console, Set, Map };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/tools/base.js', 'js/tools/free.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
+  // single audited loader (harness)
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/free.js']);
+  const sandbox = L.sandbox;
   const { SelectTool } = sandbox.window.FreeTools;
   if (!SelectTool) throw new Error('SelectTool not loaded — check FreeTools exports');
 

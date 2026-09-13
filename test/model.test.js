@@ -904,12 +904,8 @@ module.exports = h => {
 
   test('HostedCut punches a clean door opening through a wall (Node-level)', () => {
     const h = require('./harness');
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model, BimTools } = sandbox.window;
+    const hL = require('./harness').loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+    const { G, Model, BimTools } = hL.window;
     const HostedCut = BimTools.HostedCut, WallTool = BimTools.WallTool;
     const m = new Model();
     // wall params like a real WallTool entity: 5m along x, 0.2 thick, centerline
@@ -939,12 +935,8 @@ module.exports = h => {
   });
 
   test('HostedCut on any vertical face: through cut + typed-depth pocket (free box host)', () => {
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model, BimTools } = sandbox.window;
+    const hL = require('./harness').loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+    const { G, Model, BimTools } = hL.window;
     const HostedCut = BimTools.HostedCut;
     const m = new Model();
     // a free-mode box: 4m x 3m footprint, 1m thick wall along the y axis —
@@ -1012,12 +1004,8 @@ module.exports = h => {
   });
 
   test('wall miter joins: chained angled walls share one cap — no gap, no overlap', () => {
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model, BimTools } = sandbox.window;
+    const hL = require('./harness').loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+    const { G, Model, BimTools } = hL.window;
     const WT = BimTools.WallTool;
     const m = new Model();
     const h = 3, t = 0.3;
@@ -1051,12 +1039,8 @@ module.exports = h => {
   });
 
   test('wall miter join at 45 degrees with different thicknesses', () => {
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model, BimTools } = sandbox.window;
+    const hL = require('./harness').loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+    const { G, Model, BimTools } = hL.window;
     const WT = BimTools.WallTool;
     const m = new Model();
     const t1 = 0.2, t2 = 0.4;
@@ -1076,12 +1060,8 @@ module.exports = h => {
   });
 
   test('BIM 4-wall loop: four walls generate, corners slice cleanly, shells close', () => {
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model, BimTools } = sandbox.window;
+    const hL = require('./harness').loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+    const { G, Model, BimTools } = hL.window;
     const m = new Model();
     // four chained walls forming a closed 4x3 room (WallTool geometry path)
     const pts = [[0,0],[4,0],[4,3],[0,3]];

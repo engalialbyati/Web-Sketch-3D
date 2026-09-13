@@ -10,23 +10,17 @@
 // (3 m between grids with 0.4 x 0.4 columns at both ends -> 2.598 m: face-to-face minus a 2 mm reveal that keeps the wall off the column planes).
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of [
-    'js/geometry.js', 'js/model.js', 'js/GridLine.js', 'js/GridManager.js',
+  // single audited loader (harness) — static class bridge exposes GridManager
+  const L = h.loadModel([
+    'js/GridLine.js', 'js/GridManager.js',
     'js/SnapSystem.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js',
-  ]) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-  }
+  ]);
+  const sandbox = L.sandbox;
   const { G, Model, BimTools } = sandbox.window;
   const WallTool = BimTools.WallTool;
-  // GridManager is a top-level class (global lexical binding, not on window)
-  const GridManager = vm.runInContext('GridManager', ctx);
+  const GridManager = sandbox.window.GridManager;
 
   const col = (x, y, w, d, ref) => ({ type: 'column', params: { base: [x, y, 0], width: w, depth: d, gridRef: ref || null } });
 

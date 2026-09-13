@@ -12,10 +12,14 @@ const MIME = {
 };
 
 http.createServer((req, res) => {
-  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  let p;
+  try { p = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { res.writeHead(400); return res.end(); }
   if (p === '/') p = '/index.html';
-  const file = path.join(ROOT, p);
-  if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end(); }
+  // traversal guard: resolve FIRST, then compare against the root with a
+  // separator boundary — a raw startsWith(ROOT) lets /foo/../root-evil pass
+  const file = path.resolve(ROOT, '.' + path.posix.normalize('/' + p));
+  const root = path.resolve(ROOT);
+  if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('not found'); }
     res.writeHead(200, {

@@ -9,17 +9,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadDb() {
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'db.js'), 'utf8'), ctx, { filename: 'js/db.js' });
-  if (!sandbox.window.BimDatabase) throw new Error('db.js did not export BimDatabase');
-  return sandbox.window.BimDatabase;
+function loadDb(h) {
+  // single audited loader (harness)
+  return h.loadModel(['js/db.js']).window.BimDatabase;
 }
 
 module.exports = async h => {
   const { ok, eq, near, _stats } = h;
-  const BimDatabase = loadDb();
+  const BimDatabase = loadDb(h);
 
   // async-aware test helper driving the shared counters (run.js awaits this module)
   const t = async (name, fn) => {

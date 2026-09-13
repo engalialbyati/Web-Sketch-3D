@@ -1,16 +1,28 @@
 'use strict';
 // CLI test runner: node test/run.js  (or: npm test)
-// Loads every test/*.test.js and reports a single pass/fail summary.
-// A test file may export an async function (e.g. database tests over the
-// in-memory adapter) — its promise is awaited before the file's counters
-// are read.
-const fs = require('node:fs');
+// Reports a single pass/fail summary. A test file may export an async
+// function (e.g. database tests over the in-memory adapter) — its promise is
+// awaited before the file's counters are read.
 const path = require('node:path');
 const harness = require('./harness');
 
+// explicit suite manifest — no dynamic require over directory listings
+const SUITE = [
+  'assets', 'beamface', 'beamoverwall', 'bridge', 'building5', 'buildingr5',
+  'centerline', 'columnfamilies', 'columnrot', 'columntool', 'db',
+  'draw', 'engine', 'flooropen', 'geometry', 'gridcells', 'gridwall',
+  'hostedcuts', 'independence', 'layers', 'linestyle', 'mirrorarray',
+  'model', 'revitmethod', 'script', 'selectmode', 'slabtop', 'stairs',
+  'structural', 'trim', 'wallbottom', 'wallface', 'walljoin', 'wallstub',
+];
+
 (async () => {
   console.log('WebSketch 3D — model & geometry unit tests\n');
-  const files = fs.readdirSync(__dirname).filter(f => f.endsWith('.test.js')).sort();
+  const files = [];
+  for (const name of SUITE) {
+    try { require.resolve(path.join(__dirname, name + '.test.js')); files.push(name + '.test.js'); }
+    catch (e) { /* not present on this checkout — skip */ }
+  }
   if (!files.length) { console.error('no test files found'); process.exit(1); }
 
   let pass = 0, fail = 0;

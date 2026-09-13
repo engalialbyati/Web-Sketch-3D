@@ -6,26 +6,14 @@
 // slivers at the junction of an axis-fixed box and an angled run are gone.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js',
-    'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/column.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const s0 = appSrc.indexOf('class BimEntityManager {');
-  const s1 = appSrc.indexOf('\nclass App {');
-  if (s0 < 0 || s1 <= s0) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(s0, s1), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/column.js', 'js/app.js']);
+  const sandbox = L.sandbox;
   const { G, Model, BimTools, StructuralManager, ColumnFeature } = sandbox.window;
   const WallTool = BimTools.WallTool;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
   const v = (x, y, z = 0) => G.v(x, y, z);
 
   test('placeColumn rotates the footprint about its center', () => {
@@ -46,7 +34,7 @@ module.exports = h => {
     ok(!pts.some(p => Math.abs(p.x - 5.2) < 1e-9 && Math.abs(p.y - 5.1) < 1e-9), 'axis-aligned corner gone');
   });
 
-  test('wallPlanTrims is a v0.6 no-op — rotated columns never bite walls', () => {
+  test('wallPlanTrims: a rotated column ON the wall line bites (v0.7 wall face rule)', () => {
     const m = new Model();
     m.bimEntities = [];
     const bim = new BimEntityManager(m);
@@ -60,8 +48,14 @@ module.exports = h => {
     m.bimEntities.push(wall);
     m.bimEntities.push({ id: 'column_1', type: 'column',
       params: { base: [3 * Math.cos(ang), 3 * Math.sin(ang), 0], width: 0.3, depth: 0.6, height: 3, rotation: ang } });
-    eq(app.structural.wallPlanTrims(wall.params), null,
-      'v0.6: the wall runs through the rotated column, overlapping — never split');
+    const trims = app.structural.wallPlanTrims(wall.params);
+    ok(trims && trims.intervals.length > 0,
+      'v0.7: the column divides the wall — a blocked interval exists on the run');
+    // and a column OFF the wall line still never bites
+    m.bimEntities.push({ id: 'column_2', type: 'column',
+      params: { base: [3 * Math.cos(ang) + 2, 3 * Math.sin(ang) + 2, 0], width: 0.3, depth: 0.3, height: 3, rotation: 0 } });
+    const trims2 = app.structural.wallPlanTrims(wall.params);
+    eq(trims2.intervals.length, trims.intervals.length, 'an off-line column adds no interval');
   });
 
   test('end-to-end: an aligned column leaves an angled wall WHOLE (v0.6 independence)', () => {

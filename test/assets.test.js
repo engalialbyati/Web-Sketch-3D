@@ -49,15 +49,10 @@ module.exports = h => {
 
   // THREE loads headless into the vm sandbox (no DOM needed at class level);
   // AssetManager's transform math is testable against real Vector3/Box3.
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
-  const sandbox = { window: {}, console, Buffer, self: undefined };
-  const ctx = vm.createContext(sandbox);
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'lib', 'three.min.js'), 'utf8'), ctx, { filename: 'three.min.js' });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'assets.js'), 'utf8'), ctx, { filename: 'assets.js' });
-  const THREE = sandbox.THREE; // the UMD attaches to the context global
-  const AssetManager = sandbox.window.AssetManager;
+  // single audited loader (harness); the bridge promotes the UMD global
+  const L3 = h.loadModel(['js/lib/three.min.js', 'js/assets.js']);
+  const THREE = L3.window.THREE;
+  const AssetManager = L3.window.AssetManager;
   ok(THREE && AssetManager, 'THREE + AssetManager load headless');
 
   test('applyHostedTransform centers a uniform-fit model in the opening', () => {

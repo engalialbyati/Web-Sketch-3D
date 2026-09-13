@@ -126,10 +126,21 @@ function annotateResults(data) {
 const SCENE_UUID = crypto.randomUUID();
 const UA = { 'User-Agent': 'WebSketch3D-blenderkit-bridge/1.0', 'Accept': 'application/json' };
 
+// SSRF allowlist: the bridge only ever talks to BlenderKit's own hosts —
+// a malicious API response (or a tampered downloadUrl) cannot redirect the
+// server at internal addresses
+const ALLOWED_HOSTS = new Set(['www.blenderkit.com', 'api.blenderkit.com', 'assets.blenderkit.com']);
+function assertAllowedUrl(u) {
+  const url = u instanceof URL ? u : new URL(String(u));
+  if (url.protocol !== 'https:' || !ALLOWED_HOSTS.has(url.hostname))
+    throw Object.assign(new Error('refusing non-BlenderKit download URL'), { status: 400 });
+  return url;
+}
+
 async function fetchAssetFile(downloadUrl, dest) {
-  let url = downloadUrl;
+  let url = assertAllowedUrl(downloadUrl);
   for (let hop = 0; hop < 3; hop++) {
-    const u = new URL(url);
+    const u = assertAllowedUrl(url);
     // only the API resolver takes scene_uuid — appending it to the signed
     // assets.blenderkit.com URL would invalidate the signature (403)
     if (u.pathname.startsWith('/api/')) u.searchParams.set('scene_uuid', SCENE_UUID);
@@ -166,10 +177,25 @@ async function fetchAssetFile(downloadUrl, dest) {
 // Headless .blend -> .glb via Blender's gltf exporter. Resolves with the
 // Blender stderr tail (diagnostics); rejects on non-zero exit, timeout, or
 // a missing/empty output file.
+// conversion paths must stay inside the cache dir — ids/keys are validated,
+// but the guard makes the invariant explicit for both call sites
+function assertCachePath(p) {
+  const resolved = path.resolve(String(p));
+  const cache = path.resolve(CACHE_DIR);
+  if (resolved !== cache && !resolved.startsWith(cache + path.sep))
+    throw new Error('refusing a conversion path outside the cache directory');
+  return resolved;
+}
+
 function runBlender(blendPath, glbPath) {
   return new Promise((resolve, reject) => {
-    const py = `import bpy; bpy.ops.export_scene.gltf(filepath='${glbPath.replace(/\\/g, '/').replace(/'/g, "\\'")}', export_format='GLB')`;
-    const child = spawn(resolveBlender(), ['-b', blendPath, '--python-expr', py], {
+    blendPath = assertCachePath(blendPath);
+    glbPath = assertCachePath(glbPath);
+    // the GLB path travels as an ARGV (after Blender's `--`), never
+    // interpolated into the python expression — no code path is built from
+    // data
+    const py = 'import sys, bpy; bpy.ops.export_scene.gltf(filepath=sys.argv[-1], export_format=\'GLB\')';
+    const child = spawn(resolveBlender(), ['-b', blendPath, '--python-expr', py, '--', glbPath], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stderr = '';

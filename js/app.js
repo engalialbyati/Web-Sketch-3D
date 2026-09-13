@@ -1839,6 +1839,25 @@ class BimEntityManager {
     const mg = p.merge;
     const heldD = m.bimHold; // hold-transparent: a caller's hold survives us
     if (!mg || !mg.base || !mg.end) { delete p.merge; return true; }
+    // SLOTS SYNC across the lineage: a later split updates the slot map only
+    // on the pieces it rebuilt; untouched siblings keep a STALE list and the
+    // inSlot check below would expel their own lineage at heal time (the
+    // "three pieces never fuse back" bug). The freshest map in the lineage
+    // (most slots) wins and is written back to every member.
+    {
+      let fresh = Array.isArray(mg.slots) ? mg.slots : [];
+      for (const e of this.entities) {
+        const q = e.params && e.params.merge;
+        if (e.type === 'wall' && q && q.group === mg.group && Array.isArray(q.slots) && q.slots.length > fresh.length)
+          fresh = q.slots;
+      }
+      for (const e of this.entities) {
+        const q = e.params && e.params.merge;
+        if (e.type === 'wall' && q && q.group === mg.group)
+          q.slots = fresh.map(s => [s[0], s[1]]);
+      }
+      mg.slots = fresh.map(s => [s[0], s[1]]);
+    }
     const ob = mg.base, oe = mg.end;
     const z = p.base[2];
     const L0 = Math.hypot(oe[0] - ob[0], oe[1] - ob[1]) || 1;
@@ -6427,7 +6446,20 @@ class App {
     const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
     const x = q.x, y = q.y;
     const ef = this.view.edgeFilter || null; // Level View hides filtered edges from picking too
-    let best = null, bd = tol;
+    // CAMERA-PROXIMITY TIE-BREAK: in Top view a slab's top and bottom rings
+    // project to the SAME screen position, and iteration order decided the
+    // winner — Pick Lines sometimes grabbed the slab's BOTTOM edge. On a
+    // screen-distance tie (<= 0.5 px) the edge closer to the CAMERA wins:
+    // the top ring from above, the visible edge over hidden ones in iso.
+    let cam = null;
+    try { const c = this.view.activeCamera(); cam = c ? G.v(c.position.x, c.position.y, c.position.z) : null; } catch (err) { }
+    const camDist2 = e => {
+      if (!cam) return 0;
+      const a2 = model.vp(e.a), b2 = model.vp(e.b);
+      const mx = (a2.x + b2.x) / 2 - cam.x, my = (a2.y + b2.y) / 2 - cam.y, mz = (a2.z + b2.z) / 2 - cam.z;
+      return mx * mx + my * my + mz * mz;
+    };
+    let best = null, bd = tol, bc = Infinity;
     for (const e of model.edges.values()) {
       if (e.hidden || (ef && !ef(e)) || this.isEdgeLocked(e)) continue;
       const a = model.vp(e.a), b = model.vp(e.b);
@@ -6442,7 +6474,12 @@ class App {
         const t = Math.max(0, Math.min(1, ((x - sa.x) * dx + (y - sa.y) * dy) / L2));
         d = Math.hypot(sa.x + dx * t - x, sa.y + dy * t - y);
       }
-      if (d < bd) { bd = d; best = e; }
+      if (d > tol) continue;
+      const cd = camDist2(e);
+      if (!best || d < bd - 0.5 || (d <= bd + 0.5 && cd < bc)) {
+        if (d < bd) bd = d;
+        best = e; bc = cd;
+      }
     }
     return best ? { edge: best, d: bd } : null;
   }
@@ -7591,6 +7628,60 @@ class App {
     if (!this.structural) return 0;
     return this.syncStructuralWalls([pendingEnt]);
   }
+  // AUTO-JOIN WALLS — the miter machinery (wallRing) only acts on walls whose
+  // params carry `joins`, and only the classic Wall-tool click flow stamps
+  // them. Walls born any OTHER way (Convert to Wall, scripted elements, demo
+  // builders) keep flat end caps, so two walls sharing an endpoint render as
+  // isolated boxes: a doubled internal cap (Image 1) and an unmeshed wedge
+  // at the outer corner (Image 2). This pass records the missing miter joins
+  // on BOTH sides whenever two open walls' endpoints coincide (<= 2 cm, same
+  // base z — exactly the classic tool's detection) and rebuilds both through
+  // the existing join-aware ring path. Left/right offset paths across the
+  // whole connected chain then follow automatically: each endpoint's miter
+  // apex is the offset-line intersection = the bisector point at
+  // (w/2)/sin(θ/2).
+  autoJoinWalls() {
+    if (this._autoJoining) return 0;
+    this._autoJoining = true;
+    try {
+      const walls = this.bim.entities.filter(e => e.type === 'wall'
+        && !e.params.closed && e.params.base && e.params.end);
+      const dirty = new Set();
+      for (let i = 0; i < walls.length; i++) for (let j = i + 1; j < walls.length; j++) {
+        const a = walls[i], b = walls[j];
+        if (Math.abs(G.v(...a.params.base).z - G.v(...b.params.base).z) > 1e-3) continue;
+        // SLOPPY-CORNER SNAP: endpoints a few cm apart (under half the
+        // thinner wall + 2 cm) are the same intended corner — snap both
+        // walls' endpoints to the midpoint FIRST (the centerline skeleton
+        // gets a shared vertex), then miter. Without this a near-miss
+        // corner leaves two isolated boxes: doubled internal cap + wedge.
+        const tol = 0.5 * Math.min(a.params.thickness || 0.2, b.params.thickness || 0.2) + 0.02;
+        for (const [ea, eb] of [['end', 'end'], ['start', 'end'], ['end', 'start'], ['start', 'start']]) {
+          const ka = ea === 'end' ? 'end' : 'base';
+          const kb = eb === 'end' ? 'end' : 'base';
+          const pa = G.v(...a.params[ka]);
+          const pb = G.v(...b.params[kb]);
+          if (G.dist(pa, pb) > tol) continue;
+          a.params.joins = a.params.joins || {};
+          b.params.joins = b.params.joins || {};
+          if (a.params.joins[ea] || b.params.joins[eb]) continue; // already joined here
+          if (G.dist(pa, pb) > 1e-9) {
+            const mid = G.v((pa.x + pb.x) / 2, (pa.y + pb.y) / 2, (pa.z + pb.z) / 2);
+            a.params[ka] = [mid.x, mid.y, mid.z];
+            b.params[kb] = [mid.x, mid.y, mid.z];
+          }
+          a.params.joins[ea] = { id: b.id, mode: 'miter' };
+          b.params.joins[eb] = { id: a.id, mode: 'miter' };
+          dirty.add(a.id); dirty.add(b.id);
+        }
+      }
+      for (const id of dirty) this.bim.rebuildWallWithHosts(id, false);
+      return dirty.size;
+    } finally {
+      this._autoJoining = false;
+    }
+  }
+
   // v0.7 COLUMN SYNC — columns run THROUGH the beam zone to their top
   // constraint (the joint cube is filled by the column; beams stop at its
   // faces via the framing trim). Elements never cut each other — the
@@ -7762,6 +7853,7 @@ class App {
         this.syncStructuralWalls(); // deletions/edits re-fit walls (grow back)
         this.syncDropPanels(); // drop heads re-hang under slabs (or grow back)
         this.syncColumnBearing(); // v0.6: columns re-cap under beams (or grow back)
+        this.autoJoinWalls(); // walls born join-less (Convert, scripts) miter at coincident endpoints
       });
     }
     this._snapCache = null; // new endpoints/midpoints/centers must become snap candidates

@@ -6,18 +6,12 @@
 // changing step count rebuilds with MORE steps at the same tread size.
 module.exports = h => {
   const { test, ok, eq, near } = h;
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
 
-  // geometry.js + model.js + script-elements.js share one vm context so the
-  // compiled user scripts (new Function) see the same globals the browser
+  // single audited loader (harness): geometry + model + script-elements share
+  // one context so compiled user scripts see the same globals the browser
   // would: window.G, window.ScriptElements
-  const sandbox = { window: {}, console, Buffer };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/script-elements.js']) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-  }
+  const L = h.loadModel(['js/script-elements.js']);
+  const sandbox = L.sandbox;
   const SE = sandbox.window.ScriptElements;
   ok(SE && typeof SE.Manager === 'function', 'ScriptElements loads headless');
   ok(sandbox.window.G, 'geometry lib present for compiled scripts');
@@ -156,15 +150,12 @@ module.exports = h => {
   // The interaction itself, headless: the two-click gesture places an entity,
   // and the drag ghost THROTTLES (a full kernel build per mousemove is the
   // lag users feel even on tiny geometry) and mutes script toasts while
-  // previewing. Runs in its own context where window === the global object —
-  // tools/base.js and tools/script.js use bare G/Tool like a real page.
+  // previewing. The harness loader's bridge promotes window.X to real
+  // context globals, so tools/base.js and tools/script.js resolve bare
+  // G/Tool exactly like a real page.
   test('ScriptPlaceTool: two clicks place; ghosts throttle, dedupe, stay silent', () => {
-    const sb = { console, setTimeout, clearTimeout, queueMicrotask };
-    sb.window = sb;
-    const ctx2 = vm.createContext(sb);
-    for (const f of ['js/geometry.js', 'js/model.js', 'js/script-elements.js', 'js/tools/base.js', 'js/tools/script.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx2, { filename: f });
-    const G = sb.G, Model = sb.Model, SE2 = sb.ScriptElements;
+    const L2 = h.loadModel(['js/script-elements.js', 'js/tools/base.js', 'js/tools/script.js']);
+    const G = L2.window.G, Model = L2.window.Model, SE2 = L2.window.ScriptElements;
 
     const toasts = [];
     const m = new Model();
@@ -189,7 +180,7 @@ module.exports = h => {
     script.id = 'scr_test';
     mgr.scripts.set('scr_test', script);
 
-    const tool = new sb.ScriptTools.ScriptPlaceTool(app);
+    const tool = new L2.window.ScriptTools.ScriptPlaceTool(app);
     tool.activate();
     ok(tool.script, 'tool armed from bimOptions.scriptId');
 

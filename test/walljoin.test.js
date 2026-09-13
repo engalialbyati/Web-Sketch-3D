@@ -10,27 +10,15 @@
 // silently vanished neighbor, no ghost entities.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/column.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  // BimEntityManager lives in app.js between its class line and `class App`
-  const appSrc = read('js/app.js');
-  const start = appSrc.indexOf('class BimEntityManager {');
-  const end = appSrc.indexOf('\nclass App {');
-  if (start < 0 || end < 0 || end <= start) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(start, end), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/column.js', 'js/app.js']);
+  const sandbox = L.sandbox;
 
   const { G, Model, BimTools, StructuralManager } = sandbox.window;
   const WallTool = BimTools.WallTool;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
   const v = (x, y, z = 0) => G.v(x, y, z);
 
   // ------------------------------------------------------------- the world
@@ -120,26 +108,29 @@ module.exports = h => {
   };
 
   // ------------------------------------------------- split-vs-join interplay
-  test('a joined wall through a column keeps ONE wall and the miter intact (v0.6)', () => {
+  test('a joined wall through a column divides; the miter follows the piece (v0.7)', () => {
     const w = makeWorld();
     const h = buildWall(w, [0, 1, 0], [3, 1, 0]);   // wall_1: horizontal
     commit(w, [3, 1, 0], [3, -2, 0]);               // wall_2: vertical, miter at (3,1)
     const vert = w.bim.entities.find(e => e.id !== h.id);
     eq(vert.params.joins.start, h.id, 'miter recorded');
-    // v0.6: the column never splits the wall — the miter never needs
-    // re-pointing because the neighbor's identity cannot change under it
+    // v0.7: the column DIVIDES the horizontal wall — the piece owning the
+    // corner keeps the join; the neighbor re-points at that piece
     buildColumn(w, 1.5, 1);
     runDirty(w);
     const pieces = w.bim.entities.filter(e => e.type === 'wall');
-    eq(pieces.length, 2, 'still two walls — the horizontal runs through the column');
-    eq(vert.params.joins.start, h.id, 'neighbor miter untouched');
-    ok(h.params.joins.end === vert.id, 'corner join unchanged');
+    eq(pieces.length, 3, 'the horizontal divides; the vertical neighbor is untouched');
+    const joinTarget = w.bim.getEntityById(vert.params.joins.start);
+    ok(joinTarget && joinTarget.type === 'wall', 'neighbor miter points at the surviving corner piece');
     ok(w.m.validate().ok, 'model valid');
+    // column leaves: the pieces heal and the miter returns to the original
     const col = w.bim.entities.find(e => e.type === 'column');
     w.bim.detach(col.id);
-    runDirty(w);
-    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'nothing to heal — still two walls');
-    eq(vert.params.joins.start, h.id, 'miter stable throughout');
+    for (const wl of [...w.bim.entities.filter(e => e.type === 'wall')]) {
+      if (w.bim.getEntityById(wl.id)) w.bim.planTrimWall(wl.id);
+    }
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'healed back to two walls');
+    eq(w.bim.getEntityById(vert.id) && vert.params.joins.start, h.id, 'miter restored to the original wall');
     ok(w.m.validate().ok, 'model valid');
   });
 

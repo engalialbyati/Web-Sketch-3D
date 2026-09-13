@@ -3,14 +3,9 @@
 // the reference feature's pure geometry helper.
 module.exports = h => {
   const { test, ok, eq, near, throws } = h;
-  const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 
-  const loadEngine = () => {
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'engine', 'api.js'), 'utf8'), ctx, { filename: 'engine/api.js' });
-    return sandbox.window.Engine;
-  };
+  // single audited loader (harness)
+  const loadEngine = () => h.loadModel(['js/engine/api.js']).window.Engine;
 
   test('event bus: isolated listeners never break the emitter', () => {
     const Engine = loadEngine();
@@ -39,19 +34,10 @@ module.exports = h => {
   });
 
   test('column feature geometry: exact box at the click point', () => {
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/model.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    const { G, Model } = sandbox.window;
-    // the pure helper from js/features/column.js (no Tool/app dependency)
-    const src = fs.readFileSync(path.join(__dirname, '..', 'js', 'features', 'column.js'), 'utf8');
-    const placeColumn = (() => {
-      const w2 = { ColumnFeature: null };
-      const fn = new Function('G', 'Tool', 'window', 'Engine', src);
-      fn(G, class { }, w2, null);
-      return w2.ColumnFeature.placeColumn;
-    })();
+    // single audited loader (harness): base + the column feature module
+    const L = h.loadModel(['js/tools/base.js', 'js/features/column.js']);
+    const { G, Model } = L.window;
+    const placeColumn = L.window.ColumnFeature.placeColumn;
     const m = new Model();
     const faces = placeColumn(G, m, G.v(2, 3, 0), 0.4, 0.3, 3.5);
     ok(faces && faces.length >= 6, 'column has 6 box faces');

@@ -5,24 +5,13 @@
 // healed when deleted, and taken with the slab when the slab goes.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/bim.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const s0 = appSrc.indexOf('class BimEntityManager {');
-  const s1 = appSrc.indexOf('\nclass App {');
-  if (s0 < 0 || s1 <= s0) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(s0, s1), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/bim.js', 'js/app.js']);
+  const sandbox = L.sandbox;
   const { G, Model } = sandbox.window;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
 
   const makeWorld = () => {
     const m = new Model();

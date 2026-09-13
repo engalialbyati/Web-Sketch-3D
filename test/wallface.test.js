@@ -14,22 +14,13 @@ module.exports = h => {
   const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js',
-    'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const start = appSrc.indexOf('class BimEntityManager {');
-  const end = appSrc.indexOf('\nclass App {');
-  if (start < 0 || end < 0) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(start, end), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/app.js']);
+  const sandbox = L.sandbox;
 
   const { G, Model, BimTools, StructuralManager } = sandbox.window;
   const WallTool = BimTools.WallTool;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
   const v = (x, y, z = 0) => G.v(x, y, z);
 
   const makeWorld = () => {
@@ -134,43 +125,42 @@ module.exports = h => {
   };
 
   // ------------------------------------------------- the owner's reported case
-  test('freeform wall: end + center columns leave it WHOLE (v0.6 independence)', () => {
+  test('freeform wall: end + center columns DIVIDE it (v0.7 wall face rule)', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [6, 0, 0]);
     ok(wall && wall.faces.length === 6, 'wall built (6 clean faces)');
-    const facesBefore = [...wall.faces];
     buildColumn(w, 0, 0, 0);    // at the END
     buildColumn(w, 3, 0, 0);    // at the CENTER
     runDirty(w);
     const walls = w.bim.entities.filter(e => e.type === 'wall');
-    eq(walls.length, 1, 'the wall stays ONE element');
-    ok(w.bim.getEntityById(wall.id) === walls[0], 'identity kept');
-    eq(walls[0].faces.length, facesBefore.length, 'face set untouched');
-    ok(walls[0].faces.every(id => w.m.faces.has(id)), 'geometry live');
-    eq(walls[0].params.base[0], 0, 'params are truth: base unchanged');
-    eq(walls[0].params.end[0], 6, 'params are truth: end unchanged');
+    eq(walls.length, 2, 'the wall divides into two pieces around the center column');
     const xs = allWallXs(w);
-    near(xs[0], 0, 1e-9, 'run keeps its original start');
-    near(xs[xs.length - 1], 6, 1e-9, 'run keeps its original end — through both columns');
-    ok(w.m.validate().ok, 'model valid: independent overlapping solids');
+    near(xs[0], 0.15, 0.05, 'the run starts at the END column\\u2019s face');
+    near(xs[xs.length - 1], 6, 1e-9, 'the far end keeps its original extent');
+    for (const wl of walls) ok(wl.faces.length >= 4 && wl.faces.every(id => w.m.faces.has(id)), 'each piece is live');
+    ok(w.m.validate().ok, 'model valid: divided solids');
   });
 
-  test('deleting the columns changes nothing (there is nothing to heal)', () => {
+  test('deleting the columns HEALS the wall back into one run', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [6, 0, 0]);
     const c1 = buildColumn(w, 0, 0, 0), c2 = buildColumn(w, 3, 0, 0);
     runDirty(w);
+    ok(w.bim.entities.filter(e => e.type === 'wall').length === 2, 'divided first');
     for (const c of [c1, c2]) {
       for (const fid of [...c.faces]) w.m.faces.delete(fid);
       w.bim.detach(c.id);
     }
     w.m.gc();
-    runDirty(w);
+    // opDone's dirty pass on the surviving pieces (what deleteSelection runs)
+    for (const wl of [...w.bim.entities.filter(e => e.type === 'wall')]) {
+      if (w.bim.getEntityById(wl.id)) w.bim.planTrimWall(wl.id);
+    }
     const walls = w.bim.entities.filter(e => e.type === 'wall');
-    eq(walls.length, 1, 'still one whole wall');
+    eq(walls.length, 1, 'the pieces merge back into ONE wall');
     const xs = allWallXs(w);
-    near(xs[0], 0, 1e-9, 'start unchanged');
-    near(xs[xs.length - 1], 6, 1e-9, 'end unchanged');
+    near(xs[0], 0, 1e-9, 'original start restored');
+    near(xs[xs.length - 1], 6, 1e-9, 'original end restored');
     ok(w.m.validate().ok, 'model valid');
   });
 
@@ -184,6 +174,38 @@ module.exports = h => {
     near(xs[0], xs0[0], 1e-9, 'wall start untouched');
     near(xs[xs.length - 1], 8, 1e-9, 'wall end untouched');
     ok(wall.faces.length > 0, 'wall kept its geometry');
+  });
+
+  test('LEVELS are separate: a Level-2 wall over a Level-1 column stays WHOLE (raw z=0 click)', () => {
+    const w = makeWorld();
+    // two real levels — the manager resolves spans through them, not the
+    // plan-view click z of 0 both elements carry
+    w.m.levels = [
+      { id: 'lvl_1', name: 'L1', elevation: 0 },
+      { id: 'lvl_2', name: 'L2', elevation: 3.2 },
+    ];
+    // a Level-1 column (params.base[2] = 0 — drawn in a plan view)
+    const col = buildColumn(w, 4, 0, 0);
+    col.params.baseLevelId = 'lvl_1';
+    // a Level-2 wall drawn right over it (params.base[2] = 0 as well)
+    const wall = buildWall(w, [0, 0, 0], [8, 0, 0]);
+    wall.params.baseLevel = 'lvl_2';
+    runDirty(w);
+    const walls = w.bim.entities.filter(e => e.type === 'wall');
+    eq(walls.length, 1, 'the Level-2 wall never divides over a Level-1 column');
+    const xs = allWallXs(w);
+    near(xs[0], 0, 1e-9, 'start intact');
+    near(xs[xs.length - 1], 8, 1e-9, 'end intact');
+    // the same column on the SAME level does divide (the positive control)
+    const col2 = buildColumn(w, 4, 6, 0);
+    col2.params.baseLevelId = 'lvl_1';
+    const wall2 = buildWall(w, [0, 6, 0], [8, 6, 0]);
+    wall2.params.baseLevel = 'lvl_1';
+    runDirty(w);
+    w.bim.planTrimWall(wall2.id); // the wall tool's own commit path
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 3,
+      'same-level control: wall_2 divides into two around the Level-1 column');
+    ok(w.m.validate().ok, 'model valid');
   });
 
   // --------------------------------------- wall drawn THROUGH a standing column
@@ -216,38 +238,44 @@ module.exports = h => {
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('full pipeline: wall through two columns — one element, params intact', () => {
+  test('full pipeline: wall through two columns divides into three pieces', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [6, 0, 0]);
     buildColumn(w, 1.5, 0, 0, 0.3, 0.3);
     buildColumn(w, 4.5, 0, 0, 0.3, 0.3);
     runDirty(w);
     const walls = w.bim.entities.filter(e => e.type === 'wall');
-    eq(walls.length, 1, 'the wall runs THROUGH both columns');
+    eq(walls.length, 3, 'two columns carve the run into three wall pieces');
     const xs = allWallXs(w);
-    near(xs[0], 0, 1e-9, 'start intact');
-    near(xs[xs.length - 1], 6, 1e-9, 'end intact');
+    near(xs[0], 0, 1e-9, 'outer start intact');
+    near(xs[xs.length - 1], 6, 1e-9, 'outer end intact');
     eq(w.bim.entities.filter(e => e.type === 'column').length, 2, 'columns keep their own elements');
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('a second column lands, then both leave — the wall never changed', () => {
+  test('a second column lands, then both leave — the wall heals whole', () => {
     const w = makeWorld();
     const wall = buildWall(w, [0, 0, 0], [6, 0, 0]);
     const c1 = buildColumn(w, 2, 0, 0);
     runDirty(w);
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 2, 'first column divides the wall');
     const c2 = buildColumn(w, 4, 0, 0);
     runDirty(w);
-    eq(w.bim.entities.filter(e => e.type === 'wall').length, 1, 'one wall throughout');
+    eq(w.bim.entities.filter(e => e.type === 'wall').length, 3, 'second column divides again');
     for (const c of [c1, c2]) {
       for (const fid of [...c.faces]) w.m.faces.delete(fid);
       w.bim.detach(c.id);
     }
     w.m.gc();
-    runDirty(w);
+    for (const wl of [...w.bim.entities.filter(e => e.type === 'wall')]) {
+      if (w.bim.getEntityById(wl.id)) w.bim.planTrimWall(wl.id);
+    }
     const after = w.bim.entities.filter(e => e.type === 'wall');
-    eq(after.length, 1, 'still one wall');
-    ok(after[0].id === wall.id, 'same identity, same geometry — nothing to restore');
+    eq(after.length, 1, 'all pieces merge back into ONE wall');
+    ok(after[0].id === wall.id, 'the original identity survives the split/heal round trip');
+    const xs = allWallXs(w);
+    near(xs[0], 0, 1e-9, 'start restored');
+    near(xs[xs.length - 1], 6, 1e-9, 'end restored');
     ok(w.m.validate().ok, 'model valid');
   });
 

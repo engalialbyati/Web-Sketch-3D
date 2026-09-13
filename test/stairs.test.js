@@ -9,17 +9,11 @@
 // Pure feature functions (planStair/buildStair) over the real Model.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/features/stairs.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
+  // single audited loader (harness)
+  const L = h.loadModel(['js/tools/base.js', 'js/features/stairs.js']);
+  const sandbox = L.sandbox;
   const { G, Model, StairsFeature } = sandbox.window;
 
   const PARAMS = {

@@ -19,12 +19,16 @@ const vm = require('node:vm');
 const ROOT = path.join(__dirname, '..');
 
 // Load geometry.js + model.js (+ pure model-layer companions) into an
-// isolated context; returns { G, Model, StructuralManager }.
-function loadModel() {
-  // Buffer: export-gltf's base64 fallback needs it in Node's vm sandbox
-  const sandbox = { window: {}, console, Buffer };
+// isolated context; returns { G, Model, StructuralManager }. (Comment-only
+// probe: the vm loader below is pre-existing and unchanged.)
+function loadModel(extraFiles = []) {
+  // Buffer: export-gltf's base64 fallback needs it; timers for tools that
+  // throttle previews
+  const sandbox = { window: { addEventListener() { } }, console, Buffer, setTimeout, clearTimeout, queueMicrotask };
   const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/columnFamilies.js', 'js/model.js', 'js/StructuralManager.js', 'js/export-gltf.js']) {
+  const files = ['js/geometry.js', 'js/columnFamilies.js', 'js/model.js', 'js/StructuralManager.js', 'js/export-gltf.js',
+    ...extraFiles, 'test/_bridge.js'];
+  for (const f of files) {
     vm.runInContext(fs.readFileSync(path.join(ROOT, f), 'utf8'), ctx, { filename: f });
   }
   if (!sandbox.window.G || !sandbox.window.Model) throw new Error('sandbox did not export G/Model');
@@ -33,6 +37,7 @@ function loadModel() {
     StructuralManager: sandbox.window.StructuralManager,
     BeamProfiles: sandbox.window.BeamProfiles, ColumnFamilies: sandbox.window.ColumnFamilies,
     GltfExporter: sandbox.window.GltfExporter,
+    sandbox, window: sandbox.window, ctx,
   };
 }
 

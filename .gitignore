@@ -17,3 +17,4 @@ cache/
 target/
 pkg/
 dist/
+.mimosa/

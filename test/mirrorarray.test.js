@@ -122,13 +122,9 @@ module.exports = h => {
   });
 
   test('DrawGeom.ellipseRing emits a closed planar ring at the right extents', () => {
-    // same load shape as draw.test.js (geometry + base + draw)
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/tools/base.js', 'js/tools/draw.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), sandbox, { filename: f });
-    const G = sandbox.window.G, DrawGeom = sandbox.window.DrawGeom;
+    // same load shape as draw.test.js — single audited loader (harness)
+    const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js']);
+    const G = L.window.G, DrawGeom = L.window.DrawGeom;
     ok(DrawGeom, 'DrawGeom exported');
     const ring = DrawGeom.ellipseRing(G, G.v(5, 5, 2), 3, 1, Math.PI / 6);
     eq(ring.length, 64, '64-segment ring');

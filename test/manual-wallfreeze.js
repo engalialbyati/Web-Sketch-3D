@@ -4,29 +4,20 @@
 // OUTSIDE it, app hard-freezes. Run: node test/manual-wallfreeze.js
 // Not part of the suite; diagnostic only.
 // ---------------------------------------------------------------------------
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
 // piped stdout is block-buffered and never flushes while the kernel spins
 if (process.stdout._handle && process.stdout._handle.setBlocking) process.stdout._handle.setBlocking(true);
 
-const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-const sandbox = { window: {}, console };
-const ctx = vm.createContext(sandbox);
-for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js',
+// everything loads through the harness's single audited vm loader
+const h = require('./harness');
+const L = h.loadModel([
   'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/features/roof.js',
   'js/GridLine.js', 'js/GridManager.js', 'js/features/demo-r5.js',
-  'js/features/column.js']) {
-  vm.runInContext(read(f), ctx, { filename: f });
-}
-const appSrc = read('js/app.js');
-const s0 = appSrc.indexOf('class BimEntityManager {');
-const s1 = appSrc.indexOf('\nclass App {');
-vm.runInContext(appSrc.slice(s0, s1), ctx, { filename: 'app.js#BimEntityManager' });
-const { G, Model, StructuralManager, DemoR5 } = sandbox.window;
-const WallTool = vm.runInContext('WallTool', ctx);
-const GridManager = vm.runInContext('GridManager', ctx);
-const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  'js/features/column.js', 'js/app.js',
+]);
+const { G, Model, StructuralManager, DemoR5 } = L.window;
+const WallTool = L.window.BimTools.WallTool;
+const GridManager = L.window.GridManager;
+const BimEntityManager = L.window.BimEntityManager;
 
 console.log('[1] building the Revit test building (this takes ~a minute)...');
 const t0 = Date.now();

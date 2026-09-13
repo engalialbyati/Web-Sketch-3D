@@ -12,16 +12,11 @@
 // and _rebuildWallCore all check it BEFORE any geometry exists.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq } = h;
 
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-  }
+  // single audited loader (harness)
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']);
+  const sandbox = L.sandbox;
   const { G, BimTools } = sandbox.window;
   const WallTool = BimTools.WallTool;
   const v = (x, y) => G.v(x, y, 0);
@@ -97,8 +92,7 @@ module.exports = h => {
     // the live preview asks for a band whose cursor sits exactly on the
     // anchored start point (endpoint snap): parallelOffset used to read
     // [0] of a null-shifted segment and throw, killing the pointermove
-    const DrawGeom = sandbox.window.DrawGeom
-      || vm.runInContext('DrawGeom', ctx);
+    const DrawGeom = sandbox.window.DrawGeom;
     const ring = WallTool.bandRing(G, [v(1, 1), v(1, 1)], 0.2, 'centerline');
     ok(Array.isArray(ring), 'degrades to a ring, no throw');
     ok(G.ringDegenerate(ring), 'and the refusal gate flags it');

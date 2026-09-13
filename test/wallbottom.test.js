@@ -8,26 +8,15 @@
 // open bottoms, half-selectable/half-hidable walls).
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const start = appSrc.indexOf('class BimEntityManager {');
-  const end = appSrc.indexOf('\nclass App {');
-  if (start < 0 || end < 0 || end <= start) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(start, end), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/app.js']);
+  const sandbox = L.sandbox;
 
   const { G, Model, BimTools } = sandbox.window;
   const WallTool = BimTools.WallTool;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
   const v = (x, y, z = 0) => G.v(x, y, z);
 
   // ------------------------------------------------------------- the world

@@ -88,7 +88,12 @@
       // batch: N elements used to cost 2N draw calls (mesh + lines each);
       // the batch costs one. Picking never used the lines (screen-space
       // math against model edges), so nothing else changes.
+      // edgeIds[i] is the model edge segment i belongs to — the registry
+      // uses it to cull CROSS-ELEMENT SEAMS (a column-wall junction line)
+      // from the batch: Revit shows element silhouettes, not joints.
       const ep = [];
+      const eids = [];
+      const seenSeg = new Set();
       for (const fid of this.entity.faces) {
         const f = model.faces.get(fid);
         if (!f || f.hidden) continue;
@@ -96,11 +101,18 @@
           const pts = model.pts(ring);
           for (let i = 0; i < pts.length; i++) {
             const a = pts[i], b = pts[(i + 1) % pts.length];
+            const e2 = model.findEdge(ring[i], ring[(i + 1) % ring.length]);
+            if (e2) {
+              if (seenSeg.has(e2.id)) continue; // shared ring edge: one segment
+              seenSeg.add(e2.id);
+            }
             ep.push(a.x, a.y, a.z, b.x, b.y, b.z);
+            eids.push(e2 ? e2.id : null);
           }
         }
       }
       this.edgePositions = ep;
+      this.edgeIds = eids;
       this.group = group;
       return group;
     }
@@ -113,6 +125,7 @@
       this.group = null;
       this.mesh = null;
       this.edgePositions = [];
+      this.edgeIds = [];
     }
 
     // ---- sub-element measurement (pure queries against the model) ----
@@ -227,10 +240,124 @@
       const visKey = [...this._byId.values()].map(el => (isVisible(el) ? '1' : '0')).join('');
       if (!force && this._edgeVisKey === visKey) return;
       this._edgeVisKey = visKey;
+      // REVIT-STYLE EDGE OUTLINING — pure DISPLAY filtering (the geometry
+      // kernel is untouched; every edge stays real for picking, trimming and
+      // measurement, and the elements remain independent selectable objects):
+      //  1) CROSS-ELEMENT SEAMS: an edge shared by faces of TWO DIFFERENT
+      //     elements is a joint (column-meets-wall), never a silhouette.
+      //  2) COPLANAR SUPPRESSION: an edge whose two adjacent faces have
+      //     n1·n2 ≈ 1 (≈0° dihedral — same plane) is not a feature edge;
+      //     Revit's outline threshold suppresses it too. This cleans the
+      //     internal lines a face split leaves inside ONE element.
+      const seam = new Set();
+      {
+        const edgeFaces = new Map(); // edgeId -> [{owner, n}]
+        for (const f of model.faces.values()) {
+          const owner = f.userData && f.userData.bimEntityId;
+          if (!owner) continue;
+          const n = G.loopNormal(model.pts(f.loop));
+          if (G.isZero(n)) continue;
+          for (const ring of model.rings(f)) {
+            for (let i = 0; i < ring.length; i++) {
+              const e2 = model.findEdge(ring[i], ring[(i + 1) % ring.length]);
+              if (!e2) continue;
+              let a = edgeFaces.get(e2.id);
+              if (!a) edgeFaces.set(e2.id, a = []);
+              if (!a.some(x => x.owner === owner && G.dot(x.n, n) > 0.9999)) a.push({ owner, n });
+            }
+          }
+        }
+        for (const [eid, faces] of edgeFaces) {
+          // distinct owner elements anywhere on the edge -> joint seam
+          if (new Set(faces.map(x => x.owner)).size > 1) { seam.add(eid); continue; }
+          // coplanar pair across the edge: dihedral <= 1° (cos 1° = 0.99985)
+          // is not a feature edge — the Revit outline threshold
+          for (let i = 0; i < faces.length && !seam.has(eid); i++)
+            for (let j = i + 1; j < faces.length; j++) {
+              const d = G.dot(faces[i].n, faces[j].n);
+              if (d > 0.99985 || d < -0.99985) { seam.add(eid); break; }
+            }
+        }
+      }
+      // 3) FLUSH-ON-FACE JUNCTIONS (the CSG-union LOOK without the boolean):
+      // an edge of element A that lies ON a face of element B (within 1 mm of
+      // the plane, inside the polygon — exactly where a Wall ∪ Column union
+      // would leave a 0° coplanar seam) renders nothing. Elements stay
+      // independent; the display matches the joined solid. Bounding-box
+      // prefilter keeps this linear-ish on big models.
+      const flushCache = [];
+      {
+        for (const el of this._byId.values()) {
+          if (!el.group) continue;
+          // world-space AABB from the element's own edge endpoints
+          let bb = null;
+          const pp = el.edgePositions;
+          for (let i = 0; i + 2 < pp.length; i += 3) {
+            if (!bb) bb = { x0: pp[i], y0: pp[i + 1], z0: pp[i + 2], x1: pp[i], y1: pp[i + 1], z1: pp[i + 2] };
+            else {
+              if (pp[i] < bb.x0) bb.x0 = pp[i]; if (pp[i] > bb.x1) bb.x1 = pp[i];
+              if (pp[i + 1] < bb.y0) bb.y0 = pp[i + 1]; if (pp[i + 1] > bb.y1) bb.y1 = pp[i + 1];
+              if (pp[i + 2] < bb.z0) bb.z0 = pp[i + 2]; if (pp[i + 2] > bb.z1) bb.z1 = pp[i + 2];
+            }
+          }
+          if (!bb) continue;
+          // face records with plane + 2D basis for the point-in-polygon test
+          const fr = [];
+          for (const fid of el.entity.faces) {
+            const f = model.faces.get(fid);
+            if (!f) continue;
+            const pts2 = model.pts(f.loop);
+            const n = G.loopNormal(pts2);
+            if (G.isZero(n)) continue;
+            const d = G.dot(n, pts2[0]);
+            let fbb = null;
+            for (const p of pts2) {
+              if (!fbb) fbb = { x0: p.x, y0: p.y, z0: p.z, x1: p.x, y1: p.y, z1: p.z };
+              else {
+                if (p.x < fbb.x0) fbb.x0 = p.x; if (p.x > fbb.x1) fbb.x1 = p.x;
+                if (p.y < fbb.y0) fbb.y0 = p.y; if (p.y > fbb.y1) fbb.y1 = p.y;
+                if (p.z < fbb.z0) fbb.z0 = p.z; if (p.z > fbb.z1) fbb.z1 = p.z;
+              }
+            }
+            fr.push({ n, d, pts: pts2, bb: fbb });
+          }
+          flushCache.push({ id: el.entity.id, bb, faces: fr });
+        }
+      }
+      const onOtherFace = (mid, selfId) => {
+        for (const c of flushCache) {
+          if (c.id === selfId) continue;
+          const b = c.bb;
+          if (mid.x < b.x0 - 1e-3 || mid.x > b.x1 + 1e-3 || mid.y < b.y0 - 1e-3 || mid.y > b.y1 + 1e-3 || mid.z < b.z0 - 1e-3 || mid.z > b.z1 + 1e-3) continue;
+          for (const fr of c.faces) {
+            const fb = fr.bb;
+            if (mid.x < fb.x0 - 1e-3 || mid.x > fb.x1 + 1e-3 || mid.y < fb.y0 - 1e-3 || mid.y > fb.y1 + 1e-3 || mid.z < fb.z0 - 1e-3 || mid.z > fb.z1 + 1e-3) continue;
+            if (Math.abs(G.dot(fr.n, mid) - fr.d) > 1e-3) continue; // not flush with the plane
+            // midpoint inside the face polygon (project onto the dominant plane)
+            const proj = p => Math.abs(fr.n.x) > 0.9 ? { x: p.y, y: p.z } : Math.abs(fr.n.y) > 0.9 ? { x: p.x, y: p.z } : { x: p.x, y: p.y };
+            const P2 = fr.pts.map(proj), M = proj(mid);
+            let inside = false;
+            for (let i = 0, jj = P2.length - 1; i < P2.length; jj = i++) {
+              const a = P2[i], b2 = P2[jj];
+              if ((a.y > M.y) !== (b2.y > M.y) && M.x < (b2.x - a.x) * (M.y - a.y) / (b2.y - a.y) + a.x) inside = !inside;
+            }
+            if (inside) return true;
+          }
+        }
+        return false;
+      };
       const ep = [];
       for (const el of this._byId.values()) {
         if (!el.group || !isVisible(el)) continue;
-        for (let i = 0; i < el.edgePositions.length; i++) ep.push(el.edgePositions[i]);
+        const pos = el.edgePositions, ids = el.edgeIds;
+        if (!ids) { for (let i = 0; i < pos.length; i++) ep.push(pos[i]); continue; }
+        for (let s = 0; s < ids.length; s++) {
+          if (seam.has(ids[s])) continue; // a joint between elements: no line
+          const o = s * 6;
+          const mid = G.v((pos[o] + pos[o + 3]) / 2, (pos[o + 1] + pos[o + 4]) / 2, (pos[o + 2] + pos[o + 5]) / 2);
+          if (onOtherFace(mid, el.entity.id)) continue; // flush on another element's face: the union look
+          ep.push(pos[o], pos[o + 1], pos[o + 2], pos[o + 3], pos[o + 4], pos[o + 5]);
+        }
       }
       if (!this._edgeLines) {
         this._edgeLines = new THREE.LineSegments(

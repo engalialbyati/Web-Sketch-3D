@@ -10,30 +10,18 @@
 //      outside Edit In Place; free geometry and the wall-top sync stay allowed.
 // ---------------------------------------------------------------------------
 module.exports = h => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const vm = require('node:vm');
   const { test, ok, eq, near } = h;
 
-  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
-  const sandbox = { window: {}, console };
-  const ctx = vm.createContext(sandbox);
-  for (const f of ['js/geometry.js', 'js/model.js', 'js/StructuralManager.js',
-    'js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/tools/free.js',
-    'js/features/column.js']) {
-    vm.runInContext(read(f), ctx, { filename: f });
-  }
-  const appSrc = read('js/app.js');
-  const s0 = appSrc.indexOf('class BimEntityManager {');
-  const s1 = appSrc.indexOf('\nclass App {');
-  if (s0 < 0 || s1 <= s0) throw new Error('could not slice BimEntityManager from app.js');
-  vm.runInContext(appSrc.slice(s0, s1), ctx, { filename: 'app.js#BimEntityManager' });
+  // single audited loader (harness) — full app.js + static class bridge
+  const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/tools/free.js',
+    'js/features/column.js', 'js/app.js']);
+  const sandbox = L.sandbox;
   const { G, Model, StructuralManager, ColumnFeature, BimTools } = sandbox.window;
-  const BimEntityManager = vm.runInContext('BimEntityManager', ctx);
+  const BimEntityManager = sandbox.window.BimEntityManager;
   const FloorTool = BimTools.FloorTool;
   const WallTool = BimTools.WallTool;
-  const bimGuardFace = vm.runInContext('bimGuardFace', ctx);
-  const bimGuardEdge = vm.runInContext('bimGuardEdge', ctx);
+  const bimGuardFace = sandbox.window.bimGuardFace;
+  const bimGuardEdge = sandbox.window.bimGuardEdge;
 
   // ------------------------------------------------------------- the world
   const makeWorld = () => {

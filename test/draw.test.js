@@ -4,12 +4,9 @@ module.exports = h => {
   const { loadModel, test, ok, eq, near } = h;
   const { G } = loadModelExtra();
   function loadModelExtra() {
-    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
-    const sandbox = { window: {}, console };
-    const ctx = vm.createContext(sandbox);
-    for (const f of ['js/geometry.js', 'js/tools/base.js', 'js/tools/draw.js'])
-      vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
-    sandbox.window.SketchValidator = sandbox.window.SketchValidator; return { G: sandbox.window.G, DG: sandbox.window.DrawGeom, SV: sandbox.window.SketchValidator };
+    // single audited loader (harness)
+    const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js']);
+    return { G: L.window.G, DG: L.window.DrawGeom, SV: L.window.SketchValidator };
   }
   const extra = loadModelExtra(); const DG = extra.DG; const SketchValidator = extra.SV;
   const { G: Gi } = { G };
