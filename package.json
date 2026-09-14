@@ -32,6 +32,7 @@
       "index.html",
       "families/**",
       "README.md",
+      "docs/AI-AUTHORING.md",
       "package.json"
     ],
     "win": {

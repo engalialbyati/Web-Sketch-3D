@@ -22,7 +22,15 @@ http.createServer((req, res) => {
         const dir = path.join(__dirname, 'Saved Models');
         fs.mkdirSync(dir, { recursive: true });
         const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const file = path.join(dir, `websketch-${stamp}.json`);
+        // ?name= overrides the filename (e.g. AI-AUTHORING.md) — sanitized to
+        // a bare filename so nothing escapes the save folder
+        let name = `websketch-${stamp}.json`;
+        try {
+          const q = new URL(req.url, 'http://x').searchParams.get('name') || '';
+          const safe = q.replace(/[^A-Za-z0-9._-]/g, '').replace(/^\.+/, '');
+          if (safe) name = safe;
+        } catch (e) { }
+        const file = path.join(dir, name);
         fs.writeFileSync(file, Buffer.concat(chunks));
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ ok: true, path: file }));

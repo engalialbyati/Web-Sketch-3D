@@ -4639,6 +4639,7 @@ class App {
     const defs = [
       ['File', [
         ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
+        ['AI Authoring Guide…', 'aiGuide', ''],
         ['Import IFC…', 'openIfc', ''], ['Import IFC as Elements…', 'openIfcElems', ''],
         ['Remove Imported IFC', 'removeIfc', ''],
         ['Load 5-Story Building', 'demo5', ''],
@@ -4847,6 +4848,37 @@ class App {
       demor5: () => A.loadRevitTestBuilding(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       save: () => A.saveFile(),
+      // hand the authoring spec to an AI: copy to clipboard, save the .md
+      // next to the models, or download it as a last resort
+      aiGuide: async () => {
+        let text = '';
+        try {
+          const r = await fetch('/docs/AI-AUTHORING.md');
+          if (!r.ok) throw new Error('guide not found');
+          text = await r.text();
+        } catch (e) {
+          A.toast('AI authoring guide not found in this build', true);
+          return;
+        }
+        let copied = false;
+        try { await navigator.clipboard.writeText(text); copied = true; } catch (e) { }
+        let saved = null;
+        try {
+          const s = await fetch('/api/save-model?name=AI-AUTHORING.md', { method: 'POST', body: text });
+          const j = await s.json();
+          if (j && j.ok) saved = j.path;
+        } catch (e) { }
+        if (copied && saved) A.toast('AI authoring guide copied to clipboard and saved to ' + saved);
+        else if (copied) A.toast('AI authoring guide copied to clipboard — paste it into the AI chat');
+        else if (saved) A.toast('AI authoring guide saved to ' + saved);
+        else {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown' }));
+          a.download = 'AI-AUTHORING.md';
+          a.click();
+          A.toast('AI authoring guide downloaded as AI-AUTHORING.md');
+        }
+      },
       exportPng: () => A.view.exportPNG(),
       undo: () => A.undo(), redo: () => A.redo(),
       cut: () => { A.copySel(); A.deleteSelection(); },
