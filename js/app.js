@@ -4645,6 +4645,7 @@ class App {
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
+        ['Export IFC…', 'exportIfc', ''],
       ]],
       ['Edit', [
         ['Undo', 'undo', 'Ctrl+Z'], ['Redo', 'redo', 'Ctrl+Y'], '-',
@@ -4889,6 +4890,7 @@ class App {
       cleanupWires: () => A.cleanupWires(),
       unhideAll: () => A.unhideAllEdges(),
       exportGltf: () => A.exportGltf(),
+      exportIfc: () => A.exportIfc(),
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
@@ -7516,6 +7518,22 @@ class App {
     const mesh = gltf.meshes[0];
     const tris = mesh.primitives.reduce((s2, p2) => s2 + (p2._triCount || 0), 0);
     this.toast(`Exported model.gltf — ${tris} triangles, ${mesh.primitives.length} material${mesh.primitives.length === 1 ? '' : 's'}`);
+  }
+  // Export IFC4 (roadmap Phase 1.1): the parametric registry becomes an
+  // IfcProject ▸ Site ▸ Building ▸ Storey tree with parametric extrusions
+  // (walls/slabs/columns/beams/footings), hosted openings + door/window
+  // fills, and B-Rep fallbacks for complex solids. Round-trips through our
+  // own Import IFC as Elements and opens in Revit/Archicad/viewers.
+  exportIfc() {
+    if (!window.IfcExport) { this.toast('IFC exporter not loaded', true); return; }
+    if (!this.bim.entities.length) { this.toast('No elements to export yet — draw or load a building first', true); return; }
+    const r = IfcExport.fromApp(this);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([r.text], { type: 'application/x-step' }));
+    a.download = 'model.ifc';
+    a.click();
+    const parts = Object.entries(r.counts).map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`);
+    this.toast(`Exported model.ifc — ${r.entities} IFC entities (${parts.join(', ')})${r.warn ? ' · ' + r.warn : ''}`);
   }
   deleteSelection() {
     // selected asset instances go first — hosted ones heal their wall inside

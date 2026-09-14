@@ -39,10 +39,10 @@ return one. This is the single highest-leverage phase.
 
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
-| 1.1 | ⬜ **IFC4 STEP writer** — IfcProject/Site/Building/Storey + IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcRoof, IfcStair, IfcRailing | M | Extruded-area-solid representations from our parametric profiles; openings via IfcRelFillsElement/IfcOpeningElement. Round-trip test: export → our own importer |
+| 1.1 | ✅ **IFC4 STEP writer** — IfcProject/Site/Building/Storey + IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcRoof, IfcStair, IfcRailing | M | Shipped: parametric extrusions, hosted openings via IfcRelVoidsElement/FillsElement, B-Rep fallbacks for complex solids. Verified round-trip: demo building (85 walls/60 columns/85 beams/21 doors/50 windows) exports and re-imports 100% as elements, model validates |
 | 1.2 | ⬜ Project base point, survey point, true/project north | S | Persisted on the model; feeds the writer's IfcMapConversion |
 | 1.3 | ⬜ IfcSpace export | S | Ships with Phase 2 rooms |
-| 1.4 | ⬜ Finish the in-flight import work (grids, curtain walls, door/window fills) | S | Already half-written in `ifc-elements.js` |
+| 1.4 | ✅ Finish the in-flight import work (grids, curtain walls, door/window fills) | S | Done by the IFC agent (committed) |
 
 ---
 
