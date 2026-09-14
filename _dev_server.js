@@ -12,6 +12,27 @@ const MIME = {
 };
 
 http.createServer((req, res) => {
+  // in-app save: POST /api/save-model writes the JSON into Saved Models/
+  // next to the app — dev parity with the Electron build's Downloads folder
+  if (req.method === 'POST' && req.url.split('?')[0] === '/api/save-model') {
+    const chunks = [];
+    req.on('data', c => chunks.push(c));
+    req.on('end', () => {
+      try {
+        const dir = path.join(__dirname, 'Saved Models');
+        fs.mkdirSync(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        const file = path.join(dir, `websketch-${stamp}.json`);
+        fs.writeFileSync(file, Buffer.concat(chunks));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, path: file }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+      }
+    });
+    return;
+  }
   let p;
   try { p = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch (e) { res.writeHead(400); return res.end(); }
   if (p === '/') p = '/index.html';

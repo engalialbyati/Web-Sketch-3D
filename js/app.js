@@ -8012,13 +8012,30 @@ class App {
   }
 
   // ------------------------------------------------------------------ files
-  saveFile() {
+  async saveFile() {
     const data = JSON.stringify(this.model.serialize());
+    // 1) the local server (dev or Electron) writes the file to disk —
+    //    works even where in-page downloads are suppressed (webviews)
+    try {
+      const r = await fetch('/api/save-model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: data,
+      });
+      const j = await r.json();
+      if (j && j.ok) {
+        this.toast('Model saved to ' + j.path);
+        this._saveAutosave();
+        return;
+      }
+    } catch (e) { /* no server endpoint — fall through to a browser download */ }
+    // 2) plain-browser fallback: the classic download
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
     a.download = 'model.websketch.json';
     a.click();
     this.toast('Model saved as model.websketch.json');
+    this._saveAutosave();
   }
   _saveAutosave() {
     clearTimeout(this._asTimer);

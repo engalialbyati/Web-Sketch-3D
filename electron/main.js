@@ -26,6 +26,28 @@ function startServer() {
       try {
         let p = decodeURIComponent((req.url || '/').split('?')[0]);
         if (p === '/') p = '/index.html';
+        // in-app save: POST /api/save-model writes the JSON to the user's
+        // Downloads/WebSketch folder — the in-page Save As uses this first
+        // and falls back to a browser download when no endpoint answers
+        if (req.method === 'POST' && p === '/api/save-model') {
+          const chunks = [];
+          req.on('data', c => chunks.push(c));
+          req.on('end', () => {
+            try {
+              const dir = path.join(app.getPath('downloads'), 'WebSketch');
+              fs.mkdirSync(dir, { recursive: true });
+              const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+              const file = path.join(dir, `websketch-${stamp}.json`);
+              fs.writeFileSync(file, Buffer.concat(chunks));
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: true, path: file }));
+            } catch (e) {
+              res.writeHead(500, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ ok: false, error: String(e.message || e) }));
+            }
+          });
+          return;
+        }
         const f = path.normalize(path.join(ROOT, p));
         if (!f.startsWith(path.normalize(ROOT))) { res.writeHead(403); return res.end(); }
         fs.readFile(f, (err, data) => {
