@@ -525,7 +525,7 @@
         // a failed build leaves PARTIAL faces behind, unstamped — they pass
         // autoIntersect's fresh-pair gate and pollute every later build
         // (the multi-thousand-element grind). Roll the build back whole.
-        for (const id of [...m.faces.keys()]) if (!before.has(id)) m.faces.delete(id);
+        rollbackFaces(m, before);
         throw e;
       }
       TR.s = 'reg-collect';
@@ -561,6 +561,40 @@
     return [lo, hi];
   };
 
+  // Delete every face born after a snapshot, unlinking via a one-pass
+  // adjacency map over the SURVIVORS — a bare faces.delete leaves edges
+  // dangling, and those ghosts pollute every later pass
+  function rollbackFaces(m, before) {
+    const doomed = [...m.faces.keys()].filter(id => !before.has(id))
+      .map(id => m.faces.get(id)).filter(Boolean);
+    for (const f of doomed) m.faces.delete(f.id);
+    if (!doomed.length) return;
+    const adj = new Map();
+    for (const f of m.faces.values()) {
+      for (const ring of m.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const k = a < b ? a + 'x' + b : b + 'x' + a;
+          adj.set(k, (adj.get(k) || 0) + 1);
+        }
+      }
+    }
+    for (const f of doomed) {
+      const rings = [[...f.loop], ...(f.holes || []).map(h => [...h])];
+      for (const ring of rings) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const k = a < b ? a + 'x' + b : b + 'x' + a;
+          if (!adj.get(k)) {
+            const e = m.findEdge(a, b);
+            if (e) { try { m._delEdge(e.id); } catch (e2) { } }
+          }
+        }
+      }
+    }
+    try { m.gc(); } catch (e) { }
+  }
+
   async function load(file, app, onProgress) {
     if (!root.IfcImport || !root.IfcImport.api) throw new Error('ifc-import module missing');
     if (!app || !app.model || !app.bim) throw new Error('no model to import into');
@@ -570,16 +604,24 @@
     try {
       const parsed = parseModel(WebIFC, ifcApi, modelID);
       const built = await build(app, parsed, onProgress);
-      // everything the schema pass did NOT convert — stairs, doors, windows,
-      // roofs, furniture, failed parses — stays visible as phase-1 reference
-      // meshes; converted expressIDs are skipped so nothing renders twice
-      let meshes = 0;
+      // leftovers (stairs, doors, windows, roofs, furniture, failed parses)
+      // normally stay visible as phase-1 reference meshes — but a file whose
+      // leftovers run into the tens of thousands (hospital curtain walls:
+      // mullions + plates) would put more meshes than the renderer can hold
+      // next to the fresh elements; those are a File ▸ Import IFC job
+      let meshes = 0, skippedMeshes = 0;
       try {
-        const rec = await root.IfcImport.addMeshesFromOpenModel(
-          modelID, file.name, built.converted);
-        meshes = Object.values(rec.counts || {}).reduce((a, b) => a + b, 0);
+        const all = ifcApi.GetLineIDsWithType(modelID, WebIFC.IFCPRODUCT);
+        const rest = all.size() - built.converted.size;
+        if (rest > 4000) {
+          skippedMeshes = rest;
+        } else {
+          const rec = await root.IfcImport.addMeshesFromOpenModel(
+            modelID, file.name, built.converted);
+          meshes = Object.values(rec.counts || {}).reduce((a, b) => a + b, 0);
+        }
       } catch (e) { /* mesh pass is best-effort; elements are the product */ }
-      return { counts: built.counts, meshes, levels: built.levelIds };
+      return { counts: built.counts, meshes, skippedMeshes, levels: built.levelIds };
     } finally {
       ifcApi.CloseModel(modelID);
     }
@@ -637,9 +679,14 @@
     m.bimHold = true;
     // plain sweeps: the file's geometry is authoritative — pushPull skips
     // host inference and blocking-face detection (both O(all faces) per
-    // sweep; the punch path cascades on same-plane footprint overlaps)
+    // sweep; the punch path cascades on same-plane footprint overlaps).
+    // autoIntersect is off too: imported elements are INDEPENDENT ISLANDS
+    // (the kernel's own v0.6 element-independence contract) — they overlap
+    // at junctions by design and the renderer hides the seams
     const heldPlain = m.plainSweeps;
+    const heldAI = m.noAutoIntersect;
     m.plainSweeps = true;
+    m.noAutoIntersect = true;
     let sweepOpen = true;
     const cleanup = () => {
       if (sweepOpen) {
@@ -648,6 +695,7 @@
         sweepOpen = false;
       }
       m.plainSweeps = heldPlain;
+      m.noAutoIntersect = heldAI;
       bim._holdOpDone = heldOp;
     };
 
@@ -878,7 +926,7 @@
           } catch (e) {
             // failed cut leaves partial faces unstamped — roll back whole;
             // the wall stays solid and the door/window mesh still shows it
-            for (const id of [...m.faces.keys()]) if (!before.has(id)) m.faces.delete(id);
+            rollbackFaces(m, before);
           }
         }
       }
@@ -957,6 +1005,7 @@
       try {
         try { m.bimHold = false; } catch (e3) { } // single release: reap residue once
         m.plainSweeps = heldPlain;
+        m.noAutoIntersect = heldAI;
         for (const f of m.faces.values()) {
           m.edgesForRing(f.loop, true);
           for (const h of (f.holes || [])) m.edgesForRing(h, true);

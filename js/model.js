@@ -93,12 +93,29 @@ class Model {
         this._bimOwner = null;
         const born = this._bimHoldEdges;
         this._bimHoldEdges = null;
-        for (const id of [...this.edges.keys()]) {
-          if (born.has(id)) continue;
-          const e = this.edges.get(id);
-          if (e && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
+        if (born) {
+          // v0.7 PERF: one-pass adjacency map (same as endEdgeSweep) — the
+          // per-edge scan made releasing a long bulk hold quadratic
+          const adj = new Map();
+          for (const f of this.faces.values()) {
+            for (const ring of this.rings(f)) {
+              for (let i = 0; i < ring.length; i++) {
+                const a = ring[i], b = ring[(i + 1) % ring.length];
+                const k = a < b ? a + 'x' + b : b + 'x' + a;
+                adj.set(k, (adj.get(k) || 0) + 1);
+              }
+            }
+          }
+          for (const id of [...this.edges.keys()]) {
+            if (born.has(id)) continue;
+            const e = this.edges.get(id);
+            if (e) {
+              const k = e.a < e.b ? e.a + 'x' + e.b : e.b + 'x' + e.a;
+              if (!adj.get(k)) this._delEdge(id);
+            }
+          }
+          this.gc();
         }
-        this.gc();
       } else if (this._bimHoldDepth < 0) this._bimHoldDepth = 0;
     }
   }
@@ -1018,11 +1035,26 @@ class Model {
   endEdgeSweep() {
     if (!this._sweepStack || !this._sweepStack.length) return;
     const snap = this._sweepStack.pop();
+    // v0.7 PERF: adjacency in ONE pass over face rings — the per-edge
+    // facesAdjacentToEdge() scan was O(faces × ring) PER born edge, and a
+    // bulk import's sweep reap alone crossed a billion comparisons
+    const adj = new Map();
+    for (const f of this.faces.values()) {
+      for (const ring of this.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          const k = a < b ? a + 'x' + b : b + 'x' + a;
+          adj.set(k, (adj.get(k) || 0) + 1);
+        }
+      }
+    }
     for (const id of [...this.edges.keys()]) {
       if (snap.has(id)) continue;
       const e = this.edges.get(id);
-      if (e && !e.curveId && !(e.userData && e.userData.deliberate)
-        && this.facesAdjacentToEdge(e).length === 0) this._delEdge(id);
+      if (e && !e.curveId && !(e.userData && e.userData.deliberate)) {
+        const k = e.a < e.b ? e.a + 'x' + e.b : e.b + 'x' + e.a;
+        if (!adj.get(k)) this._delEdge(id);
+      }
     }
     this.gc();
   }
