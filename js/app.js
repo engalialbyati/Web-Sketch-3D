@@ -722,13 +722,16 @@ class BimEntityManager {
     // detach the not-yet-extruded entity on the spot (the 90° corner wall
     // that rendered but never appeared in the browser — an orphan)
     if (ent && opts.pending) ent._pending = true;
-    if (ent) this._markHostsDirty(ent);
+    // bulk imports (IFC) opt out: their geometry is authoritative from the
+    // file, and the per-create intruder scan is O(all entities) — quadratic
+    // across a multi-thousand-element import
+    if (ent && !opts.noHostDirty) this._markHostsDirty(ent);
     // a NEW wall must respect the face rule from birth: drawn through a
     // standing column/beam, opDone plan-trims it immediately (a wall
     // already grid-trimmed to an intruder's face kisses at 1 mm — under
     // the bite gate this is a no-op)
     if (ent && ent.type === 'wall' && ent.params && ent.params.base
-      && ent.params.end && !ent.params.closed) {
+      && ent.params.end && !ent.params.closed && !opts.noHostDirty) {
       this._hostsDirty = this._hostsDirty || new Set();
       this._hostsDirty.add(ent.id);
     }
@@ -2422,7 +2425,10 @@ class BimEntityManager {
     // v0.6 FACE-STOP: where the run's ends meet columns, the geometry
     // retreats to the first column face + ELEMENT_EPS (a solid butt joint).
     // Params keep the drawn span — this is derivation, not mutation.
-    if (window.app && window.app.structural && window.app.structural.wallEndRetreats) {
+    // Imported (IFC) walls arrive pre-joined from the file — no retreat,
+    // and the O(entities) intruder scan is pure cost at import scale.
+    if (window.app && window.app.structural && window.app.structural.wallEndRetreats
+      && params.source !== 'ifc') {
       const rt = window.app.structural.wallEndRetreats(params);
       if (rt) {
         const ux = (P2.x - P1.x) / rt.L, uy = (P2.y - P1.y) / rt.L;

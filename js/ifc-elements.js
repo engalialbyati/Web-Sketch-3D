@@ -509,14 +509,26 @@
 
   // ----------------------------------------------------- element building
   // Mirrors Demo-R5's reg(): build the solid through the real parametric
-  // pathway, then claim the fresh faces/edges with bim.create.
+  // pathway, then claim the fresh faces/edges with bim.create. The bimHold
+  // is NOT toggled here — the whole import runs under ONE outer hold (a
+  // per-element toggle snapshots/diffs every edge in the model each time,
+  // which is quadratic on a multi-thousand-element file).
   function makeBuilders(app, m, bim) {
     const G = window.G, S = app.structural;
+    const TR = (root.__ifcTrace = root.__ifcTrace || {});
     const reg = (type, params, buildGeom, roleOf) => {
+      TR.s = 'reg-before';
       const before = new Set(m.faces.keys());
-      m.bimHold = true;
       let out;
-      try { out = buildGeom(); } finally { m.bimHold = false; }
+      try { TR.s = 'reg-geom'; out = buildGeom(); }
+      catch (e) {
+        // a failed build leaves PARTIAL faces behind, unstamped — they pass
+        // autoIntersect's fresh-pair gate and pollute every later build
+        // (the multi-thousand-element grind). Roll the build back whole.
+        for (const id of [...m.faces.keys()]) if (!before.has(id)) m.faces.delete(id);
+        throw e;
+      }
+      TR.s = 'reg-collect';
       const nf = [...m.faces.keys()].filter(id => !before.has(id))
         .map(id => m.faces.get(id)).filter(f => f && !f.userData);
       const roles = {};
@@ -526,8 +538,13 @@
         const e = m.findEdge(r[i], r[(i + 1) % r.length]);
         if (e && !e.userData) edges.push(e.id);
       }
-      const ent = bim.create(type, JSON.parse(JSON.stringify(params)), roles, [...new Set(edges)]);
+      TR.s = 'reg-stringify';
+      const cp = JSON.parse(JSON.stringify(params));
+      TR.s = 'reg-create';
+      const ent = bim.create(type, cp, roles, [...new Set(edges)], { noHostDirty: true });
+      TR.s = 'reg-post';
       if (ent) ent.name = params.name || ent.name;
+      TR.s = 'reg-done';
       return ent;
     };
     const faceAt = (f, z0, h) => {
@@ -600,20 +617,49 @@
     const levelIds = [...storeyLevel.values()];
 
     const stages = [];
+    // Yield via MessageChannel, not setTimeout: port messages are immune to
+    // Chromium's background-page timer freezing — a multi-minute import
+    // keeps running when the user switches tabs or the pane is occluded
+    const tick = (() => {
+      const ch = new MessageChannel();
+      const q = [];
+      ch.port1.onmessage = () => { const fn = q.shift(); if (fn) fn(); };
+      return () => new Promise(r => { q.push(r); ch.port2.postMessage(0); });
+    })();
     const stage = (label, fn) => stages.push({ label, fn });
 
     const heldOp = bim._holdOpDone;
     bim._holdOpDone = true;
     m.beginEdgeSweep();
+    // ONE hold for the whole import: construction residue is reaped on this
+    // single release (and by finish's reapOrphanEdges) instead of a
+    // per-element snapshot/diff of every edge in the model
+    m.bimHold = true;
+    // plain sweeps: the file's geometry is authoritative — pushPull skips
+    // host inference and blocking-face detection (both O(all faces) per
+    // sweep; the punch path cascades on same-plane footprint overlaps)
+    const heldPlain = m.plainSweeps;
+    m.plainSweeps = true;
     let sweepOpen = true;
+    const cleanup = () => {
+      if (sweepOpen) {
+        try { m.bimHold = false; } catch (e2) { }
+        try { m.endEdgeSweep(); } catch (e2) { }
+        sweepOpen = false;
+      }
+      m.plainSweeps = heldPlain;
+      bim._holdOpDone = heldOp;
+    };
 
     const productsOf = cat => parsed.products.filter(p => p.cat === cat);
 
     // ---- foundation (pad footing from a plan rectangle). foundationBounds
     // hangs the pad below a LEVEL datum (top = levelZ), so the import only
     // converts when the file's top plane matches one within 1 mm ----
-    stage('foundations', () => {
+    stage('foundations', async () => {
+      let k = 0;
       for (const prod of productsOf('foundation')) {
+        if (++k % 40 === 0) await tick();
         const sw = prod.sw;
         const rl = sw && Math.abs(sw.dir.z) > 0.9 && rectLike(sw.base);
         if (!rl) { fallback.add(prod.id); continue; }
@@ -636,8 +682,10 @@
     });
 
     // ---- column (rect prism or the circular family) ----
-    stage('columns', () => {
+    stage('columns', async () => {
+      let k = 0;
       for (const prod of productsOf('column')) {
+        if (++k % 40 === 0) await tick();
         const sw = prod.sw;
         if (!sw || Math.abs(sw.dir.z) <= 0.9) { fallback.add(prod.id); continue; }
         const [zb, zt] = zOf(sw.base.concat(sw.top));
@@ -685,8 +733,13 @@
     });
 
     // ---- wall (centerline from a plan rectangle; footprint otherwise) ----
-    stage('walls', () => {
+    stage('walls', async () => {
+      let k = 0;
+      const TR = (root.__ifcTrace = root.__ifcTrace || {});
       for (const prod of productsOf('wall')) {
+        TR.walls = k; TR.phase = 'loop'; TR.lastId = prod.id;
+        if (++k % 40 === 0) await tick();
+        TR.phase = 'checks';
         const sw = prod.sw;
         if (!sw || Math.abs(sw.dir.z) <= 0.9) { fallback.add(prod.id); continue; }
         const bottom = sw.dir.z > 0 ? sw.base : sw.top;
@@ -706,13 +759,19 @@
             locationLine: 'centerline', primitive: 'line', closed: false,
             joins: { start: 0, end: 0 },
           };
-          if (bim.existsLike('wall', p)) { converted.add(prod.id); continue; }
+          // existsLike is a no-op for base/end walls (it keys on baselines)
+          // and an O(entities) scan — skip it at import scale
           try {
+            TR.phase = 'reg';
             const ent = reg('wall', p, () => {
+              TR.s = 'w-ring';
               const ring = bim.wallRing(p);
+              TR.s = 'w-addface';
               const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
               if (!f) throw new Error('wall ring degenerate');
+              TR.s = 'w-push';
               if (!m.pushPull(f, h)) throw new Error('wall sweep failed');
+              TR.s = 'w-done';
               return f;
             }, f => faceAt(f, zb, h));
             converted.add(prod.id); bump('wall');
@@ -749,9 +808,11 @@
     });
 
     // ---- wall openings (IfcOpeningElement boxes → HostedCut) ----
-    stage('openings', () => {
+    stage('openings', async () => {
       const byId = new Map(parsed.products.map(p => [p.id, p]));
+      let k = 0;
       for (const rec of wallRecs) {
+        if (++k % 40 === 0) await tick();
         const prod = byId.get(rec.prodId);
         if (!prod || !prod.openings.length) continue;
         for (const oid of prod.openings) {
@@ -781,13 +842,18 @@
             distanceFromStart: (lo + hi) / 2, width: fmt(width), height: fmt(height),
             sillHeight: fmt(Math.max(0, sill)), depth: rec.params.thickness,
           };
+          const before = new Set(m.faces.keys());
           try {
-            const before = new Set(m.faces.keys());
-            m.bimHold = rec.ent.id;
+            m.bimHold = rec.ent.id; // nested named hold — the wall owns its cut
             let info = null;
             try {
               info = BT.HostedCut.cut(G, m, rec.ent.params, spec);
-            } finally { m.bimHold = false; }
+            } finally {
+              m.bimHold = false;
+              // nested release keeps _bimOwner — restore the anonymous
+              // import hold so later builds don't mis-attribute ownership
+              m._bimOwner = null;
+            }
             if (!info || info.error) continue;
             const nf = [...m.faces.keys()].filter(id => !before.has(id))
               .map(id => m.faces.get(id)).filter(f => f && !f.userData);
@@ -809,14 +875,20 @@
               depth: spec.depth, source: 'ifc',
             }, roles, [...new Set(own)]);
             bump('opening');
-          } catch (e) { /* wall stays solid — the mesh of the door/window still shows */ }
+          } catch (e) {
+            // failed cut leaves partial faces unstamped — roll back whole;
+            // the wall stays solid and the door/window mesh still shows it
+            for (const id of [...m.faces.keys()]) if (!before.has(id)) m.faces.delete(id);
+          }
         }
       }
     });
 
     // ---- slab (plan outline at the top plane, swept down) ----
-    stage('slabs', () => {
+    stage('slabs', async () => {
+      let k = 0;
       for (const prod of productsOf('slab')) {
+        if (++k % 40 === 0) await tick();
         const sw = prod.sw;
         if (!sw || Math.abs(sw.dir.z) <= 0.9) { fallback.add(prod.id); continue; }
         const top = sw.dir.z > 0 ? sw.top : sw.base;
@@ -843,8 +915,10 @@
     });
 
     // ---- beam (horizontal run, absolute zTop — a soffit is not a level) ----
-    stage('beams', () => {
+    stage('beams', async () => {
+      let k = 0;
       for (const prod of productsOf('beam')) {
+        if (++k % 40 === 0) await tick();
         const sw = prod.sw;
         if (!sw || Math.abs(sw.dir.z) > 0.1) { fallback.add(prod.id); continue; }
         const zs = sw.base.map(p => p.z);
@@ -881,6 +955,8 @@
 
     const finish = () => {
       try {
+        try { m.bimHold = false; } catch (e3) { } // single release: reap residue once
+        m.plainSweeps = heldPlain;
         for (const f of m.faces.values()) {
           m.edgesForRing(f.loop, true);
           for (const h of (f.holes || [])) m.edgesForRing(h, true);
@@ -896,27 +972,24 @@
       return { counts, converted, fallback, levelIds };
     };
 
-    return new Promise((resolve, reject) => {
-      let i = 0;
-      const run = () => {
-        if (i >= stages.length) {
-          try { resolve(finish()); } catch (e) { reject(e); }
-          return;
-        }
-        const st = stages[i];
-        try {
+    return (async () => {
+      const TR = (root.__ifcTrace = root.__ifcTrace || {});
+      try {
+        for (let i = 0; i < stages.length; i++) {
+          const st = stages[i];
+          TR.stage = st.label; TR.stageIdx = i;
           if (onProgress) onProgress(st.label, i, stages.length);
-          st.fn();
-        } catch (e) {
-          if (sweepOpen) { try { m.endEdgeSweep(); } catch (e2) { } bim._holdOpDone = heldOp; }
-          reject(e);
-          return;
+          await st.fn();
+          TR.done = st.label;
         }
-        i++;
-        setTimeout(run, 0);
-      };
-      run();
-    });
+      } catch (e) {
+        TR.error = e.message || String(e);
+        cleanup();
+        throw e;
+      }
+      TR.phase = 'finish';
+      return finish();
+    })();
   }
 
   root.IfcElements = { load, _internals: { parseModel, extrusions, profileLoop, rectLike, obbFromRing, axisMatrix } };

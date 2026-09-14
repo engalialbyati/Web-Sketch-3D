@@ -1992,7 +1992,12 @@ class Model {
       return { externals, holeHost };
     };
     let { externals, holeHost } = scanNeighborhood();
-    if (!externals.size &&
+    // plainSweeps (bulk imports): the file's geometry is authoritative — no
+    // SketchUp-style host inference, no blocking-face detection. Those scans
+    // are O(all faces) per sweep and the punch/trim/split path cascades on
+    // same-plane footprint overlaps (a multi-storey import grinds to a halt)
+    const plain = this.plainSweeps === true;
+    if (!plain && !externals.size &&
       (this.punchHole(face) || this.trimHostByRing(face) || this.splitFaceWithRing(face))) {
       // the face never connected to the host it lies on (imported model,
       // pre-weld drawing, or a draw that landed on grouped geometry) —
@@ -2073,13 +2078,13 @@ class Model {
       this.faces.set(cap.id, cap);
       capId = cap.id;
     } else if (holeHost && !anchorHoles.length) {
-      through = this.findBlockingFace(face, anchorOuter, n, dist);
+      through = plain ? null : this.findBlockingFace(face, anchorOuter, n, dist);
     }
     // a parallel face in the sweep path blocks regardless of how the pushed
     // face sits in the model — drawn in a host's punched hole (the
     // wall-window case) or free-floating on open ground under a ceiling
     // slab: the sweep punches (and clamps) against it either way
-    if (!through && Math.abs(dist) > 1e-6)
+    if (!through && !plain && Math.abs(dist) > 1e-6)
       through = this.findBlockingFace(face, anchorOuter, n, dist);
     // a parallel face in the sweep path blocks regardless of how the pushed
     // face sits in the model — drawn in a host's punched hole (the
