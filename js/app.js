@@ -5046,6 +5046,17 @@ class App {
           this.view.zoomExtents();
           this.updateInfo();
           this.syncElementsToDb(); // the database mirrors the loaded model
+          // AI-authored / params-only files (v/e/f empty or stale) self-heal
+          // the same way the boot restore does: a rebuildable entity that
+          // owns no faces, or a failed validate, rebuilds from parameters
+          const homeless = this.bim.entities.some(e =>
+            /^(wall|column|beam|slab|floor|foundation|roof)$/.test(e.type)
+            && !(e.params && e.params.fixed) && (!e.faces || !e.faces.length));
+          if (homeless || !this.model.validate().ok) {
+            this.rebuildFromParams();
+            this.view.rebuild();
+            this.toast('Model rebuilt from parameters');
+          }
           this.toast('Model loaded');
         } catch (e) { this.toast('Could not read that file', true); }
       };

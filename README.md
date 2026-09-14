@@ -113,6 +113,12 @@ windows — 325 live parametric elements in one click.
 > BIM layer, structural rules, rendering and export pipelines (Mermaid
 > diagrams).
 
+> **AI authoring:** models can be *written* as JSON, not just saved —
+> **[docs/AI-AUTHORING.md](docs/AI-AUTHORING.md)** is a complete spec
+> (element types, parameters, placement rules, a verified example) made to be
+> pasted to an AI so it can generate a whole building as a
+> `.websketch.json` you open with File ▸ Open.
+
 ## Run it
 
 - **Windows installer (recommended)**: grab
