@@ -855,6 +855,9 @@
     // ---- wall openings (IfcOpeningElement boxes → HostedCut) ----
     stage('openings', async () => {
       const byId = new Map(parsed.products.map(p => [p.id, p]));
+      const TR2 = (root.__ifcTrace = root.__ifcTrace || {});
+      TR2.openCut = TR2.openCut || { tried: 0, ok: 0, errInfo: 0, threw: 0, guarded: 0, noGeom: 0, msgs: [] };
+      const note = msg => { if (TR2.openCut.msgs.length < 5) TR2.openCut.msgs.push(String(msg).slice(0, 120)); };
       let k = 0;
       for (const rec of wallRecs) {
         if (++k % 40 === 0) await tick();
@@ -862,7 +865,7 @@
         if (!prod || !prod.openings.length) continue;
         for (const oid of prod.openings) {
           const sws = parsed.openGeoms.get(oid);
-          if (!sws) continue;
+          if (!sws) { TR2.openCut.noGeom++; continue; }
           const sw = sws.reduce((a, b) => (b.depth > (a ? a.depth : -1) ? b : a), null);
           if (!sw) continue;
           const pts = sw.base.concat(sw.top);
@@ -880,9 +883,10 @@
           const width = hi - lo, height = maxZ - minZ;
           const sill = minZ - A[2];
           const wallH = rec.params.height;
-          if (width < 0.05 || height < 0.05) continue;
-          if (sill < -0.02 || sill + height > wallH + 0.02) continue;
-          if (lo < 0.02 || hi > L - 0.02) continue; // outside the run
+          TR2.openCut.tried++;
+          if (width < 0.05 || height < 0.05) { TR2.openCut.guarded++; continue; }
+          if (sill < -0.02 || sill + height > wallH + 0.02) { TR2.openCut.guarded++; continue; }
+          if (lo < 0.02 || hi > L - 0.02) { TR2.openCut.guarded++; continue; } // outside the run
           const spec = {
             distanceFromStart: (lo + hi) / 2, width: fmt(width), height: fmt(height),
             sillHeight: fmt(Math.max(0, sill)), depth: rec.params.thickness,
@@ -890,16 +894,20 @@
           const before = new Set(m.faces.keys());
           try {
             m.bimHold = rec.ent.id; // nested named hold — the wall owns its cut
+            // a nested hold does NOT set _bimOwner (the setter writes it only
+            // on depth 0→1) — without this the owner stays '__new__', every
+            // host face fails hostCuttableBy, and the punch finds no host
+            m._bimOwner = rec.ent.id;
             let info = null;
             try {
               info = BT.HostedCut.cut(G, m, rec.ent.params, spec);
             } finally {
               m.bimHold = false;
-              // nested release keeps _bimOwner — restore the anonymous
+              // nested release keeps depth > 0 — restore the anonymous
               // import hold so later builds don't mis-attribute ownership
               m._bimOwner = null;
             }
-            if (!info || info.error) continue;
+            if (!info || info.error) { TR2.openCut.errInfo++; note(info && info.error); continue; }
             const nf = [...m.faces.keys()].filter(id => !before.has(id))
               .map(id => m.faces.get(id)).filter(f => f && !f.userData);
             const roles = {};
@@ -920,7 +928,9 @@
               depth: spec.depth, source: 'ifc',
             }, roles, [...new Set(own)]);
             bump('opening');
+            TR2.openCut.ok++;
           } catch (e) {
+            TR2.openCut.threw++; note(e.message || e);
             // failed cut leaves partial faces unstamped — roll back whole;
             // the wall stays solid and the door/window mesh still shows it
             rollbackFaces(m, before);

@@ -3,7 +3,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = 8642;
+const PORT = +(process.argv[2] || 8642);
 const ROOT = __dirname;
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
