@@ -5122,7 +5122,7 @@ class App {
         .map(([k, n]) => `${n} ${k}${n === 1 ? '' : 's'}`);
       if (r.meshes) parts.push(`${r.meshes} reference mesh${r.meshes === 1 ? '' : 'es'}`);
       this.toast(`Imported “${file.name}” as elements — ${parts.join(', ') || 'nothing recognized'}`
-        + (r.skippedMeshes ? `. ${r.skippedMeshes} non-structural items skipped (too many — File ▸ Import IFC for the full reference)` : ''));
+        + (r.skippedMeshes ? `. ${r.skippedMeshes} non-structural items not loaded — use File ▸ Import IFC for the reference view` : ''));
     } catch (e) {
       console.error(e);
       this.toast(`IFC element import failed: ${e && e.message || e}`, true);
