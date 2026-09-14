@@ -4633,6 +4633,7 @@ class App {
     const defs = [
       ['File', [
         ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
+        ['Import IFC…', 'openIfc', ''], ['Remove Imported IFC', 'removeIfc', ''],
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
@@ -4828,6 +4829,12 @@ class App {
       }),
       open: () => document.getElementById('fileinput').click(),
       openBlend: () => document.getElementById('blendinput').click(),
+      openIfc: () => document.getElementById('ifcinput').click(),
+      removeIfc: () => {
+        if (!window.IfcImport || !IfcImport.list().length) { A.toast('No imported IFC in the scene'); return; }
+        IfcImport.removeAll();
+        A.toast('Imported IFC removed');
+      },
       demo5: () => A.loadDemo5Building(),
       demor5: () => A.loadRevitTestBuilding(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
@@ -5044,6 +5051,32 @@ class App {
       bi.value = '';
       this.openBlendFile(f);
     });
+    const ii = document.getElementById('ifcinput');
+    if (ii) ii.addEventListener('change', () => {
+      const f = ii.files[0];
+      if (!f) return;
+      ii.value = '';
+      this.openIfcFile(f);
+    });
+  }
+
+  // File ▸ Import IFC… — phase 1: the building lands as category-colored
+  // reference meshes in true world position (web-ifc from CDN on first
+  // use). Nothing enters the kernel; Remove Imported IFC disposes it whole.
+  async openIfcFile(file) {
+    if (!window.IfcImport) { this.toast('IFC importer not loaded', true); return; }
+    this.setStatus(`Importing “${file.name}” — parsing geometry (first import fetches the ~2 MB parser)…`);
+    try {
+      const rec = await IfcImport.load(file);
+      const top = Object.entries(rec.counts).sort((a, b) => b[1] - a[1]).slice(0, 4)
+        .map(([k, n]) => `${n} ${k}`).join(', ');
+      this.view.zoomExtents();
+      this.toast(`Imported “${file.name}” — ${rec.object.children.length} meshes (${top}${Object.keys(rec.counts).length > 4 ? ', …' : ''}). Reference only: not editable, Remove via File ▸ Remove Imported IFC`);
+    } catch (e) {
+      console.error(e);
+      this.toast(`IFC import failed: ${e && e.message || e}`, true);
+    }
+    this.setStatus(this.tool ? this.tool.hint : '');
   }
 
   // File ▸ Open .blend… — the bridge converts the upload via headless
