@@ -464,12 +464,104 @@
       voids.get(host).push(op);
     }
 
+    // fills: opening expressID → the door/window filling it (IfcRelFillsElement)
+    // IFC2X3 names the pair RelatingOpeningElement/RelatedFillElement; IFC4
+    // renamed the opening side to RelatedOpeningElement — read both
+    const fills = new Map();
+    for (const rid of idsOf(WebIFC.IFCRELFILLSELEMENT)) {
+      const r = raw(rid);
+      if (!r) continue;
+      const opRaw = r.RelatedOpeningElement != null ? r.RelatedOpeningElement : r.RelatingOpeningElement;
+      // the fill side is RelatedFillElement in IFC4, RelatedBuildingElement
+      // in IFC2X3 (web-ifc keys by the loaded schema's names)
+      const fillRaw = r.RelatingFillElement != null ? r.RelatingFillElement
+        : (r.RelatedFillElement != null ? r.RelatedFillElement : r.RelatedBuildingElement);
+      const op = handleId(opRaw), fill = handleId(fillRaw);
+      if (op == null || fill == null) continue;
+      try {
+        const t = ifcApi.GetLineType(modelID, fill);
+        const cat = t === WebIFC.IFCDOOR ? 'door' : t === WebIFC.IFCWINDOW ? 'window' : null;
+        if (cat) fills.set(op, { id: fill, cat });
+      } catch (e) { }
+    }
+
+    // curtain walls carry NO own geometry — their plates/mullions are
+    // aggregated children (IfcRelAggregates). One glass wall per CW from the
+    // children's placed bounds; the mullions stay as capped reference meshes
+    const curtain = [];
+    {
+      const cwIds = new Set(idsOf(WebIFC.IFCCURTAINWALL));
+      if (cwIds.size) {
+        const boxes = new Map(); // containerId -> [minx,miny,minz,maxx,maxy,maxz]
+        const names = new Map();
+        for (const rid of idsOf(WebIFC.IFCRELAGGREGATES)) {
+          const r = raw(rid);
+          if (!r) continue;
+          const cont = handleId(r.RelatingObject);
+          if (cont == null || !cwIds.has(cont)) continue;
+          for (const chH of (r.RelatedObjects || [])) {
+            const ch = handleId(chH);
+            if (ch == null) continue;
+            const line = getline(ch);
+            if (!line || !line.ObjectPlacement) continue;
+            const p = worldMatrix(line.ObjectPlacement).getPosition();
+            let b = boxes.get(cont);
+            if (!b) { b = [p.x, p.y, p.z, p.x, p.y, p.z]; boxes.set(cont, b); }
+            else {
+              if (p.x < b[0]) b[0] = p.x; if (p.y < b[1]) b[1] = p.y; if (p.z < b[2]) b[2] = p.z;
+              if (p.x > b[3]) b[3] = p.x; if (p.y > b[4]) b[4] = p.y; if (p.z > b[5]) b[5] = p.z;
+            }
+          }
+        }
+        for (const [id, b] of boxes) {
+          const g = getline(id);
+          names.set(id, g ? str(g.Name) : '');
+          const L = Math.max(b[3] - b[0], b[4] - b[1]);
+          if (L < 0.5 || (b[5] - b[2]) < 0.5) continue; // degenerate bounds
+          curtain.push({ id, name: names.get(id) || 'Curtain Wall', min: b.slice(0, 3), max: b.slice(3) });
+        }
+      }
+    }
+
+    // grids: IfcGrid U/V axes → plan lines (the app's GridManager datums)
+    const grids = [];
+    for (const gid of idsOf(WebIFC.IFCGRID)) {
+      const g = getline(gid);
+      if (!g) continue;
+      const M = worldMatrix(g.ObjectPlacement);
+      for (const key of ['UAxes', 'VAxes']) {
+        for (const axH of ((typeof g[key] === 'function' ? g[key]() : g[key]) || [])) {
+          const ax = deref(axH, getline);
+          if (!ax) continue;
+          const tag = (str(ax.AxisTag) || '').trim();
+          const curve = deref(ax.AxisCurve, getline);
+          if (!curve || !curve.Points) continue;
+          const pts = curve.Points.map(p0 => {
+            const p = deref(p0, getline);
+            const c = (p && p.Coordinates) || [0, 0, 0];
+            return new THREE_.Vector3(num(c[0]), num(c[1]), num(c[2])).applyMatrix4(M);
+          }).filter(p => isFinite(p.x) && isFinite(p.y));
+          if (pts.length < 2) continue;
+          const a = pts[0], b = pts[pts.length - 1];
+          if (Math.hypot(b.x - a.x, b.y - a.y) < 0.01) continue;
+          grids.push({ name: tag, start: [fmt(a.x), fmt(a.y)], end: [fmt(b.x), fmt(b.y)] });
+        }
+      }
+    }
+
     const cats = [
       ['wall', [WebIFC.IFCWALL, WebIFC.IFCWALLSTANDARDCASE, WebIFC.IFCWALLELEMENTEDCASE]],
       ['column', [WebIFC.IFCCOLUMN]],
       ['beam', [WebIFC.IFCBEAM]],
       ['slab', [WebIFC.IFCSLAB]],
       ['foundation', [WebIFC.IFCFOOTING]],
+      ['roof', [WebIFC.IFCROOF]],
+      ['stairs', [WebIFC.IFCSTAIRFLIGHT]],
+      // doors/windows are hosted: consumed by the openings stage (their
+      // product ids join the converted set when their opening cuts).
+      // Curtain walls are containers — see the `curtain` bounds pass.
+      ['door', [WebIFC.IFCDOOR]],
+      ['window', [WebIFC.IFCWINDOW]],
     ];
     const products = [];
     const seen = new Set();
@@ -482,13 +574,32 @@
       // exactly ONE clean extrusion converts; multi-solid bodies keep their
       // tessellated mesh rather than losing half their shape
       const exs = extrusions(p, getline);
-      const sw = exs.length === 1 ? swept(exs[0].solid, M, exs[0].preM, f, getline) : null;
+      // exactly ONE clean extrusion converts; stair flights carry a second
+      // small extrusion (landing edge/ledge) — take the dominant one
+      let sw = null;
+      if (exs.length === 1) sw = swept(exs[0].solid, M, exs[0].preM, f, getline);
+      else if (cat === 'stairs' && exs.length > 1) {
+        let big = null, bigD = -1;
+        for (const x of exs) {
+          const d = num(x.solid.Depth) * f;
+          if (d > bigD) { bigD = d; big = x; }
+        }
+        if (big) sw = swept(big.solid, M, big.preM, f, getline);
+      }
+      const extra = {};
+      if (cat === 'stairs') { // IfcStairFlight carries its recipe as schema
+        extra.nRisers = num(p.NumberOfRisers) || 0;
+        extra.nTreads = num(p.NumberOfTreads) || 0;
+        extra.riserH = num(p.RiserHeight) || 0;
+        extra.treadL = num(p.TreadLength) || 0;
+      }
       products.push({
         cat, id, name: str(p.Name).slice(0, 60),
         globalId: str(p.GlobalId),
         sw,
         storeyId: contained.get(id) || null,
         openings: voids.get(id) || [],
+        ...extra,
       });
     }
 
@@ -504,7 +615,7 @@
       openGeoms.set(oid, sws.length ? sws : null);
     }
 
-    return { storeys, products, openGeoms, factor: f };
+    return { storeys, products, openGeoms, fills, grids, curtain, factor: f };
   }
 
   // ----------------------------------------------------- element building
@@ -698,6 +809,26 @@
 
     const productsOf = cat => parsed.products.filter(p => p.cat === cat);
 
+    // ---- grids (IfcGridAxis → GridManager datums) ----
+    stage('grids', async () => {
+      if (!app.gridManager || !parsed.grids.length) return;
+      let added = 0;
+      for (const g of parsed.grids) {
+        try {
+          const dup = app.gridManager.grids.some(x =>
+            Math.abs(x.start[0] - g.start[0]) < 1e-3 && Math.abs(x.start[1] - g.start[1]) < 1e-3
+            && Math.abs(x.end[0] - g.end[0]) < 1e-3 && Math.abs(x.end[1] - g.end[1]) < 1e-3);
+          if (dup) continue;
+          app.gridManager.addGrid({ name: g.name || '', start: g.start, end: g.end });
+          added++;
+        } catch (e) { }
+      }
+      if (added) {
+        if (app.onGridsChanged) app.onGridsChanged();
+        bump('grid');
+      }
+    });
+
     // ---- foundation (pad footing from a plan rectangle). foundationBounds
     // hangs the pad below a LEVEL datum (top = levelZ), so the import only
     // converts when the file's top plane matches one within 1 mm ----
@@ -852,6 +983,43 @@
       }
     });
 
+    // ---- curtain walls (glass walls from aggregated panel bounds — the
+    // mullion/panel meshes stay as the capped reference layer) ----
+    stage('curtain walls', async () => {
+      let k = 0;
+      for (const cw of (parsed.curtain || [])) {
+        if (++k % 20 === 0) await tick();
+        const [x0, y0, z0] = cw.min, [x1, y1, z1] = cw.max;
+        const Lx = x1 - x0, Ly = y1 - y0;
+        let A, B, t;
+        if (Lx >= Ly) {
+          const yc = (y0 + y1) / 2;
+          A = [fmt(x0), fmt(yc), fmt(z0)]; B = [fmt(x1), fmt(yc), fmt(z0)]; t = Ly;
+        } else {
+          const xc = (x0 + x1) / 2;
+          A = [fmt(xc), fmt(y0), fmt(z0)]; B = [fmt(xc), fmt(y1), fmt(z0)]; t = Lx;
+        }
+        const h = z1 - z0;
+        t = Math.min(Math.max(t, 0.05), 1);
+        const p = {
+          name: cw.name, source: 'ifc',
+          base: A, end: B, height: fmt(h), thickness: fmt(t),
+          locationLine: 'centerline', primitive: 'line', closed: false,
+          joins: { start: 0, end: 0 }, material: 'Glass',
+        };
+        try {
+          reg('wall', p, () => {
+            const ring = bim.wallRing(p);
+            const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+            if (!f) throw new Error('curtain wall ring degenerate');
+            if (!m.pushPull(f, h)) throw new Error('curtain wall sweep failed');
+            return f;
+          }, f => faceAt(f, z0, h));
+          converted.add(cw.id); bump('curtain wall');
+        } catch (e) { /* the CW container itself has no mesh either way */ }
+      }
+    });
+
     // ---- wall openings (IfcOpeningElement boxes → HostedCut) ----
     stage('openings', async () => {
       const byId = new Map(parsed.products.map(p => [p.id, p]));
@@ -908,10 +1076,28 @@
               m._bimOwner = null;
             }
             if (!info || info.error) { TR2.openCut.errInfo++; note(info && info.error); continue; }
+            // filled voids (IfcRelFillsElement) become real door/window
+            // entities — frame geometry through the same hosted pathway the
+            // app's own door/window tools use
+            const fill = parsed.fills.get(oid);
+            let frameFaces = [];
+            if (fill) {
+              m.bimHold = rec.ent.id;
+              m._bimOwner = rec.ent.id;
+              try {
+                frameFaces = BT.HostedCut.frame(G, m, info, spec, fill.cat, { facing: 1, hand: 1 }) || [];
+              } catch (e2) { frameFaces = []; }
+              finally { m.bimHold = false; m._bimOwner = null; }
+            }
             const nf = [...m.faces.keys()].filter(id => !before.has(id))
               .map(id => m.faces.get(id)).filter(f => f && !f.userData);
             const roles = {};
-            for (const f of nf) roles[f.id] = 'lining';
+            for (const f of nf) {
+              const fi = frameFaces.indexOf(f);
+              roles[f.id] = fi >= 0
+                ? (fill && fill.cat === 'door' && fi === frameFaces.length - 1 ? 'leaf' : 'frame')
+                : 'lining';
+            }
             const cutFaces = new Set(nf.map(f => f.id));
             const edges = [];
             for (const f of nf) for (const r of m.rings(f)) for (let i = 0; i < r.length; i++) {
@@ -922,12 +1108,13 @@
               const e = m.edges.get(id);
               return e && m.facesAdjacentToEdge(e).every(f => cutFaces.has(f.id));
             });
-            bim.create('opening', {
+            bim.create(fill ? fill.cat : 'opening', {
               hostWallId: rec.ent.id, distanceFromStart: info.t,
               sillHeight: spec.sillHeight, width: spec.width, height: spec.height,
-              depth: spec.depth, source: 'ifc',
-            }, roles, [...new Set(own)]);
-            bump('opening');
+              depth: spec.depth, facing: 1, hand: 1, source: 'ifc',
+            }, roles, [...new Set(own)], { noHostDirty: true });
+            if (fill) { converted.add(fill.id); bump(fill.cat); }
+            else bump('opening');
             TR2.openCut.ok++;
           } catch (e) {
             TR2.openCut.threw++; note(e.message || e);
@@ -965,6 +1152,95 @@
             return f;
           }, f => faceAt(f, zt - T, T));
           converted.add(prod.id); bump('slab');
+        } catch (e) { fallback.add(prod.id); }
+      }
+    });
+
+    // ---- roof (flat, from a swept plan outline — pitched/BREP roofs stay
+    // reference meshes) ----
+    stage('roofs', async () => {
+      const RF = window.RoofFeature;
+      let k = 0;
+      for (const prod of productsOf('roof')) {
+        if (++k % 20 === 0) await tick();
+        const sw = prod.sw;
+        if (!RF || !sw || Math.abs(sw.dir.z) <= 0.9) { fallback.add(prod.id); continue; }
+        const top = sw.dir.z > 0 ? sw.top : sw.base;
+        const T = sw.depth;
+        if (T < 0.01 || top.length < 3 || top.length > 256) { fallback.add(prod.id); continue; }
+        const zt = top[0].z;
+        const lvl = levelIdFor(prod, zt);
+        let outer = top.map(p => [fmt(p.x), fmt(p.y), fmt(zt)]);
+        if (planArea(outer) < 0) outer.reverse();
+        const p = {
+          name: prod.name, source: 'ifc', ifc: prod.globalId,
+          kind: 'flat', pitch: 10, overhang: 0,
+          regions: [{ outer, holes: [] }], thickness: fmt(T), baseLevel: lvl,
+        };
+        try {
+          reg('roof', p, () => RF.buildRegion(G, m,
+            { kind: 'flat', thickness: fmt(T), pitch: 10, overhang: 0, region: { outer: outer.map(q => G.v(...q)), holes: [] }, z: zt }),
+            () => 'body');
+          converted.add(prod.id); bump('roof');
+        } catch (e) { fallback.add(prod.id); }
+      }
+    });
+
+    // ---- stairs (IfcStairFlight sawtooth → the parametric stairs feature) ----
+    stage('stairs', async () => {
+      const SF = window.StairsFeature;
+      let k = 0;
+      for (const prod of productsOf('stairs')) {
+        if (++k % 20 === 0) await tick();
+        const sw = prod.sw;
+        if (!SF || !sw || Math.abs(sw.dir.z) > 0.1) { fallback.add(prod.id); continue; }
+        // the sawtooth section ring spans the run: recover treads from its
+        // distinct step levels, then rebuild parametrically
+        const u = [sw.dir.x, sw.dir.y];
+        const n = [-u[1], u[0]]; // in-section horizontal (the run direction)
+        const ring = sw.base;
+        let d0 = Infinity, d1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+        const zs = new Set();
+        for (const q of ring) {
+          const d = q.x * n[0] + q.y * n[1];
+          if (d < d0) d0 = d;
+          if (d > d1) d1 = d;
+          if (q.z < z0) z0 = q.z;
+          if (q.z > z1) z1 = q.z;
+          zs.add(Math.round(q.z * 1000));
+        }
+        const runLen = d1 - d0, rise = z1 - z0;
+        if (runLen < 0.5 || rise < 0.5) { fallback.add(prod.id); continue; }
+        // schema recipe first (IfcStairFlight carries risers/treads), then
+        // the sawtooth ring's distinct levels as the geometric fallback
+        let nT = prod.nRisers >= 2 && prod.nRisers <= 40 ? prod.nRisers : 0;
+        if (!nT) nT = Math.max(2, Math.min(30, zs.size - 1));
+        let tread = prod.treadL > 0.05 && prod.treadL < 1 ? prod.treadL : 0;
+        if (!tread) tread = runLen / nT;
+        const riser = rise / nT;
+        // flight start = the ring point at (min d, min z)
+        let start = ring[0];
+        for (const q of ring) {
+          const d = q.x * n[0] + q.y * n[1];
+          if (d - d0 < 0.05 && q.z - z0 < 0.05) { start = q; break; }
+        }
+        const lvl = levelIdFor(prod, z0);
+        const p = {
+          name: prod.name, source: 'ifc', ifc: prod.globalId,
+          base: [fmt(start.x), fmt(start.y), fmt(z0)],
+          dir: [fmt(n[0]), fmt(n[1])],
+          width: fmt(sw.depth), storyH: fmt(rise),
+          tread: fmt(tread), riser: fmt(riser),
+          run: 'straight', baseLevel: lvl,
+        };
+        try {
+          const built = SF.buildStair(G, m, p);
+          if (!built || built.error || !built.faces || !built.faces.length) throw new Error(built && built.error || 'stair build failed');
+          const ent = bim.create('stairs',
+            { ...p, nRisers: built.info.nRisers, riserActual: built.info.riser },
+            built.roles, built.edges, { noHostDirty: true });
+          if (ent) ent.name = prod.name;
+          converted.add(prod.id); bump('stairs');
         } catch (e) { fallback.add(prod.id); }
       }
     });
