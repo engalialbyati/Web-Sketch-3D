@@ -605,21 +605,18 @@
       const parsed = parseModel(WebIFC, ifcApi, modelID);
       const built = await build(app, parsed, onProgress);
       // leftovers (stairs, doors, windows, roofs, furniture, failed parses)
-      // normally stay visible as phase-1 reference meshes — but a file whose
-      // leftovers run into the tens of thousands (hospital curtain walls:
-      // mullions + plates) would put more meshes than the renderer can hold
-      // next to the fresh elements; those are a File ▸ Import IFC job
+      // normally stay visible as phase-1 reference meshes — capped hard: a
+      // file whose leftovers run into the tens of thousands (hospital
+      // curtain walls: mullions + plates) would put more meshes than the
+      // renderer can hold next to the fresh elements; those are a
+      // File ▸ Import IFC job. (Type-query counting can't see subtypes, so
+      // the cap lives inside the stream itself.)
       let meshes = 0, skippedMeshes = 0;
       try {
-        const all = ifcApi.GetLineIDsWithType(modelID, WebIFC.IFCPRODUCT);
-        const rest = all.size() - built.converted.size;
-        if (rest > 4000) {
-          skippedMeshes = rest;
-        } else {
-          const rec = await root.IfcImport.addMeshesFromOpenModel(
-            modelID, file.name, built.converted);
-          meshes = Object.values(rec.counts || {}).reduce((a, b) => a + b, 0);
-        }
+        const rec = await root.IfcImport.addMeshesFromOpenModel(
+          modelID, file.name, built.converted, 3000);
+        meshes = Object.values(rec.counts || {}).reduce((a, b) => a + b, 0);
+        skippedMeshes = rec.skippedProducts || 0;
       } catch (e) { /* mesh pass is best-effort; elements are the product */ }
       return { counts: built.counts, meshes, skippedMeshes, levels: built.levelIds };
     } finally {

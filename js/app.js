@@ -5101,6 +5101,12 @@ class App {
   // meshes. The import is atomic — undo is cleared, like a demo load.
   async openIfcElementsFile(file) {
     if (!window.IfcElements) { this.toast('IFC elements module not loaded', true); return; }
+    // the element version SUPERSEDES a reference import of the same file —
+    // leaving both stacks the raw meshes on the converted elements
+    if (window.IfcImport) {
+      for (const rec of IfcImport.list().filter(r => r.name === file.name))
+        IfcImport.remove(rec.id);
+    }
     this.setStatus(`Importing “${file.name}” as elements — parsing schema (first import fetches the ~2 MB parser)…`);
     try {
       const r = await IfcElements.load(file, this, (label, i, n) =>

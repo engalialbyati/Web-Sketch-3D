@@ -66,7 +66,10 @@
   // Stream the tessellated meshes of an ALREADY-OPEN web-ifc model into the
   // scene as reference geometry. Phase 2 shares this: expressIDs it converted
   // to kernel elements arrive in `skipIds` and stay meshes-out (no doubles).
-  async function addMeshesFromOpenModel(modelID, name, skipIds) {
+  // `maxProducts` caps how many products become meshes — a hospital's 16k
+  // mullions/plates next to fresh elements tip the renderer over; the rest
+  // are counted and reported, not silently dropped.
+  async function addMeshesFromOpenModel(modelID, name, skipIds, maxProducts = Infinity) {
     const A = root.app || window.app;
     const view = A && A.view;
     if (!view) throw new Error('viewport not ready');
@@ -81,9 +84,13 @@
         matCache.set(color, new THREE.MeshLambertMaterial({ color }));
       return matCache.get(color);
     };
+    let made = 0, skippedProducts = 0;
+    const quota = isFinite(maxProducts) ? 250 : Infinity; // diversity, not plate soup
     ifcApi.StreamAllMeshes(modelID, mesh => {
       if (skip.has(mesh.expressID)) return;
       const cat = categoryOf(WebIFC, ifcApi, modelID, mesh.expressID);
+      if (made >= maxProducts || (counts[cat.key] || 0) >= quota) { skippedProducts++; return; }
+      made++;
       counts[cat.key] = (counts[cat.key] || 0) + 1;
       const geos = mesh.geometries;
       for (let i = 0; i < geos.size(); i++) {
@@ -121,7 +128,7 @@
     });
     const id = 'ifc_' + nextId++;
     imports.set(id, {
-      id, name: name || 'import.ifc', object: group, counts, hidden: false,
+      id, name: name || 'import.ifc', object: group, counts, hidden: false, skippedProducts,
       dispose() {
         for (const m of matCache.values()) m.dispose();
         group.traverse(ch => { if (ch.geometry) ch.geometry.dispose(); });
