@@ -4638,7 +4638,7 @@ class App {
     const bar = document.getElementById('menubar');
     const defs = [
       ['File', [
-        ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
+        ['New', 'new', ''], ['Open…', 'open', ''], ['Paste Model JSON…', 'pasteJson', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
         ['AI Authoring Guide…', 'aiGuide', ''],
         ['Import IFC…', 'openIfc', ''], ['Import IFC as Elements…', 'openIfcElems', ''],
         ['Remove Imported IFC', 'removeIfc', ''],
@@ -4836,6 +4836,7 @@ class App {
         if (A.db) A.db.replaceAllElements([]).catch(() => { }); // empty model = empty Elements table
       }),
       open: () => document.getElementById('fileinput').click(),
+      pasteJson: () => A.pasteJsonDialog(),
       openBlend: () => document.getElementById('blendinput').click(),
       openIfc: () => document.getElementById('ifcinput').click(),
       openIfcElems: () => document.getElementById('ifceleminput').click(),
@@ -5063,35 +5064,7 @@ class App {
       const f = fi.files[0];
       if (!f) return;
       const r = new FileReader();
-      r.onload = () => {
-        try {
-          this.model.load(JSON.parse(r.result));
-          this.undoStack = [];
-          this.redoStack = [];
-          this.clearSelection();
-          if (this.view.clearPins) this.view.clearPins();
-          this.view.rebuild();
-          if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
-          this.onLevelsChanged(); // datum view layers follow the loaded model
-          this.onGridsChanged();
-          this.rederiveJunctions(); // junctions re-derived against loaded neighbors
-          this.view.zoomExtents();
-          this.updateInfo();
-          this.syncElementsToDb(); // the database mirrors the loaded model
-          // AI-authored / params-only files (v/e/f empty or stale) self-heal
-          // the same way the boot restore does: a rebuildable entity that
-          // owns no faces, or a failed validate, rebuilds from parameters
-          const homeless = this.bim.entities.some(e =>
-            /^(wall|column|beam|slab|floor|foundation|roof)$/.test(e.type)
-            && !(e.params && e.params.fixed) && (!e.faces || !e.faces.length));
-          if (homeless || !this.model.validate().ok) {
-            this.rebuildFromParams();
-            this.view.rebuild();
-            this.toast('Model rebuilt from parameters');
-          }
-          this.toast('Model loaded');
-        } catch (e) { this.toast('Could not read that file', true); }
-      };
+      r.onload = () => this.loadModelText(r.result, f.name);
       r.readAsText(f);
       fi.value = '';
     });
@@ -8068,6 +8041,68 @@ class App {
     a.click();
     this.toast('Model saved as model.websketch.json');
     this._saveAutosave();
+  }
+
+  // shared by File > Open and Paste Model JSON: parse, load, self-heal.
+  // Returns true on success; a parse failure toasts and returns false (the
+  // paste dialog stays open for a correction)
+  loadModelText(text, fromName) {
+    let data = null;
+    try { data = JSON.parse(text); } catch (e) {
+      this.toast('Not valid JSON — ' + (e.message || e), true);
+      return false;
+    }
+    try {
+      this.model.load(data);
+      this.undoStack = [];
+      this.redoStack = [];
+      this.clearSelection();
+      if (this.view.clearPins) this.view.clearPins();
+      this.view.rebuild();
+      if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
+      this.onLevelsChanged(); // datum view layers follow the loaded model
+      this.onGridsChanged();
+      this.rederiveJunctions(); // junctions re-derived against loaded neighbors
+      this.view.zoomExtents();
+      this.updateInfo();
+      this.syncElementsToDb(); // the database mirrors the loaded model
+      // AI-authored / params-only files (v/e/f empty or stale) self-heal
+      // the same way the boot restore does: a rebuildable entity that
+      // owns no faces, or a failed validate, rebuilds from parameters
+      const homeless = this.bim.entities.some(e =>
+        /^(wall|column|beam|slab|floor|foundation|roof)$/.test(e.type)
+        && !(e.params && e.params.fixed) && (!e.faces || !e.faces.length));
+      if (homeless || !this.model.validate().ok) {
+        this.rebuildFromParams();
+        this.view.rebuild();
+      }
+      this.toast('Model loaded' + (fromName ? ` — ${fromName}` : ''));
+      this._saveAutosave();
+      return true;
+    } catch (e) {
+      this.toast('Could not load that model — ' + (e.message || e), true);
+      return false;
+    }
+  }
+
+  // File > Paste Model JSON: the AI round-trip without a file — copy the
+  // JSON out of any chat, paste it here, the building self-heals into place
+  pasteJsonDialog() {
+    this.dialog('Paste Model JSON',
+      `<p style="margin:0 0 7px;color:#5a6572">Paste a <b>.websketch.json</b> (saved, or written by an AI following
+       <a href="https://github.com/engalialbyati/Web-Sketch-3D/blob/main/docs/AI-AUTHORING.md" target="_blank" rel="noopener">the authoring guide</a>).
+       Parameters-only models generate their geometry on load.</p>
+       <textarea id="paste-json" spellcheck="false" autocomplete="off"
+         style="width:100%;height:44vh;min-height:200px;box-sizing:border-box;font:12px/1.45 Consolas,Menlo,monospace;white-space:pre;overflow:auto;resize:vertical"
+         placeholder='{ "v": [], "e": [], "f": [], "c": [], "g": [], "lvl": [...], "bim": [...] }'></textarea>`,
+      [['Cancel', null], ['Load Model', () => {
+        const ta = document.getElementById('paste-json');
+        const t = ta ? ta.value.trim() : '';
+        if (!t) { this.toast('Nothing to load — paste the JSON first', true); return false; }
+        return this.loadModelText(t);
+      }]]);
+    const ta = document.getElementById('paste-json');
+    if (ta) ta.focus();
   }
   _saveAutosave() {
     clearTimeout(this._asTimer);

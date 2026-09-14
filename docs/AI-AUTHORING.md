@@ -320,5 +320,13 @@ slab and an edge beam — 11 elements, self-healed geometry.
 > 150 mm slabs, edge beams on grid lines, pad footings under ground columns.
 > Output only the JSON."
 
-Then **File ▸ Open…** the file. If something is off, the app toasts what it
-rebuilt; check the Element Browser against what you asked for.
+Then load it — three ways, no file needed:
+
+- **File ▸ Paste Model JSON…** — paste the AI's output straight into the
+  app; the building self-heals into place. (Fastest path.)
+- **File ▸ Open…** — after saving the JSON to disk.
+- Ask the AI to *edit* the JSON it wrote (add a story, move a wall) and
+  paste again — the model is replaced wholesale.
+
+If something is off, the app toasts what it rebuilt; check the Element
+Browser against what you asked for.
