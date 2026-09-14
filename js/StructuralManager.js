@@ -253,7 +253,11 @@
     /** Beam vertical bounds. Top justification (default) hangs the beam
      *  DOWNWARD from the reference floor plane: [Z - h, Z]. */
     beamBounds(p) {
-      const z = this.levelZ(p.referenceLevelId != null ? p.referenceLevelId : p.baseLevel);
+      // p.zTop: absolute world z for the beam's top plane — imported IFC
+      // beams hang at the soffit of THEIR file's slabs, which no app level
+      // necessarily matches; without it the beam snaps to a level datum
+      const z = p.zTop != null ? +p.zTop
+        : this.levelZ(p.referenceLevelId != null ? p.referenceLevelId : p.baseLevel);
       const h = Math.max(0.05, +p.height || 0.5);
       const j = p.zJustification || 'Top';
       if (j === 'Bottom') return { zBottom: z, zTop: z + h, height: h, zJustification: j };

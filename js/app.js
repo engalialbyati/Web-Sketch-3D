@@ -4633,7 +4633,8 @@ class App {
     const defs = [
       ['File', [
         ['New', 'new', ''], ['Open…', 'open', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
-        ['Import IFC…', 'openIfc', ''], ['Remove Imported IFC', 'removeIfc', ''],
+        ['Import IFC…', 'openIfc', ''], ['Import IFC as Elements…', 'openIfcElems', ''],
+        ['Remove Imported IFC', 'removeIfc', ''],
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
@@ -4830,6 +4831,7 @@ class App {
       open: () => document.getElementById('fileinput').click(),
       openBlend: () => document.getElementById('blendinput').click(),
       openIfc: () => document.getElementById('ifcinput').click(),
+      openIfcElems: () => document.getElementById('ifceleminput').click(),
       removeIfc: () => {
         if (!window.IfcImport || !IfcImport.list().length) { A.toast('No imported IFC in the scene'); return; }
         IfcImport.removeAll();
@@ -5058,6 +5060,13 @@ class App {
       ii.value = '';
       this.openIfcFile(f);
     });
+    const ie = document.getElementById('ifceleminput');
+    if (ie) ie.addEventListener('change', () => {
+      const f = ie.files[0];
+      if (!f) return;
+      ie.value = '';
+      this.openIfcElementsFile(f);
+    });
   }
 
   // File ▸ Import IFC… — phase 1: the building lands as category-colored
@@ -5075,6 +5084,35 @@ class App {
     } catch (e) {
       console.error(e);
       this.toast(`IFC import failed: ${e && e.message || e}`, true);
+    }
+    this.setStatus(this.tool ? this.tool.hint : '');
+  }
+
+  // File ▸ Import IFC as Elements… — phase 2: the schema layer is parsed and
+  // driven through the REAL parametric pathways (storeys → levels, walls →
+  // wall entities with cut openings, columns, beams with absolute soffit z,
+  // slabs, footings). Everything unrecognized stays as phase-1 reference
+  // meshes. The import is atomic — undo is cleared, like a demo load.
+  async openIfcElementsFile(file) {
+    if (!window.IfcElements) { this.toast('IFC elements module not loaded', true); return; }
+    this.setStatus(`Importing “${file.name}” as elements — parsing schema (first import fetches the ~2 MB parser)…`);
+    try {
+      const r = await IfcElements.load(file, this, (label, i, n) =>
+        this.setStatus(`Importing “${file.name}” — ${label} (${i + 1}/${n})…`));
+      this.view.rebuild();
+      this.updateInfo();
+      this.refreshGroups();
+      if (this.elements && this.elements.refresh) this.elements.refresh();
+      this.view.zoomExtents();
+      this._saveAutosave();
+      this.undoStack = []; this.redoStack = [];
+      const parts = Object.entries(r.counts).filter(([, n]) => n > 0)
+        .map(([k, n]) => `${n} ${k}${n === 1 ? '' : 's'}`);
+      if (r.meshes) parts.push(`${r.meshes} reference mesh${r.meshes === 1 ? '' : 'es'}`);
+      this.toast(`Imported “${file.name}” as elements — ${parts.join(', ') || 'nothing recognized'}`);
+    } catch (e) {
+      console.error(e);
+      this.toast(`IFC element import failed: ${e && e.message || e}`, true);
     }
     this.setStatus(this.tool ? this.tool.hint : '');
   }
