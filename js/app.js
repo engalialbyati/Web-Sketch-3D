@@ -172,6 +172,7 @@ const TOOL_DEFS = {
   // SketchUp-style direct modeling ribbon
   free: [
     { id: 'select', label: 'Select', key: 'Space' },
+    { id: 'edgeselect', label: 'Edge Select', key: 'K' },
     'sep',
     { id: 'line', label: 'Line', key: 'L' },
     { id: 'polyline', label: 'Polyline', key: '' },
@@ -205,6 +206,7 @@ const TOOL_DEFS = {
   // Revit-style parametric ribbon — same canvas, same B-Rep model
   bim: [
     { id: 'select', label: 'Select', key: 'Space' },
+    { id: 'edgeselect', label: 'Edge Select', key: 'K' },
     'sep',
     { id: 'draw', label: 'Draw', key: 'D' },
     { id: 'wall', label: 'Wall', key: 'L' },
@@ -250,6 +252,7 @@ const TOOL_DEFS = {
   // now: the owner walks the contents in step by step (column design first)
   design: [
     { id: 'select', label: 'Select', key: 'Space' },
+    { id: 'edgeselect', label: 'Edge Select', key: 'K' },
   ],
 };
 
@@ -266,7 +269,7 @@ const TOOL_DEFS = {
 // ---------------------------------------------------------------------------
 const RIBBON_GROUPS = {
   free: [
-    { title: 'Select', tools: ['select'] },
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
     { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale', 'mirror', 'array'] },
     { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea', 'area'] },
@@ -276,7 +279,7 @@ const RIBBON_GROUPS = {
     { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
   ],
   bim: [
-    { title: 'Select', tools: ['select'] },
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'levelview'] },
     { title: 'Build', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
     { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
@@ -291,7 +294,7 @@ const RIBBON_GROUPS = {
     { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
   ],
   design: [
-    { title: 'Select', tools: ['select'] },
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
     { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
@@ -308,7 +311,7 @@ const RIBBON_GROUPS = {
 // ---------------------------------------------------------------------------
 const RIBBON_TABS = {
   draw: { label: 'Draw', groups: [
-    { title: 'Select', tools: ['select'] },
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '2D Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
     { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
     { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },

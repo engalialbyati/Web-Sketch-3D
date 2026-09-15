@@ -6,7 +6,7 @@
 // ---------------------------------------------------------------------------
 const TOOLS = {
   // tools/free/*
-  select: FreeTools.SelectTool, line: FreeTools.LineTool, rect: FreeTools.RectTool,
+  select: FreeTools.SelectTool, edgeselect: FreeTools.EdgeSelectTool, line: FreeTools.LineTool, rect: FreeTools.RectTool,
   // polyline = the Line tool's chained mode under its own name (click-click-
   // click chains; Esc/double-click ends) — one entry point, discoverable
   polyline: FreeTools.LineTool,

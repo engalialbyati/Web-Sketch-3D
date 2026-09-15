@@ -599,6 +599,105 @@ class SelectTool extends Tool {
   }
 }
 
+// =========================================================== edge selection
+// A dedicated EDGES-ONLY selection mode (the AutoCAD drafting workflow:
+// pick lines/arcs for offset, join, styling — never a face, element, or
+// note). Click picks the edge under the cursor (a curve chain picks as
+// one curve); drag a window (blue) or crossing (green) box for many;
+// Shift/Ctrl adds; Esc clears.
+class EdgeSelectTool extends Tool {
+  static id = 'edgeselect';
+  cleanup() { this._bandStart = null; this._band = false; super.cleanup(); }
+  get hint() {
+    return this._bandStart
+      ? 'Edge Select: drag to window edges (right-to-left = crossing). Shift/Ctrl adds.'
+      : 'Edge Select: click an edge — or drag a box around several. Faces, elements, and annotations are never picked. Shift/Ctrl adds; Esc clears.';
+  }
+  _chainIds(edge) {
+    const m = this.app.model;
+    return edge.curveId ? m.curveEdges(edge.curveId).map(e => e.id) : [edge.id];
+  }
+  // window: the whole segment inside; crossing (right-to-left): touched.
+  // A caught chain segment expands to its whole curve.
+  _collect(x0, y0, x1, y1, crossing) {
+    const app = this.app, model = app.model;
+    const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    const out = new Set();
+    for (const e of model.edges.values()) {
+      const a = model.vp(e.a), b = model.vp(e.b);
+      if (!a || !b) continue;
+      const sa = app.view.toScreen(a), sb = app.view.toScreen(b);
+      if (sa.behind && sb.behind) continue;
+      const hit = crossing ? (inside(sa.x, sa.y) || inside(sb.x, sb.y)) : (inside(sa.x, sa.y) && inside(sb.x, sb.y));
+      if (hit) for (const id of this._chainIds(e)) out.add(id);
+    }
+    return out;
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    if (this._bandStart) {
+      const q = view.eventPt(ev);
+      const dx = q.x - this._bandStart.x, dy = q.y - this._bandStart.y;
+      if (!this._band && Math.hypot(dx, dy) > 4) {
+        this._band = true;
+        app.bandEl.classList.add('active');
+      }
+      if (this._band) {
+        const el = app.bandEl; // band div lives in the viewport = ScreenPt frame
+        el.style.left = Math.min(this._bandStart.x, q.x) + 'px';
+        el.style.top = Math.min(this._bandStart.y, q.y) + 'px';
+        el.style.width = Math.abs(dx) + 'px'; el.style.height = Math.abs(dy) + 'px';
+        el.classList.toggle('window', q.x >= this._bandStart.x);   // blue solid
+        el.classList.toggle('crossing', q.x < this._bandStart.x);  // green dashed
+      }
+      return;
+    }
+    const pe = app.pickEdgeAt(ev, 9);
+    view.setHoverFace(null);
+    view.setHoverEdges(pe && pe.edge ? this._chainIds(pe.edge) : null);
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    this._mod = ev.shiftKey || ev.ctrlKey;
+    this._bandStart = this.app.view.eventPt(ev);
+    this._band = false;
+  }
+  onUp(ev) {
+    if (!this._bandStart) return;
+    const app = this.app;
+    const q = app.view.eventPt(ev);
+    app.bandEl.classList.remove('active', 'window', 'crossing');
+    if (this._band) {
+      const x0 = Math.min(this._bandStart.x, q.x), x1 = Math.max(this._bandStart.x, q.x);
+      const y0 = Math.min(this._bandStart.y, q.y), y1 = Math.max(this._bandStart.y, q.y);
+      const crossing = q.x < this._bandStart.x;
+      const ids = this._collect(x0, y0, x1, y1, crossing);
+      if (this._mod) app.toggleEntities({ edges: ids, faces: new Set() });
+      else { app.sel = { edges: ids, faces: new Set() }; app.onSelectionChanged(); }
+      app.setStatus(`${ids.size} edge${ids.size === 1 ? '' : 's'} selected`);
+    } else {
+      const pe = app.pickEdgeAt(ev, 9);
+      if (pe && pe.edge) {
+        const ids = new Set(this._chainIds(pe.edge));
+        if (this._mod) app.toggleEntities({ edges: ids, faces: new Set() });
+        else { app.sel = { edges: ids, faces: new Set() }; app.onSelectionChanged(); }
+      } else if (!this._mod) {
+        app.clearSelection(); // empty space: plain click deselects
+      }
+    }
+    this._bandStart = null; this._band = false;
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') {
+      this._bandStart = null; this._band = false;
+      this.app.clearSelection();
+      this.app.view.setHoverEdges(null);
+      return true;
+    }
+    return false;
+  }
+}
+
 // =========================================================== line
 class LineTool extends Tool {
   static id = 'line';
@@ -3266,7 +3365,7 @@ class FollowMeTool extends Tool {
 }
 
 window.FreeTools = {
-  SelectTool, LineTool, RectTool, CircleTool, ArcTool, PushPullTool, MoveTool,
+  SelectTool, EdgeSelectTool, LineTool, RectTool, CircleTool, ArcTool, PushPullTool, MoveTool,
   RotateTool, ScaleTool, OffsetTool, PaintTool, EraserTool, TrimTool, TapeMeasureTool,
   OrbitTool, PanTool, ZoomTool, ResizeTool, ExtrudeCurveTool, MirrorTool, ArrayTool,
   RevolveTool, FollowMeTool,
