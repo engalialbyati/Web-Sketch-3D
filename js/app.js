@@ -308,7 +308,7 @@ const RIBBON_TABS = {
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select'] },
     { title: '2D Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
-    { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'convert'] },
+    { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
     { title: 'Modify', tools: ['trim', 'offset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
   ] },
   model: { label: 'Model', groups: [
@@ -317,8 +317,9 @@ const RIBBON_TABS = {
     { title: 'Tools', tools: ['paint', 'eraser'] },
   ] },
   insert: { label: 'Insert', groups: [
-    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof'] },
-    { title: 'Circulation', tools: ['stairs', 'handrail'] },
+    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
+    { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
+    { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
     { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
     { title: 'Libraries', tools: ['browser', 'families', 'kit'] },

@@ -34,6 +34,7 @@ const TOOLS = {
   assetplace: AssetTools.AssetPlaceTool, assetdoor: AssetTools.AssetDoorTool,
   assetwindow: AssetTools.AssetWindowTool,
   // user/AI-coded parametric element types (Scripted Elements)
+  // rooms register through the Engine feature system (features/room.js)
   scriptplace: ScriptTools.ScriptPlaceTool,
 };
 window.TOOLS = TOOLS;
