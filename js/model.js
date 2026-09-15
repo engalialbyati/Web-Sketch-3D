@@ -554,6 +554,47 @@ class Model {
   addFaceFromRings(outerPts, holePtsList = [], opts = {}) {
     if (outerPts.length < 3) return null;
     if (G.loopArea(outerPts) < 1e-10) return null;
+    // STANDALONE (loose) face — Create Face's independence contract: fresh
+    // unwelded copies of every vertex and a private edge set (one new chain
+    // id per ring). The face shares NO topology with the wire it came from
+    // or with a neighbor lying on the same curve: the source wire survives
+    // for the next Create Face, and pushing, editing, or deleting one face
+    // never reaches the other.
+    if (opts.standalone) {
+      const fresh = p => {
+        const id = nid();
+        this.vertices.set(id, G.clone(p));
+        this._vhAdd(id, this.vertices.get(id), Model.WELD_EPS * 2);
+        return id;
+      };
+      const gid = opts.gid != null ? opts.gid : (this.currentGid || 0);
+      const ring = outerPts.map(fresh);
+      if (new Set(ring).size < 3) return null;
+      const cid = nid();
+      this.curves.set(cid, { type: 'polyline' });
+      for (let i = 0; i < ring.length; i++)
+        this._addEdge({ id: nid(), a: ring[i], b: ring[(i + 1) % ring.length], curveId: cid, gid });
+      const holes = [];
+      for (const h of holePtsList) {
+        if (h.length < 3) continue;
+        const hv = h.map(fresh);
+        if (new Set(hv).size < 3) continue;
+        const hcid = nid();
+        this.curves.set(hcid, { type: 'polyline' });
+        for (let i = 0; i < hv.length; i++)
+          this._addEdge({ id: nid(), a: hv[i], b: hv[(i + 1) % hv.length], curveId: hcid, gid });
+        holes.push(hv);
+      }
+      const f = {
+        id: nid(), loop: ring, holes,
+        color: opts.color || null,
+        alpha: (opts.alpha == null ? 1 : opts.alpha),
+        hidden: false, extrude: null, gid, loose: true,
+      };
+      this.faces.set(f.id, f);
+      this.version++;
+      return f;
+    }
     const loop = outerPts.map(p => this.weldVertex(p)); // weld + split T-junctions
     if (new Set(loop).size < 3) return null;
     this.edgesForRing(loop, true);
@@ -2094,7 +2135,12 @@ class Model {
     // are O(all faces) per sweep and the punch/trim/split path cascades on
     // same-plane footprint overlaps (a multi-storey import grinds to a halt)
     const plain = this.plainSweeps === true;
-    if (!plain && !externals.size &&
+    // LOOSE faces (Create Face's standalone copies): total independence —
+    // never connect to a host, never punch/trim/split a coplanar neighbor,
+    // never clamp against a blocking face, never auto-intersect. The sweep
+    // is a closed solid island and every other face stays untouched.
+    const loose = face.loose === true;
+    if (!plain && !loose && !externals.size &&
       (this.punchHole(face) || this.trimHostByRing(face) || this.splitFaceWithRing(face))) {
       // the face never connected to the host it lies on (imported model,
       // pre-weld drawing, or a draw that landed on grouped geometry) —
@@ -2157,6 +2203,9 @@ class Model {
         if (!this.hostCuttableBy(this.faces.get(fid))) externals.delete(fid);
       }
     }
+    // a loose face's sweep children inherit the flag: pushing its base cap
+    // or a side wall later keeps the same total-independence contract
+    if (loose) externals.clear();
     let capId = null;
     let through = null;
     if (!externals.size) {
@@ -2166,6 +2215,7 @@ class Model {
         holes: anchorHoles.map(h => [...h]),
         color: face.color, alpha: face.alpha, hidden: false, extrude: null,
         gid: face.gid || 0,
+        loose: face.loose || undefined,
         // v0.6: a stamped face's extrusion children carry its stamp from birth
         // — otherwise every born face is unstamped during the sweep, passes
         // indepSkip's fresh-pair gate, and slices its own siblings at welded
@@ -2175,13 +2225,13 @@ class Model {
       this.faces.set(cap.id, cap);
       capId = cap.id;
     } else if (holeHost && !anchorHoles.length) {
-      through = plain ? null : this.findBlockingFace(face, anchorOuter, n, dist);
+      through = (plain || loose) ? null : this.findBlockingFace(face, anchorOuter, n, dist);
     }
     // a parallel face in the sweep path blocks regardless of how the pushed
     // face sits in the model — drawn in a host's punched hole (the
     // wall-window case) or free-floating on open ground under a ceiling
     // slab: the sweep punches (and clamps) against it either way
-    if (!through && !plain && Math.abs(dist) > 1e-6)
+    if (!through && !plain && !loose && Math.abs(dist) > 1e-6)
       through = this.findBlockingFace(face, anchorOuter, n, dist);
     // a parallel face in the sweep path blocks regardless of how the pushed
     // face sits in the model — drawn in a host's punched hole (the
@@ -2296,7 +2346,7 @@ class Model {
               continue;
             }
           }
-          const sf = { id: nid(), loop, holes: [], color: face.color, alpha: face.alpha, hidden: false, extrude: null,
+          const sf = { id: nid(), loop, holes: [], color: face.color, alpha: face.alpha, hidden: false, extrude: null, loose: face.loose || undefined,
             gid: face.gid || 0, userData: face.userData ? { ...face.userData } : null };
           this.faces.set(sf.id, sf);
           sideIds.push(sf.id);
@@ -2384,20 +2434,20 @@ class Model {
         };
         face.loop = topRings[0];
         face.holes = topRings.slice(1);
-        if (!this.noAutoIntersect) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
+        if (!this.noAutoIntersect && !loose) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
         return true;
       }
       // exact through-punch: the sweep is consumed as a lined opening between
       // the host hole and the punched far face — no pushed face survives
       this.faces.delete(face.id);
       this.gc();
-      if (!this.noAutoIntersect) this.autoIntersect([...sideIds].filter(id => this.faces.has(id)));
+      if (!this.noAutoIntersect && !loose) this.autoIntersect([...sideIds].filter(id => this.faces.has(id)));
       return true;
     }
     face.extrude = { axis: n, anchor: anchorOuter, anchorHoles, sides: sideIds, cap: capId, extended: extensions, culled };
     face.loop = topRings[0];
     face.holes = topRings.slice(1);
-    if (!this.noAutoIntersect) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
+    if (!this.noAutoIntersect && !loose) this.autoIntersect([face.id, ...sideIds, capId].filter(id => id != null && this.faces.has(id)));
     return true;
   }
 
@@ -3441,7 +3491,7 @@ class Model {
       f: [...this.faces.values()].map(x => ({
         id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), gid: x.gid || 0,
         userData: x.userData || null,
-        color: x.color, alpha: x.alpha,
+        color: x.color, alpha: x.alpha, loose: !!x.loose,
         layerId: x.layerId && x.layerId !== '0' ? x.layerId : null,
         extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
       })),
@@ -3462,7 +3512,7 @@ class Model {
     this.faces = new Map((data.f || []).map(x => [x.id, {
       id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), color: x.color || null,
       userData: x.userData || null,
-      alpha: x.alpha == null ? 1 : x.alpha, gid: x.gid || 0,
+      alpha: x.alpha == null ? 1 : x.alpha, gid: x.gid || 0, loose: !!x.loose,
       layerId: x.layerId || '0',
       extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
     }]));

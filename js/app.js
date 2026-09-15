@@ -6088,6 +6088,20 @@ class App {
     if (this.sel.edges.size < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
     let made = 0, skipped = 0, err = null;
     const ok = this.run('create faces', mm => {
+      // COINCIDENT-DUPLICATE DEDUPE: loose faces carry their own copies of
+      // the wire they came from, so a box selection catches BOTH the source
+      // segment and a face's private duplicate lying on it. Walk one edge
+      // per geometric pair — the first seen wins, face copies stay private.
+      const byPair = new Map();
+      for (const id of this.sel.edges) {
+        const e = mm.edges.get(id);
+        if (!e) continue;
+        const pa = mm.vp(e.a), pb = mm.vp(e.b);
+        const key = [[pa.x, pa.y, pa.z], [pb.x, pb.y, pb.z]]
+          .map(q => q.map(c => Math.round(c * 1e4)).join(',')).sort().join('|');
+        if (!byPair.has(key)) byPair.set(key, e);
+      }
+      const sel = [...byPair.values()];
       // NEAR-MISS HEAL: a closing click that landed just off its snap point
       // leaves two free ends millimeters apart — the loop LOOKS shut but the
       // audit refuses it. Fuse free ends of the selection under 1 cm (the
@@ -6096,8 +6110,7 @@ class App {
       // degree, so odd stays odd — parity is only fixed by fusing ends.
       {
         const deg = new Map();
-        for (const id of this.sel.edges) {
-          const e = mm.edges.get(id); if (!e) continue;
+        for (const e of sel) {
           deg.set(e.a, (deg.get(e.a) || 0) + 1); deg.set(e.b, (deg.get(e.b) || 0) + 1);
         }
         const free = [...deg.entries()].filter(([, d]) => d === 1).map(([v]) => v);
@@ -6109,7 +6122,7 @@ class App {
           }
         }
       }
-      const edges = [...this.sel.edges].map(id => mm.edges.get(id)).filter(Boolean);
+      const edges = sel.map(e => mm.edges.get(e.id)).filter(Boolean);
       if (edges.length < 3) { err = 'Select at least 3 edges forming a closed loop'; return true; }
       const adj = new Map();
       const link = (v, rec) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(rec); };
@@ -6171,7 +6184,9 @@ class App {
       // one face per loop; non-planar/degenerate rings are skipped, not fatal
       for (const loop of loops) {
         if (G.isZero(G.loopNormal(mm.pts(loop)))) { skipped++; continue; }
-        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))))) made++;
+        // standalone: fresh vertices + private edges — each face is its own
+        // island; the source wire stays for the next Create Face
+        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))), [], { standalone: true })) made++;
         else skipped++;
       }
       return true;
@@ -6180,7 +6195,7 @@ class App {
     if (err) { this.toast(err, true); return; }
     if (made) {
       this.clearSelection();
-      this.toast(`Created ${made} face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — Push/Pull to extrude, or Convert to make element${made === 1 ? '' : 's'}`);
+      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — Push/Pull, edit, or delete without touching neighbors; the original lines stay for the next face`);
     } else {
       this.toast('Could not create a face from those loops' + (skipped ? ' — the rings are not planar' : ''), true);
     }
