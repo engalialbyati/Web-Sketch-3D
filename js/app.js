@@ -317,11 +317,13 @@ const RIBBON_TABS = {
     { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
   ] },
   model: { label: 'Model', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Create', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
     { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array'] },
     { title: 'Tools', tools: ['paint', 'eraser'] },
   ] },
   insert: { label: 'Insert', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
     { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
     { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
@@ -330,16 +332,19 @@ const RIBBON_TABS = {
     { title: 'Libraries', tools: ['browser', 'families', 'kit'] },
   ] },
   annotate: { label: 'Annotate', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Annotate', tools: ['dim', 'dimang', 'dimrad', 'tag', 'text', 'spot', 'cloud', 'region'] },
     { title: 'Views', tools: ['section', 'elevmark'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
   ] },
   view: { label: 'View', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Navigate', tools: ['orbit', 'pan', 'zoomext'] },
     { title: 'Palettes', tools: ['layers', 'browser'] },
   ] },
   manage: { label: 'Manage', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Quick', tools: ['undo', 'redo', 'zoomext'] },
     { title: 'Palettes', tools: ['families'] },
   ] },
