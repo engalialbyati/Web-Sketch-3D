@@ -564,6 +564,7 @@ class Model {
       const fresh = p => {
         const id = nid();
         this.vertices.set(id, G.clone(p));
+        if (!this._vh) this._vh = new Map(); // keep the weld hash coherent
         this._vhAdd(id, this.vertices.get(id), Model.WELD_EPS * 2);
         return id;
       };
@@ -3177,11 +3178,20 @@ class Model {
   // shellVolume, since the codebase's hole-ring winding conventions differ
   // between punch paths. When `trees` is passed, one {fid -> oriented loop}
   // Map is pushed per tree.
-  orientLoops(faceIds, trees = null) {
+  orientLoops(faceIds, trees = null, byPos = false) {
     const faces = faceIds.map(id => this.faces.get(id)).filter(Boolean);
+    // byPos: adjacency by COINCIDENT POSITION (±0.01 mm), not vertex id —
+    // standalone (loose) faces duplicate their vertices, and orientation
+    // must still propagate across the seam or a shell flips patchwise
+    const vkey = byPos
+      ? v => {
+        const p = this.vp(v);
+        return Math.round(p.x * 1e5) + ',' + Math.round(p.y * 1e5) + ',' + Math.round(p.z * 1e5);
+      }
+      : v => String(v);
     const loops = new Map();
-    const byEdge = new Map(); // "a_b" (sorted) -> [{fid, a, b}]
-    const key = (a, b) => a < b ? a + '_' + b : b + '_' + a;
+    const byEdge = new Map(); // "ka|kb" (sorted) -> [{fid, ka, kb}]
+    const key = (a, b) => { const ka = vkey(a), kb = vkey(b); return ka < kb ? ka + '_' + kb : kb + '_' + ka; };
     for (const f of faces) {
       loops.set(f.id, [...f.loop]);
       for (const L of this.rings(f)) { // hole rings propagate winding too
@@ -3189,7 +3199,7 @@ class Model {
           const a = L[i], b = L[(i + 1) % L.length];
           const k = key(a, b);
           if (!byEdge.has(k)) byEdge.set(k, []);
-          byEdge.get(k).push({ fid: f.id, a, b });
+          byEdge.get(k).push({ fid: f.id, ka: vkey(a), kb: vkey(b) });
         }
       }
     }
@@ -3207,11 +3217,11 @@ class Model {
         const n = L.length;
         for (let i = 0; i < n; i++) {
           const a = L[i], b = L[(i + 1) % n];
-          const effA = flipped ? b : a, effB = flipped ? a : b; // effective directed edge
+          const ka = vkey(flipped ? b : a), kb = vkey(flipped ? a : b); // effective directed edge
           for (const g of byEdge.get(key(a, b)) || []) {
             if (g.fid === fid || flip.has(g.fid)) continue;
             // neighbor must traverse the shared edge in the opposite direction
-            flip.set(g.fid, (g.a === effA && g.b === effB));
+            flip.set(g.fid, (g.ka === ka && g.kb === kb));
             q.push(g.fid);
           }
         }
@@ -3325,18 +3335,31 @@ class Model {
   }
 
   // ---------------------------------------------------------------- thicken
-  // Offset a copy of the selected faces by t along their (oriented) normals
-  // with proper mitered corners, plus side walls on the open boundary.
+  // Offset a copy of the selected faces by t along smoothed vertex normals
+  // (mitered so thickness stays uniform across creases), flip its winding,
+  // and bridge the open boundary with side walls — a closed solid shell.
   // Returns face descriptors: [{outer: [pts], holes: [[pts]], color, alpha, gid, reverse}]
   thickenGeometry(faceIds, t) {
     const faces = faceIds.map(id => this.faces.get(id)).filter(Boolean);
     if (!faces.length || Math.abs(t) < 1e-6) return [];
-    const oriented = this.orientLoops(faceIds);
-    // per-vertex normals from all selected faces (outer + hole rings)
+    // POSITION-KEYED ANALYSIS: standalone (loose) faces carry private copies
+    // of coincident vertices, so keying anything by vertex id shears a
+    // curved shell apart at every seam — each plate would offset along its
+    // own facet normal and seams would count as open boundary. Normals,
+    // orientation, and boundary detection all see through the duplication:
+    // vertices within 0.01 mm are one position, edges match by position pair.
+    const pkey = v => {
+      const p = this.vp(v);
+      return Math.round(p.x * 1e5) + ',' + Math.round(p.y * 1e5) + ',' + Math.round(p.z * 1e5);
+    };
+    const oriented = this.orientLoops(faceIds, null, true);
+    // per-position normals from all selected faces (outer + hole rings) —
+    // smoothed across every adjacent face sharing the position
     const vNormals = new Map();
-    const addN = (vid, n) => {
-      if (!vNormals.has(vid)) vNormals.set(vid, []);
-      vNormals.get(vid).push(n);
+    const addN = (v, n) => {
+      const k = pkey(v);
+      if (!vNormals.has(k)) vNormals.set(k, []);
+      vNormals.get(k).push(n);
     };
     for (const [fid, loop] of oriented) {
       const f = this.faces.get(fid);
@@ -3345,28 +3368,28 @@ class Model {
       for (const v of loop) addN(v, n);
       for (const h of f.holes) for (const v of h) addN(v, n);
     }
-    const D = new Map();
-    for (const [v, ns] of vNormals) D.set(v, G.miterOffset(ns, t));
+    const D = new Map(); // position key -> offset vector (V_offset = V + D)
+    for (const [k, ns] of vNormals) D.set(k, G.miterOffset(ns, t));
 
     const off = (vid) => {
       const p = this.vp(vid);
-      const d = D.get(vid) || G.v();
+      const d = D.get(pkey(vid)) || G.v();
       return G.add(p, d);
     };
     const out = [];
-    const gidOf = new Map(); // for side-wall gid
     for (const [fid, loop] of oriented) {
       const f = this.faces.get(fid);
-      gidOf.set(fid, f.gid || 0);
       out.push({
         outer: loop.map(off),
         holes: f.holes.map(h => h.map(off)),
         color: f.color, alpha: f.alpha, gid: f.gid || 0, reverse: true,
       });
     }
-    // side walls on boundary edges (edge used by exactly one selected face)
+    // side walls on boundary edges — an edge (BY POSITION) used by exactly
+    // one selected face is the open rim of the shell; bridge it between the
+    // original and the offset surface to seal the volume
     const counts = new Map();
-    const key = (a, b) => a < b ? a + '_' + b : b + '_' + a;
+    const key = (a, b) => { const ka = pkey(a), kb = pkey(b); return ka < kb ? ka + '_' + kb : kb + '_' + ka; };
     for (const [fid, loop] of oriented) {
       for (let i = 0; i < loop.length; i++) {
         const k = key(loop[i], loop[(i + 1) % loop.length]);
