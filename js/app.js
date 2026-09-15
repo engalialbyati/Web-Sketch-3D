@@ -6077,46 +6077,77 @@ class App {
     this.clearSelection();
     return n;
   }
-  // Create Face from the SELECTED edge loop — the explicit wire→face step
-  // (free drawing produces wires only). The face is standalone: no element
-  // stamp, no host punch — Push/Pull extrudes it, the Convert tool turns it
-  // into an element.
+  // Create Face(s) from the SELECTED edge loops — the explicit wire→face
+  // step (free drawing produces wires only). MULTIPLE closed loops in one
+  // selection each become their own face (offset an arc a few times, close
+  // each ring, box-select everything, Create Face → one face per ring).
+  // Loops may even TOUCH at shared corners: the walk pairs edges by the
+  // tightest turn, the planar-correct continuation.
   createFaceFromSelectedEdges() {
     const m = this.model, G = window.G;
     const edges = [...this.sel.edges].map(id => m.edges.get(id)).filter(Boolean);
     if (edges.length < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
     const adj = new Map();
-    const link = (v, other) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(other); };
-    for (const e of edges) { link(e.a, e.b); link(e.b, e.a); }
-    for (const [, ns] of adj) if (ns.length !== 2) {
-      this.toast('The selected edges do not form one closed loop — every corner needs exactly two selected edges', true);
+    const link = (v, rec) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(rec); };
+    for (const e of edges) { link(e.a, { e, o: e.b }); link(e.b, { e, o: e.a }); }
+    for (const [, ns] of adj) if (ns.length % 2 !== 0) {
+      this.toast('The selected edges do not form closed loops — every corner needs an even number of selected edges (2 per loop)', true);
       return;
     }
-    const start = adj.keys().next().value;
-    const loop = [start];
-    let prev = null, cur = start;
-    do {
-      const [n1, n2] = adj.get(cur);
-      const next = n1 === prev ? n2 : n1;
-      loop.push(next);
-      prev = cur; cur = next;
-    } while (cur !== start && loop.length <= adj.size + 1);
-    loop.pop(); // drop the closing repeat
-    if (cur !== start || loop.length < 3) {
-      this.toast('The selected edges do not form one closed loop', true);
+    // decompose the edge set into cycles: each directed edge used once; at a
+    // junction (two loops sharing a corner) continue with the edge that
+    // turns tightest — the same planar rule the room detector walks with
+    const used = new Set();
+    const loops = [];
+    for (const e0 of edges) {
+      if (used.has(e0.id)) continue;
+      used.add(e0.id);
+      let u = e0.a, v = e0.b;
+      const loop = [u, v];
+      let guard = 0;
+      while (v !== e0.a && guard++ <= edges.length + 1) {
+        const outs = (adj.get(v) || []).filter(r => !used.has(r.e.id));
+        if (!outs.length) break;
+        let best = outs[0];
+        if (outs.length > 1) {
+          const vp = m.vp(v), up = m.vp(u);
+          const rev = Math.atan2(up.y - vp.y, up.x - vp.x);
+          let bestC = Infinity;
+          for (const r of outs) {
+            const q = m.vp(r.o);
+            const a = Math.atan2(q.y - vp.y, q.x - vp.x);
+            let d = rev - a;
+            while (d <= 1e-9) d += Math.PI * 2;
+            while (d >= Math.PI * 2) d -= Math.PI * 2;
+            if (d < bestC) { bestC = d; best = r; }
+          }
+        }
+        used.add(best.e.id);
+        loop.push(best.o);
+        u = v; v = best.o;
+      }
+      if (v === e0.a) loop.pop(); // drop the closing repeat
+      if (v === e0.a && loop.length >= 3 && new Set(loop).size === loop.length) loops.push(loop);
+    }
+    if (!loops.length) {
+      this.toast('The selected edges do not form closed loops', true);
       return;
     }
-    if (G.isZero(G.loopNormal(m.pts(loop)))) {
-      this.toast('That loop is not planar (or is degenerate) — a face needs a flat ring', true);
-      return;
-    }
-    let made = false;
-    this.run('create face', mm => {
-      const f = mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))));
-      made = !!f;
+    // one face per loop; non-planar/degenerate rings are skipped, not fatal
+    let made = 0, skipped = 0;
+    this.run('create faces', mm => {
+      for (const loop of loops) {
+        if (G.isZero(G.loopNormal(mm.pts(loop)))) { skipped++; continue; }
+        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))))) made++;
+        else skipped++;
+      }
     });
-    if (made) { this.clearSelection(); this.toast('Face created — Push/Pull to extrude, or Convert to make it an element'); }
-    else this.toast('Could not create a face from that loop', true);
+    if (made) {
+      this.clearSelection();
+      this.toast(`Created ${made} face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — Push/Pull to extrude, or Convert to make element${made === 1 ? '' : 's'}`);
+    } else {
+      this.toast('Could not create a face from those loops' + (skipped ? ' — the rings are not planar' : ''), true);
+    }
   }
   // Join selected free EDGE(S) into one polyline: endpoint gaps within 2 cm
   // weld shut, and collinear consecutive segments fuse into single edges.

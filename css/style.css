@@ -90,6 +90,11 @@ body {
   pointer-events: none;
 }
 #selband.active { display: block; }
+/* AutoCAD selection visuals: left→right drag = WINDOW (blue, solid — only
+   fully-enclosed objects); right→left = CROSSING (green, dashed — anything
+   touched). Both the Select tool and the Offset tool use them. */
+#selband.window { border: 1px solid #2f6fdb; background: rgba(47,111,219,.13); }
+#selband.crossing { border: 1px dashed #3fb950; background: rgba(63,185,80,.13); }
 
 /* ---------------- tray ---------------- */
 #tray {

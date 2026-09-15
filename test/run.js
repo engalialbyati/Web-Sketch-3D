@@ -11,7 +11,7 @@ const SUITE = [
   'assets', 'beamface', 'beamoverwall', 'bridge', 'building5', 'buildingr5',
   'centerline', 'columnfamilies', 'columnrot', 'columntool', 'db',
   'draw', 'engine', 'flooropen', 'geometry', 'gridcells', 'gridwall',
-  'edgeoffset', 'hostedcuts', 'ifcexport', 'annotate', 'room', 'independence', 'layers', 'linestyle', 'mirrorarray',
+  'edgeoffset', 'multiface', 'hostedcuts', 'ifcexport', 'annotate', 'room', 'independence', 'layers', 'linestyle', 'mirrorarray',
   'model', 'revitmethod', 'script', 'selectmode', 'slabtop', 'stairs',
   'structural', 'trim', 'wallbottom', 'wallface', 'walljoin', 'wallstub',
 ];
