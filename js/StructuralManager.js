@@ -698,6 +698,46 @@
         // START inside this column: retreat the start to its near face + EPS
         if (0 >= near - 0.02 && 0 <= far + 0.02 && far - EPS > t0) { t0 = far - EPS; hit = true; }
       }
+      // WALL-ON-WALL FACE-STOP: a wall END landing inside another wall's
+      // band retreats to that wall's near face — the two LOOK merged (a
+      // clean butt, the same read as the 90° miter corner outside) while
+      // remaining separate elements. Coincident-corner ends stay with the
+      // joins (miter/wrap-butt own them), near-parallel runs stay flush,
+      // and imported (pre-joined) walls are never re-derived.
+      const cross2 = (px, py, qx, qy) => px * qy - py * qx;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.id === p.id || ent.type !== 'wall') continue;
+        const op = ent.params;
+        if (!op || op.closed || op.source === 'ifc' || !op.base || !op.end) continue;
+        const [oz0, oz1] = this.wallSpanZ(op);
+        if (oz1 <= wz0 + 1e-3 || oz0 >= wz1 - 1e-3) continue; // different story
+        const odx = op.end[0] - op.base[0], ody = op.end[1] - op.base[1];
+        const oL2 = odx * odx + ody * ody;
+        if (oL2 < 1e-9) continue;
+        const oL = Math.sqrt(oL2), oux = odx / oL, ouy = ody / oL;
+        const sinT = Math.abs(ux * ouy - uy * oux);
+        if (sinT < 0.35) continue; // collinear/near-parallel: flush overlap, no butt
+        const oT = (op.thickness != null ? op.thickness : 0.2);
+        const face = oT / 2 / sinT; // my-axis distance from the crossing to o's face
+        const cu = ux * ouy - uy * oux;
+        // where MY centerline crosses o's centerline, on my parameter
+        const tc = cross2(op.base[0] - ax, op.base[1] - ay, oux, ouy) / cu;
+        for (const end of [[bx, by, true], [ax, ay, false]]) {
+          const [px, py, isEnd] = end;
+          const rx = px - op.base[0], ry = py - op.base[1];
+          const sAlong = rx * oux + ry * ouy;
+          if (sAlong < 0.02 || sAlong > oL - 0.02) continue; // o's end region: joins own it
+          const sPerp = Math.abs(-rx * ouy + ry * oux);
+          if (sPerp > oT / 2 + 0.02) continue; // my endpoint is not inside o's band
+          if (isEnd) {
+            const nt = tc - face + EPS;
+            if (L > nt && nt > 0.05 && nt < t1) { t1 = nt; hit = true; }
+          } else {
+            const nt = tc + face - EPS;
+            if (0 < nt && nt < L - 0.05 && nt > t0) { t0 = nt; hit = true; }
+          }
+        }
+      }
       if (!hit) return null;
       return { t0, t1, L };
     }

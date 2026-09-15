@@ -378,7 +378,8 @@ static gridColumnTrim(G, A, B, colA, colB) {
       // span; joins below still detect at the drawn endpoints, and their
       // wallRing applies the same retreat itself)
       let pts = r.pts;
-      if (!r.closed && r.kind === 'line' && app.structural && app.structural.wallEndRetreats) {
+      if (!r.closed && (r.kind === 'line' || r.kind === 'pick')
+        && app.structural && app.structural.wallEndRetreats) {
         const A = r.pts[0], B = r.pts[r.pts.length - 1];
         const rt = app.structural.wallEndRetreats({
           base: [A.x, A.y, A.z], end: [B.x, B.y, B.z], thickness: app.bimOptions.thickness,
