@@ -129,7 +129,41 @@
       return;
     }
 
-    const rows = ents.map(ent => buildRow(app, ent)).sort((a, b) =>
+    // ---- ROOM SCHEDULE (Phase 2): rooms live in their own table — identity
+    // fields + detected area/perimeter, with CSV export. Rooms never enter
+    // the structural takeoff below (they are plates, not building fabric).
+    const rooms = ents.filter(e => e.type === 'room');
+    const lvlName = id => {
+      const l = app.levelManager && app.levelManager.levels.find(x => x.id === id);
+      return l ? l.name : '—';
+    };
+    const roomRow = r => {
+      const p = r.params || {};
+      return `<tr>
+        <td class="num">${esc(p.number || '')}</td>
+        <td class="sch-name">${esc(p.name || r.id)}</td>
+        <td>${esc(p.department || '')}</td>
+        <td>${esc(p.zone || '')}</td>
+        <td>${esc(lvlName(p.levelId || p.baseLevel))}</td>
+        <td class="num">${p.area != null ? (+p.area).toFixed(2) : '—'}</td>
+        <td class="num">${p.perimeter != null ? (+p.perimeter).toFixed(2) : '—'}</td>
+      </tr>`;
+    };
+    const roomTotA = rooms.reduce((s, r) => s + (+((r.params || {}).area) || 0), 0);
+    const roomTotP = rooms.reduce((s, r) => s + (+((r.params || {}).perimeter) || 0), 0);
+    const roomsSection = rooms.length ? `
+      <div class="sch-cats"><div class="sch-catline sch-grand"><b>Room schedule:</b> ${rooms.length} room${rooms.length === 1 ? '' : 's'}
+        · ${roomTotA.toFixed(1)} m² total
+        <button class="mini-btn" id="sch-csv" style="margin-left:8px">Export CSV</button></div></div>
+      <table class="lvl-table sch-table" style="margin-bottom:10px">
+        <thead><tr><th class="num">No.</th><th>Name</th><th>Department</th><th>Zone</th><th>Level</th>
+          <th class="num">Area m²</th><th class="num">Perimeter m</th></tr></thead>
+        <tbody>${rooms.map(roomRow).join('')}</tbody>
+        <tfoot><tr class="sch-tot"><td colspan="5">Totals · ${rooms.length} rooms</td>
+          <td class="num">${roomTotA.toFixed(2)}</td>
+          <td class="num">${roomTotP.toFixed(2)}</td></tr></tfoot>
+      </table>` : '';
+    const rows = ents.filter(e => e.type !== 'room').map(ent => buildRow(app, ent)).sort((a, b) =>
       catRank(a.type) - catRank(b.type) || catRank(a.type) === catRank(b.type) && a.type.localeCompare(b.type) ||
       String(a.id).localeCompare(String(b.id), undefined, { numeric: true }));
 
@@ -189,6 +223,7 @@
     const unChips = unassigned ? `<span class="sch-lvlchip sch-nolvl">(no base level): ${plural(unassigned.length)}${anyVol(unassigned) ? ` · ${fmtS(sum(unassigned, r => r.netVol))} m³` : ''}</span>` : '';
 
     body.innerHTML = `
+      ${roomsSection}
       <div class="sch-top">
         <label class="sch-filter">Category
           <select id="sch-cat">
@@ -210,6 +245,23 @@
       <div class="sch-levels">${lvlChips}${unChips}</div>
       <p class="dim">Live model state. Areas are net (openings deducted); gross adds them back. Category and level volumes are the structural takeoff — joins credited Column ≻ Beam ≻ Slab ≻ Wall, never double-counted.</p>`;
 
+    const csv = $('sch-csv');
+    if (csv) csv.addEventListener('click', () => {
+      const q = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
+      const lines = ['Number,Name,Department,Zone,Level,Area m2,Perimeter m'];
+      for (const r of rooms) {
+        const p = r.params || {};
+        lines.push([p.number || '', p.name || r.id, p.department || '', p.zone || '',
+          lvlName(p.levelId || p.baseLevel),
+          p.area != null ? (+p.area).toFixed(3) : '',
+          p.perimeter != null ? (+p.perimeter).toFixed(3) : ''].map(q).join(','));
+      }
+      lines.push(['', 'TOTAL', '', '', '', roomTotA.toFixed(3), roomTotP.toFixed(3)].map(q).join(','));
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([lines.join('\r\n')], { type: 'text/csv' }));
+      a.download = 'room-schedule.csv';
+      a.click();
+    });
     const sel = $('sch-cat');
     if (sel) {
       sel.value = state.filter;

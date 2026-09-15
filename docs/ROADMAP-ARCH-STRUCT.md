@@ -41,7 +41,7 @@ return one. This is the single highest-leverage phase.
 |---|---------|-------|-------|
 | 1.1 | ✅ **IFC4 STEP writer** — IfcProject/Site/Building/Storey + IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcRoof, IfcStair, IfcRailing | M | Shipped: parametric extrusions, hosted openings via IfcRelVoidsElement/FillsElement, B-Rep fallbacks for complex solids. Verified round-trip: demo building (85 walls/60 columns/85 beams/21 doors/50 windows) exports and re-imports 100% as elements, model validates |
 | 1.2 | ⬜ Project base point, survey point, true/project north | S | Persisted on the model; feeds the writer's IfcMapConversion |
-| 1.3 | ⬜ IfcSpace export | S | Ships with Phase 2 rooms |
+| 1.3 | ✅ IfcSpace export | S | Shipped with Phase 2 rooms — verified round-trip |
 | 1.4 | ✅ Finish the in-flight import work (grids, curtain walls, door/window fills) | S | Done by the IFC agent (committed) |
 
 ---
@@ -53,11 +53,11 @@ later the analytical surface tier.
 
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
-| 2.1 | ⬜ Room tool — click inside a wall-enclosed region on a level → room object with boundary tracking | M | Region detection exists in kernel terms (planar face containment); boundary = wall centerline/finish faces |
-| 2.2 | ⬜ Room properties — name, number, department, area (read-only), perimeter | S | Entity-params panel already renders these |
-| 2.3 | ⬜ Color-fill plans — paint rooms by name/department parameter | S | Face-tint infra exists |
-| 2.4 | ⬜ Area schedules — sortable table of rooms/elements with export (CSV) | M | Basis for quantity takeoff UI (takeoff math already exists in StructuralManager) |
-| 2.5 | ⬜ Zones — group rooms (fire compartments, apartments) | S | Simple parent objects |
+| 2.1 | ✅ Room tool — click inside a wall-enclosed region on a level → room object with boundary tracking | M | Planar segment arrangement over wall centerlines (crossings + T-junctions split, DCEL face walk); live hover preview of the enclosing ring with area |
+| 2.2 | ✅ Room properties — name, number, department, area (read-only), perimeter | S | Text-kind param fields in the entity panel; edits recolor the fill plate |
+| 2.3 | ✅ Color-fill plans — paint rooms by name/department parameter | S | Pastel palette hash; plate at level + 2 mm |
+| 2.4 | ✅ Area schedules — table of rooms with export (CSV) | M | Room schedule section in Schedules (excluded from the structural takeoff); element schedules already existed |
+| 2.5 | 🔶 Zones — group rooms (fire compartments, apartments) | S | `zone` text param carried + scheduled; dedicated zone objects (colored overlays, totals) still open |
 
 ---
 

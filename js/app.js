@@ -190,6 +190,7 @@ const TOOL_DEFS = {
     { id: 'draw', label: 'Draw', key: 'D' },
     { id: 'wall', label: 'Wall', key: 'L' },
     { id: 'floor', label: 'Floor', key: 'R' },
+    { id: 'room', label: 'Room', key: '' },
     { id: 'convert', label: 'Convert to BIM', key: '' },
     'sep',
     { id: 'door', label: 'Door', key: '' },
@@ -241,7 +242,7 @@ const RIBBON_GROUPS = {
   bim: [
     { title: 'Select', tools: ['select'] },
     { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'levelview'] },
-    { title: 'Build', tools: ['draw', 'wall', 'floor', 'convert'] },
+    { title: 'Build', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
     { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof'] },
     { title: 'Circulation', tools: ['stairs', 'handrail'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
@@ -2887,7 +2888,7 @@ class App {
     let counts = {};
     // rebuildable types — everything else (stairs, scripts, hosted openings,
     // assets) KEEPS its geometry: never wipe what you cannot restore
-    const CAN = { foundation: 1, column: 1, wall: 1, slab: 1, floor: 1, beam: 1, roof: 1 };
+    const CAN = { foundation: 1, column: 1, wall: 1, slab: 1, floor: 1, beam: 1, roof: 1, room: 1 };
     // rebuildable = parametric entities only; FIXED converted elements keep
     // their drawn geometry (it IS the design — nothing to rebuild from)
     const canRebuild = e => !!CAN[e.type] && !(e.params && e.params.fixed);
@@ -2985,6 +2986,24 @@ class App {
         } else if (d.type === 'beam') {
           this.structural.buildBeam(G, mm, d.params);
           adopt(mm, ent, () => 'body');
+        } else if (d.type === 'room' && window.RoomFeature) {
+          // re-detect the region from the stored seed (walls may have moved
+          // since placement); the plate adopts below via `adopt`
+          const p2 = d.params;
+          const dd = RoomFeature.detect(this, p2.levelId || p2.baseLevel, p2.seed[0], p2.seed[1]);
+          if (!dd.error) {
+            const lv = this.levelManager.levels.find(l => l.id === (p2.levelId || p2.baseLevel));
+            const z = ((lv && lv.elevation) || 0) + 0.002;
+            const f = mm.addFaceFromRings(dd.ring.map(q => G.v(q[0], q[1], z)));
+            if (f) {
+              f.color = RoomFeature.roomColor(ent);
+              f.alpha = 0.55;
+              p2.boundary = dd.ring.map(q => [+q[0].toFixed(4), +q[1].toFixed(4)]);
+              p2.area = dd.area;
+              p2.perimeter = dd.perimeter;
+            }
+          }
+          adopt(mm, ent, () => 'plate');
         } else { skipped.push(d.type); return; }
         counts[d.type] = (counts[d.type] || 0) + 1;
       } catch (e) { /* one bad element never kills the repair */ }
@@ -6963,6 +6982,13 @@ class App {
       case 'door': case 'window':
         list = [num('width', 'Width m', 0.05), num('height', 'Height m', 0.05), num('sillHeight', 'Sill m', 0.05)];
         break;
+      case 'room': {
+        // Revit room identity fields — text edits recolor the fill plate,
+        // no geometry regeneration (the boundary is wall-detected)
+        const txt = (key, label) => ({ key, label, kind: 'text', value: String(p[key] != null ? p[key] : '') });
+        list = [txt('name', 'Name'), txt('number', 'Number'), txt('department', 'Department'), txt('zone', 'Zone')];
+        break;
+      }
       default: list = [];
     }
     return list.filter(Boolean);
@@ -6981,6 +7007,12 @@ class App {
       case 'door': case 'window': {
         const host = this.bim.getEntityById(p.hostWallId);
         return !!host && !!this.bim.rebuildWallWithHosts(host.id);
+      }
+      case 'room': {
+        // identity edits recolor the fill plate; the name also renumbers
+        // the schedule entry. No geometric regeneration.
+        if (window.RoomFeature) RoomFeature.recolorFace(this, ent);
+        return true;
       }
       default: return false;
     }
@@ -7168,6 +7200,8 @@ class App {
             ${fields.map(f => f.kind === 'select'
               ? `<div class="gi-prow"><span>${f.label}</span><select data-pf="${f.key}">${f.options.map(([val, lab]) =>
                 `<option value="${val}"${f.value === val ? ' selected' : ''}>${lab}</option>`).join('')}</select></div>`
+              : f.kind === 'text'
+                ? `<div class="gi-prow"><span>${f.label}</span><input data-pf="${f.key}" type="text" value="${String(f.value).replace(/"/g, '&quot;')}"></div>`
               : `<div class="gi-prow"><span>${f.label}</span><input data-pf="${f.key}" type="number" step="${f.step}" value="${f.value}"></div>`).join('')}
             <div class="dim" style="margin-top:2px">Edit a value — the element regenerates from its parameters</div>
           </div>` : ''}

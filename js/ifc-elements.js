@@ -562,6 +562,7 @@
       // Curtain walls are containers — see the `curtain` bounds pass.
       ['door', [WebIFC.IFCDOOR]],
       ['window', [WebIFC.IFCWINDOW]],
+      ['room', [WebIFC.IFCSPACE]],
     ];
     const products = [];
     const seen = new Set();
@@ -1233,6 +1234,40 @@
             built.roles, built.edges, { noHostDirty: true });
           if (ent) ent.name = prod.name;
           converted.add(prod.id); bump('stairs');
+        } catch (e) { fallback.add(prod.id); }
+      }
+    });
+
+    // ---- rooms (IfcSpace rings → RoomFeature plates; our own exports and
+    // foreign files alike — the seed re-detects against imported walls) ----
+    stage('rooms', async () => {
+      const RF = window.RoomFeature;
+      if (!RF) return;
+      let k = 0;
+      for (const prod of productsOf('room')) {
+        if (++k % 20 === 0) await tick();
+        const sw = prod.sw;
+        if (!sw || Math.abs(sw.dir.z) <= 0.9) { fallback.add(prod.id); continue; }
+        const base = sw.dir.z > 0 ? sw.base : sw.top;
+        if (base.length < 3 || base.length > 256) { fallback.add(prod.id); continue; }
+        const lvl = levelIdFor(prod, base[0].z);
+        // de-duplicate ring points (collinear split vertices included)
+        const ring = [];
+        for (const q of base) {
+          const last = ring[ring.length - 1];
+          if (!last || Math.hypot(q.x - last[0], q.y - last[1]) > 1e-4) ring.push([fmt(q.x), fmt(q.y)]);
+        }
+        if (ring.length >= 3 && Math.hypot(ring[0][0] - ring[ring.length - 1][0], ring[0][1] - ring[ring.length - 1][1]) <= 1e-4) ring.pop();
+        if (ring.length < 3) { fallback.add(prod.id); continue; }
+        try {
+          const r = RF.makeRoom(app, {
+            ring, levelId: lvl,
+            name: prod.name || 'Room',
+            department: (prod.name || '').split(/[:\-]/)[1] || '',
+            source: 'ifc', ifc: prod.globalId,
+          });
+          if (r && !r.error) { converted.add(prod.id); bump('room'); }
+          else fallback.add(prod.id);
         } catch (e) { fallback.add(prod.id); }
       }
     });

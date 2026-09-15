@@ -511,9 +511,35 @@
       }
     }
 
+    // ---- rooms (IfcSpace — Phase 2): boundary ring extruded up by the
+    // storey-to-storey height (or 3 m on the top level) -----------------------
+    for (const ent of bim.entities) {
+      if (ent.type !== 'room') continue;
+      const p = ent.params || {};
+      const ring = Array.isArray(p.boundary) && p.boundary.length >= 3 ? p.boundary : null;
+      if (!ring) continue;
+      const { pl, zOff } = elemPlace(ent);
+      const lid = levelOf(ent);
+      const lvIdx = levels.findIndex(l => l.id === lid);
+      const nextLv = levels[lvIdx + 1];
+      const elev = elevOf(lid) || 0;
+      const h = Math.max(0.1, nextLv ? Math.max(0.1, (nextLv.elevation || 0) - elev) : 3);
+      const z0 = elev + 0.002;
+      const pos = g.ax3(g.p3(0, 0, z0 - zOff), g.d3(0, 0, 1), g.d3(1, 0, 0));
+      const prof = arbProf(ring.map(q => g.p2(q[0], q[1])));
+      const solid = extruded(prof, pos, g.d3(0, 0, 1), h);
+      // IfcSpace IFC4 (a SPATIAL element, no Tag): (…, LongName,
+      // CompositionType, PredefinedType, ElevationWithFlooring) = 11 attrs
+      const gid = guid('ent:' + ent.id);
+      const ref = w.raw('IFCSPACE',
+        [gid, oh, String(ent.name || p.name || 'Room'), '$', '$', pl, pds(shapeRep(solid, 'SweptSolid')),
+          String(p.department || p.zone || ''), { enum: 'ELEMENT' }, { enum: 'SPACE' }, '$']);
+      assign(ent, ref); bump('room');
+    }
+
     // ---- everything else: proxy with B-Rep ------------------------------------
     const KNOWN = ['wall', 'floor', 'slab', 'roof', 'column', 'beam', 'foundation',
-      'stairs', 'handrail', 'door', 'window', 'opening'];
+      'stairs', 'handrail', 'door', 'window', 'opening', 'room'];
     for (const ent of bim.entities) {
       if (KNOWN.includes(ent.type)) continue;
       const { pl, zOff } = elemPlace(ent);
