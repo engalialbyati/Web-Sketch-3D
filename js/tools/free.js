@@ -148,6 +148,13 @@ class SelectTool extends Tool {
   }
   onDown(ev) {
     if (ev.button !== 0) return;
+    // ANNOTATIONS own the click first when hit in screen space — dims/tags/
+    // notes/spots draw on the HUD layer, not the mesh, so they need their
+    // own proximity pick before any geometry selection
+    if (this.app.view.pickAnnotation) {
+      const ann = this.app.view.pickAnnotation(this.app.view.eventPt(ev));
+      if (ann) { this.app.selectAnnotation(ann.id); return; }
+    }
     // hosted flip buttons own the click first
     if (this._flips) {
       const q = this.app.view.eventPt(ev);

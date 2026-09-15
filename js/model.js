@@ -46,6 +46,11 @@ class Model {
     // like levels, so layers survive undo/autosave/file round-trips.
     this.layers = [{ id: '0', name: '0', color: null, visible: true, locked: false, lt: 0, lw: 0 }];
     this.currentLayerId = '0';
+    // annotations (Phase 3): dims / tags / text notes / spot elevations —
+    // world-anchored drawing entities on the HUD layer, NOT building fabric
+    // (never intersect, export as IFC annotation later). Survives snapshots
+    // like every other model state.
+    this.annotations = [];
     // transient: entity ids whose B-Rep was structurally edited (split,
     // punched, trimmed, pushed) since the last drain — the app layer detaches
     // them (plain B-Rep survives, parametric definition goes away)
@@ -3360,6 +3365,7 @@ class Model {
       // from project north to TRUE north (radians, positive = clockwise
       // looking down). Feeds the IFC writer's IfcMapConversion.
       geo: this.geo ? JSON.parse(JSON.stringify(this.geo)) : null,
+      ann: (this.annotations || []).map(a => ({ ...a })),
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
       lyr: (this.layers || []).map(l => ({ ...l })),
       cur: this.currentLayerId || '0',
@@ -3418,6 +3424,7 @@ class Model {
     this.grids = data.grid ? data.grid.map(g => (typeof GridLine === 'function' ? GridLine.fromRecord(g) : null) || { ...g }) : (this.grids || []);
     // georeference: legacy files without `geo` keep whatever is set (or none)
     this.geo = data.geo ? { ...data.geo } : (this.geo || null);
+    this.annotations = Array.isArray(data.ann) ? data.ann.map(a => ({ ...a })) : [];
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
       ...x, params: x.params ? _deepClone(x.params) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],

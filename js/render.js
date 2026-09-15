@@ -1748,6 +1748,149 @@ class Viewport {
   }
 
   // -------------------------------------------------------------- loop
+  // ---------------------------------------------------------------- annotations
+  // Phase 3 drawing entities (model.annotations), rendered on the HUD canvas
+  // every frame: dimensions (extension + dim lines, arrows, length text),
+  // tags (leader + identity box, text re-resolved from the target entity),
+  // text notes (optional leader), spot elevations (+ absolute when the
+  // georeference base point is set). Selected annotation highlighted.
+  _drawAnnotations(ctx, cam, w, h) {
+    const model = this.app.model;
+    const anns = model && model.annotations;
+    if (!anns || !anns.length) return;
+    const sel = this.app.selAnn || null;
+    const prj = p0 => {
+      const v = new THREE.Vector3(p0[0], p0[1], p0[2]).project(cam);
+      if (v.z > 1) return null;
+      return { x: (v.x + 1) / 2 * w, y: (-v.y + 1) / 2 * h };
+    };
+    const text = (sx, sy, str, color, bg) => {
+      const t = ctx.measureText(str);
+      ctx.fillStyle = bg || 'rgba(255,255,255,0.85)';
+      ctx.fillRect(sx - t.width / 2 - 5, sy - 9, t.width + 10, 16);
+      ctx.fillStyle = color;
+      const prev = ctx.textAlign;
+      ctx.textAlign = 'center';
+      ctx.fillText(str, sx, sy + 3);
+      ctx.textAlign = prev;
+    };
+    const arrow = (x, y, dx, dy, color) => {
+      const l = Math.hypot(dx, dy) || 1;
+      const ux = dx / l, uy = dy / l;
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - ux * 9 - uy * 3.5, y - uy * 9 + ux * 3.5);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - ux * 9 + uy * 3.5, y - uy * 9 - ux * 3.5);
+      ctx.stroke();
+    };
+    const line = (a2, b2, color, dashed) => {
+      ctx.strokeStyle = color;
+      if (dashed) ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(a2.x, a2.y);
+      ctx.lineTo(b2.x, b2.y);
+      ctx.stroke();
+      if (dashed) ctx.setLineDash([]);
+    };
+    for (const a of anns) {
+      const on = a.id === sel;
+      const cMain = on ? '#e07a00' : '#333';
+      if (a.kind === 'dim') {
+        const RF = window.Annotate && Annotate.resolveRef;
+        const p1 = RF ? RF(this.app, a.r1, a.p1) : a.p1;
+        const p2 = RF ? RF(this.app, a.r2, a.p2) : a.p2;
+        const off = a.off || [0, 0.6, 0];
+        const A = prj([p1[0] + off[0], p1[1] + off[1], p1[2] + off[2]]);
+        const B = prj([p2[0] + off[0], p2[1] + off[1], p2[2] + off[2]]);
+        const E1 = prj(p1), E2 = prj(p2);
+        if (!A || !B || !E1 || !E2) continue;
+        const col = on ? '#e07a00' : '#9a9a9a';
+        line(E1, A, col, true);
+        line(E2, B, col, true);
+        line(A, B, cMain);
+        const dx = B.x - A.x, dy = B.y - A.y;
+        arrow(A.x, A.y, dx, dy, cMain);
+        arrow(B.x, B.y, -dx, -dy, cMain);
+        const len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]);
+        const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 - 12 };
+        text(mid.x, mid.y, a.text != null ? a.text : len.toFixed(3), on ? '#a35a00' : '#333');
+      } else if (a.kind === 'tag') {
+        const anchor = prj(a.at);
+        const box = prj(a.box || a.at);
+        if (!anchor || !box) continue;
+        line(anchor, box, on ? '#e07a00' : '#1d4f9c');
+        const txt = window.AnnotateTagText ? AnnotateTagText(this.app, a) : (a.text || '');
+        const t = ctx.measureText(txt);
+        ctx.fillStyle = on ? 'rgba(255,235,204,0.92)' : 'rgba(228,238,252,0.92)';
+        ctx.fillRect(box.x, box.y - 16, t.width + 12, 18);
+        ctx.strokeStyle = on ? '#e07a00' : '#8fa8cc';
+        ctx.strokeRect(box.x, box.y - 16, t.width + 12, 18);
+        ctx.fillStyle = '#1d4f9c';
+        const prev = ctx.textAlign;
+        ctx.textAlign = 'left';
+        ctx.fillText(txt, box.x + 6, box.y - 3);
+        ctx.textAlign = prev;
+      } else if (a.kind === 'text') {
+        const at = prj(a.at);
+        if (!at) continue;
+        if (a.leaderFrom) {
+          const lf = prj(a.leaderFrom);
+          if (lf) line(lf, at, on ? '#e07a00' : '#9a9a9a');
+        }
+        text(at.x, at.y, a.text || '', on ? '#a35a00' : '#333');
+      } else if (a.kind === 'spot') {
+        const at = prj(a.at);
+        if (!at) continue;
+        ctx.strokeStyle = on ? '#e07a00' : '#0a5f61';
+        ctx.beginPath();
+        ctx.moveTo(at.x - 5, at.y - 6);
+        ctx.lineTo(at.x + 5, at.y - 6);
+        ctx.lineTo(at.x, at.y);
+        ctx.closePath();
+        ctx.stroke();
+        const geo = model.geo;
+        const z = a.at[2];
+        const str = geo && geo.basePoint
+          ? z.toFixed(3) + ' (' + (geo.basePoint.elev + z).toFixed(3) + ')'
+          : z.toFixed(3);
+        text(at.x + 4, at.y - 14, str, on ? '#a35a00' : '#0a5f61');
+      }
+    }
+  }
+  /** Screen-space annotation pick (Select tool): dims by point-to-segment
+   *  distance, tags/notes/spots by proximity to their anchor box. */
+  pickAnnotation(s) {
+    const model = this.app.model;
+    const anns = model && model.annotations;
+    if (!anns || !anns.length || !isFinite(s.x) || !isFinite(s.y)) return null;
+    const cam = this.activeCamera();
+    const w = this.hud.width, h = this.hud.height;
+    let best = null, bestD = 11;
+    for (const a of anns) {
+      const prj = p0 => {
+        const v = new THREE.Vector3(p0[0], p0[1], p0[2]).project(cam);
+        if (v.z > 1) return null;
+        return { x: (v.x + 1) / 2 * w, y: (-v.y + 1) / 2 * h };
+      };
+      if (a.kind === 'dim') {
+        const A = prj([a.p1[0] + (a.off || [0, 0.6, 0])[0], a.p1[1] + (a.off || [0, 0.6, 0])[1], a.p1[2]]);
+        const B = prj([a.p2[0] + (a.off || [0, 0.6, 0])[0], a.p2[1] + (a.off || [0, 0.6, 0])[1], a.p2[2]]);
+        if (!A || !B) continue;
+        const dx = B.x - A.x, dy = B.y - A.y;
+        const t = Math.max(0, Math.min(1, ((s.x - A.x) * dx + (s.y - A.y) * dy) / (dx * dx + dy * dy || 1)));
+        const d = Math.hypot(s.x - (A.x + t * dx), s.y - (A.y + t * dy));
+        if (d < bestD) { bestD = d; best = a; }
+      } else {
+        const at = prj(a.box || a.at);
+        if (!at) continue;
+        const d = Math.hypot(s.x - at.x, s.y - at.y);
+        if (d < bestD + 12) { bestD = d; best = a; } // text boxes get slack
+      }
+    }
+    return best;
+  }
   _drawHudItem(ctx, sx, sy, text, color) {
     if (!isFinite(sx) || !isFinite(sy)) return;
     const t = ctx.measureText(text);
@@ -1834,6 +1977,10 @@ class Viewport {
       ctx.fillText(it.text, x, y - 10);
       ctx.textAlign = prevAlign;
     }
+    // ANNOTATIONS (Phase 3): dims/tags/notes/spots live on the HUD canvas —
+    // world-anchored drawing entities that re-project every frame (they
+    // never enter the B-Rep mesh).
+    this._drawAnnotations(ctx, cam, w, h);
     // Performance HUD (View ▸ Performance HUD): the article's diagnosis
     // numbers at a glance — fps, draw calls, triangles
     if (this.perfHud) {

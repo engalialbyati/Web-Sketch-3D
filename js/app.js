@@ -142,6 +142,10 @@ const ICONS = {
   measurearea: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V9l5-5h10v10l-5 5z"/><path d="M4 9l5 5 6-6 5 5" opacity=".6"/><path d="M9 4v5h5" opacity=".6"/></svg>',
   mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v20" stroke-dasharray="3 2.4"/><path d="M9 6L3 12l6 6z"/><path d="M15 6l6 6-6 6z" opacity=".45"/></svg>',
   array: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6" opacity=".45"/><rect x="3" y="15" width="6" height="6" opacity=".45"/><rect x="15" y="15" width="6" height="6" opacity=".45"/></svg>',
+  dim: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V7M20 19V7M4 13h16"/><path d="M4 5v4M2 7h4M20 5v4M18 7h4"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 11l8-8h10v10l-8 8z"/><circle cx="16" cy="8" r="1.4"/></svg>',
+  text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 6h14M12 6v13M9 19h6"/></svg>',
+  spot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v9M8 6l4-2 4 2"/><path d="M6 13h12l-6 7z"/></svg>',
   ellipse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path d="M12 12h9" opacity=".5"/></svg>',
   revolve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 12V7m0 5h5" opacity=".6"/><rect x="13" y="10" width="7" height="4" rx="1"/></svg>',
   followme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 16c4 0 6-8 10-8 3.5 0 5 4 8 4"/><path d="M3 16l2.5-3M3 16l3.6 1.2M21 12l-3-1.5M21 12l-2.6 2.4"/></svg>',
@@ -191,6 +195,10 @@ const TOOL_DEFS = {
     { id: 'wall', label: 'Wall', key: 'L' },
     { id: 'floor', label: 'Floor', key: 'R' },
     { id: 'room', label: 'Room', key: '' },
+    { id: 'dim', label: 'Dimension', key: '' },
+    { id: 'tag', label: 'Tag', key: '' },
+    { id: 'text', label: 'Text Note', key: '' },
+    { id: 'spot', label: 'Spot Elevation', key: '' },
     { id: 'convert', label: 'Convert to BIM', key: '' },
     'sep',
     { id: 'door', label: 'Door', key: '' },
@@ -289,6 +297,7 @@ const RIBBON_TABS = {
     { title: 'Libraries', tools: ['browser', 'families', 'kit'] },
   ] },
   annotate: { label: 'Annotate', groups: [
+    { title: 'Annotate', tools: ['dim', 'tag', 'text', 'spot'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
   ] },
@@ -4723,6 +4732,7 @@ class App {
         ['Give Thickness…', 'thicken', ''], '-',
         ['Edit In Place…', 'editInPlace', ''],
         ['Levels…', 'levels', ''], ['Georeferencing…', 'georef', ''],
+        ['Tag All Untagged', 'tagAll', ''], ['Find & Replace Notes…', 'findRepl', ''],
         ['Grids…', 'grids', ''],
         ['Rebuild from Parameters', 'rebuildParams', ''],
         ['Hide Selected', 'hideSelected', ''], ['Unhide All', 'unhideAll', ''],
@@ -4957,6 +4967,8 @@ class App {
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
       georef: () => A.georefDialog(),
+      tagAll: () => A.tagAllUntagged(),
+      findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
       rebuildParams: () => A.rebuildFromParams(),
@@ -5354,6 +5366,7 @@ class App {
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
 
       if (k === 'Escape') {
+        if (this.selAnn) { this.selAnn = null; this.updateInfo(); this.view.invalidate(); ev.preventDefault(); return; }
         if (this.activeGroup != null) { this.exitGroup(); ev.preventDefault(); return; }
         if (this.tool && this.tool.onKey({ key: 'Escape' })) { ev.preventDefault(); return; }
         if (this._eip) { this.cancelEditInPlace(); ev.preventDefault(); return; } // nothing pending → cancel the session
@@ -7004,6 +7017,47 @@ class App {
   // Editable Entity Info fields per element type (the stairs-block pattern
   // generalized): every edit writes the param and regenerates the element's
   // geometry from it — params are truth, the B-Rep is cache.
+  // ------------------------------------------------------------- annotations
+  // (Phase 3) dims/tags/notes/spots: model.annotations records rendered on
+  // the HUD layer. Selection is screen-space (view.pickAnnotation), text
+  // edits go through the entity info panel, Del removes them.
+  selectAnnotation(id) {
+    this.selAnn = id;
+    this.sel = { edges: new Set(), faces: new Set() };
+    this.selAssets = new Set();
+    this.selGridIds = new Set();
+    this.updateInfo();
+    this.view.invalidate();
+  }
+  deleteSelectedAnnotation() {
+    if (!this.selAnn) return false;
+    const id = this.selAnn;
+    this.run('delete annotation', m => {
+      m.annotations = m.annotations.filter(a => a.id !== id);
+      m.touch();
+    });
+    this.selAnn = null;
+    this.updateInfo();
+    return true;
+  }
+  tagAllUntagged() {
+    if (!window.Annotate) { this.toast('Annotation module not loaded', true); return; }
+    Annotate.tagAll(this);
+  }
+  findReplaceNotes() {
+    if (!window.Annotate) { this.toast('Annotation module not loaded', true); return; }
+    const inp = k => `<input type="text" id="${k}" style="width:100%;margin:2px 0 8px;padding:5px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit">`;
+    this.dialog('Find & Replace — Text Notes',
+      `<div class="ob-lab">Find</div>${inp('fr-find')}<div class="ob-lab">Replace with</div>${inp('fr-repl')}`,
+      [['Cancel', null], ['Replace All', () => {
+        const f = document.getElementById('fr-find').value;
+        const r = document.getElementById('fr-repl').value;
+        if (!f) { this.toast('Type something to find', true); return false; }
+        const n = Annotate.findReplace(this, f, r);
+        this.toast(n ? `Replaced in ${n} note${n === 1 ? '' : 's'}` : 'No matches');
+      }]]);
+  }
+
   _bimParamFields(ent) {
     const p = ent.params || {};
     // FIXED converted elements: the drawn geometry IS the design — no
@@ -7065,6 +7119,48 @@ class App {
   updateInfo() {
     const el = document.getElementById('entityinfo');
     const model = this.model;
+
+    // ----- selected annotation (ANN-INFO): info + editable text -----
+    if (this.selAnn) {
+      const a = (model.annotations || []).find(x => x.id === this.selAnn);
+      if (!a) { this.selAnn = null; }
+      else {
+        const KINDS = { dim: 'Dimension', tag: 'Tag', text: 'Text Note', spot: 'Spot Elevation' };
+        const rows = [];
+        if (a.kind === 'dim') {
+          const L = Math.hypot(a.p2[0] - a.p1[0], a.p2[1] - a.p1[1], a.p2[2] - a.p1[2]);
+          rows.push(['Length', fmtLen(L)]);
+        } else if (a.kind === 'spot') {
+          rows.push(['Elevation', (+a.at[2]).toFixed(3) + ' m']);
+          if (model.geo && model.geo.basePoint) rows.push(['Absolute', (model.geo.basePoint.elev + a.at[2]).toFixed(3) + ' m']);
+        } else if (a.kind === 'tag') {
+          const ent = this.bim.getEntityById(a.targetId);
+          rows.push(['Element', ent ? ent.type + ' ' + ent.id : '(deleted)']);
+        }
+        const textRow = (a.kind !== 'dim' && a.kind !== 'spot')
+          ? '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:76px;flex:none;opacity:.75;font-size:12px">Text</span>'
+            + '<input type="text" id="ann-text" style="flex:1;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit"></div>'
+          : '';
+        el.innerHTML = '<div class="selcount">' + (KINDS[a.kind] || a.kind) + ' selected</div>'
+          + rows.map(r => '<div class="gi-prow"><span>' + r[0] + '</span><span>' + r[1] + '</span></div>').join('')
+          + textRow
+          + '<button class="mini-btn" id="ann-del">Delete</button>'
+          + '<div class="dim" style="margin-top:4px">Annotations live on the drawing layer — Del removes, Esc deselects</div>';
+        const del = el.querySelector('#ann-del');
+        if (del) del.addEventListener('click', () => this.deleteSelectedAnnotation());
+        const ti = el.querySelector('#ann-text');
+        if (ti) {
+          ti.value = String(a.text != null ? a.text : '');
+          ti.addEventListener('change', () => {
+            this.run('edit annotation', m => {
+              const t = (m.annotations || []).find(x => x.id === a.id);
+              if (t) { t.text = ti.value; m.touch(); }
+            });
+          });
+        }
+        return;
+      }
+    }
 
     // ----- selected grid line(s): always-visible selection state -----
     if (this.selGridIds && this.selGridIds.size && !this.sel.faces.size && !this.sel.edges.size) {
@@ -7615,6 +7711,7 @@ class App {
     this.toast(`Exported model.ifc — ${r.entities} IFC entities (${parts.join(', ')})${r.warn ? ' · ' + r.warn : ''}`);
   }
   deleteSelection() {
+    if (this.selAnn && this.deleteSelectedAnnotation()) return;
     // selected asset instances go first — hosted ones heal their wall inside
     // one transaction (the rebuild re-cuts every OTHER hosted element)
     if (this.selAssets.size && this.assets) {

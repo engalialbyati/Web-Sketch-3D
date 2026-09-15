@@ -17,6 +17,9 @@ const TOOLS = {
   revolve: FreeTools.RevolveTool, followme: FreeTools.FollowMeTool,
   tape: FreeTools.TapeMeasureTool, orbit: FreeTools.OrbitTool, pan: FreeTools.PanTool,
   zoom: FreeTools.ZoomTool, resize: FreeTools.ResizeTool, extrude: FreeTools.ExtrudeCurveTool,
+  // annotations (Phase 3) — dimension/tag/text/spot drawing tools
+  dim: Annotate.DimensionTool, tag: Annotate.TagTool,
+  text: Annotate.TextTool, spot: Annotate.SpotTool,
   // tools/bim/*
   draw: BimTools.DrawTool, wall: BimTools.WallTool, floor: BimTools.FloorTool,
   convert: BimTools.ConvertTool,
