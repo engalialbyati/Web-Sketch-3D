@@ -1,15 +1,17 @@
 'use strict';
 // ---------------------------------------------------------------------------
 // features/edgeoffset.js — AutoCAD-style OFFSET for lines, arcs, and
-// polylines (edge chains).
+// polylines (edge chains), single-pick OR box-selected in bulk.
 //
 // The AutoCAD flow, exactly:
 //   1. arm the tool → "Type the offset distance"
 //   2. type a number + Enter (VCB)  → distance is set
 //   3. click a line / arc / polyline → it highlights
-//   4. move to a side → the offset preview follows
-//   5. click → the offset copy commits; the DISTANCE STAYS armed — click
-//      the next curve immediately (AutoCAD's repeat)
+//      OR drag a box around several curves (window = blue, fully inside;
+//      crossing right-to-left = green, touched) → they all highlight
+//   4. move to a side → the offset preview(s) follow
+//   5. click → the offset copy (or ALL boxed copies) commit; the DISTANCE
+//      STAYS armed — pick or box the next curves immediately (repeat)
 //   6. Esc cancels; typing a new number re-arms the distance any time
 //
 // Geometry:
@@ -19,6 +21,10 @@
 //               engine's parallelOffset)
 //   arc/circle— CONCENTRIC copy: same center and plane, radius ± d — the
 //               defining AutoCAD arc-offset behavior
+//
+// Boxed batches take each curve's side from the SAME side-click point:
+// box a rectangle, click outside → every line offsets outward; click
+// inside → they all close inward. Arcs follow the radial rule per curve.
 // ---------------------------------------------------------------------------
 (function () {
   const G = window.G;
@@ -27,14 +33,17 @@
     static id = 'edgeoffset';
     activate() {
       this.dist = null;       // the armed offset distance (typed)
-      this.pick = null;       // the picked curve: {kind, pts, cid, meta}
+      this.picks = null;      // picked curves: [{kind, pts, cid, meta, edgeIds}]
+      this._bandStart = null; // screen pt where a box drag began
+      this._band = false;
       this.status();
     }
-    cleanup() { super.cleanup(); this.activate(); }
+    cleanup() { this._endBand(); super.cleanup(); this.activate(); }
     get hint() {
-      if (this.dist == null) return 'Offset: type the distance + Enter first, then click a line, arc, or polyline.';
-      if (!this.pick) return `Offset ${fmtLen(this.dist)}: click a line, arc, or polyline to offset.`;
-      return `Offset ${fmtLen(this.dist)}: click on the side to place the copy — or click another curve. Type a new distance any time; Esc resets.`;
+      if (this.dist == null) return 'Offset: type the distance + Enter first — then click a curve, or drag a box around several.';
+      if (!this.picks) return `Offset ${fmtLen(this.dist)}: click a line, arc, or polyline — or DRAG A BOX around several — then click the side.`;
+      const n = this.picks.length;
+      return `Offset ${fmtLen(this.dist)}: click on the side to place ${n > 1 ? `all ${n} copies` : 'the copy'}. Esc resets; type a new distance any time.`;
     }
 
     // ------------------------------------------------------------- picking
@@ -73,23 +82,45 @@
       return path.map(v => G.clone(model.vp(v)));
     }
 
-    _pickAt(ev) {
-      const app = this.app;
-      const pe = app.pickEdgeAt(ev, 9);
-      if (!pe || !pe.edge) return null;
-      const model = app.model;
-      const meta = pe.edge.curveId ? model.curves.get(pe.edge.curveId) : null;
-      const pts = this._chainPts(model, pe.edge);
+    // a pick record from an edge (chain-aware: a polyline/arc chain is ONE
+    // curve — its edgeIds highlight together and it offsets as a unit)
+    _pickFromEdge(edge) {
+      const model = this.app.model;
+      const meta = edge.curveId ? model.curves.get(edge.curveId) : null;
+      const pts = this._chainPts(model, edge);
       if (!pts || pts.length < 2) return null;
       const kind = meta && (meta.type === 'arc' || meta.type === 'circle') ? 'arc'
-        : (pe.edge.curveId && pts.length > 2) ? 'poly' : 'line';
-      return { kind, pts, cid: pe.edge.curveId || 0, meta, edgeIds: pe.edge.curveId ? model.curveEdges(pe.edge.curveId).map(e => e.id) : [pe.edge.id] };
+        : (edge.curveId && pts.length > 2) ? 'poly' : 'line';
+      return { kind, pts, cid: edge.curveId || 0, meta, edgeIds: edge.curveId ? model.curveEdges(edge.curveId).map(e => e.id) : [edge.id] };
+    }
+
+    _pickAt(ev) {
+      const pe = this.app.pickEdgeAt(ev, 9);
+      if (!pe || !pe.edge) return null;
+      return this._pickFromEdge(pe.edge);
+    }
+
+    // every edge whose screen segment falls in the box — window mode needs
+    // the whole segment inside, crossing (right-to-left) just touches it.
+    // Chain members expand implicitly: one caught segment selects the curve.
+    _edgesInBox(x0, y0, x1, y1, crossing) {
+      const app = this.app, model = app.model;
+      const inside = (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+      const out = [];
+      for (const e of model.edges.values()) {
+        const a = model.vp(e.a), b = model.vp(e.b);
+        if (!a || !b) continue;
+        const sa = app.view.toScreen(a), sb = app.view.toScreen(b);
+        if (sa.behind && sb.behind) continue;
+        const hit = crossing ? (inside(sa.x, sa.y) || inside(sb.x, sb.y)) : (inside(sa.x, sa.y) && inside(sb.x, sb.y));
+        if (hit) out.push(e.id);
+      }
+      return out;
     }
 
     // ------------------------------------------------------------ geometry
-    // side sign: which side of the source the cursor is on
-    _side(cursor) {
-      const p = this.pick;
+    // side sign: which side of the source curve the cursor is on
+    _side(cursor, p) {
       if (p.kind === 'arc') {
         // toward center (radius shrinks) or away
         const c = p.meta.center;
@@ -109,10 +140,9 @@
       return Math.sign(G.dot(G.sub(cursor, a), n)) || 1;
     }
 
-    // the offset polyline for the current pick + side sign
-    _offsetPts(sign) {
+    // the offset polyline for a pick + side sign
+    _offsetPts(sign, p) {
       const d = this.dist * sign;
-      const p = this.pick;
       if (p.kind === 'arc') {
         // CONCENTRIC offset: same center/plane/span, radius ± d
         const c = p.meta.center;
@@ -154,22 +184,46 @@
     // -------------------------------------------------------------- events
     onMove(ev) {
       const app = this.app, view = app.view;
+      if (this._bandStart) {
+        const q = view.eventPt(ev);
+        const dx = q.x - this._bandStart.x, dy = q.y - this._bandStart.y;
+        if (!this._band && Math.hypot(dx, dy) > 4) {
+          this._band = true;
+          app.bandEl.classList.add('active');
+        }
+        if (this._band) {
+          const el = app.bandEl; // lives in the viewport = ScreenPt frame
+          el.style.left = Math.min(this._bandStart.x, q.x) + 'px';
+          el.style.top = Math.min(this._bandStart.y, q.y) + 'px';
+          el.style.width = Math.abs(dx) + 'px'; el.style.height = Math.abs(dy) + 'px';
+          el.classList.toggle('window', q.x >= this._bandStart.x);   // blue solid
+          el.classList.toggle('crossing', q.x < this._bandStart.x);  // green dashed
+        }
+        return;
+      }
       view.clearPreview();
       view.showSnapDot(null);
-      if (this.dist == null || !this.pick) {
+      if (this.dist == null || !this.picks) {
         const inf = app.inferPoint(ev, null);
         const s = view.toScreen(inf.p);
         if (s) showCursorCoords(view, s, inf, inf.p);
         return;
       }
       const inf = app.inferPoint(ev, null);
-      const sign = this._side(inf.p);
-      const pts = this._offsetPts(sign);
-      if (!pts || pts.length < 2) return;
-      view.previewLine(pts, 0x2b2b2b);
-      view.previewLine(this.pick.pts, 0x9a9a9a, true); // source ghost
-      const mid = pts[Math.floor(pts.length / 2)];
-      view.stickyLabel(mid, fmtLen(this.dist), '#333', 0, -14);
+      let shown = 0, lastMid = null;
+      for (const p of this.picks) {
+        const sign = this._side(inf.p, p);
+        const pts = this._offsetPts(sign, p);
+        if (!pts || pts.length < 2) continue;
+        view.previewLine(pts, 0x2b2b2b);
+        view.previewLine(p.pts, 0x9a9a9a, true); // source ghost
+        lastMid = pts[Math.floor(pts.length / 2)];
+        shown++;
+      }
+      if (shown) {
+        const n = this.picks.length;
+        view.stickyLabel(lastMid, fmtLen(this.dist) + (n > 1 ? ` × ${n}` : ''), '#333', 0, -14);
+      }
     }
 
     onDown(ev) {
@@ -179,20 +233,60 @@
         app.toast('Type the offset distance first (number + Enter)');
         return;
       }
-      const pick = this._pickAt(ev);
-      if (!pick) {
-        if (this.pick) app.toast('Click a line, arc, or polyline — or Esc');
+      if (this.picks) {
+        // the SIDE click — from the RAW ground point (snapping here would
+        // drag the cursor onto a source curve being offset)
+        this._commitAll(this._rawPoint(ev));
         return;
       }
-      if (!this.pick) {
-        this.pick = pick;
+      const pick = this._pickAt(ev);
+      if (pick) {
+        this.picks = [pick];
         app.view.setHoverEdges(pick.edgeIds);
         this.status();
         return;
       }
-      // a pick exists: this click is the SIDE — from the RAW ground point
-      // (snapping here would drag the cursor onto the source curve itself)
-      this._commit(this._side(this._rawPoint(ev)));
+      // empty space: start a BOX selection (window/crossing, like Select)
+      this._bandStart = app.view.eventPt(ev);
+      this._band = false;
+    }
+
+    onUp(ev) {
+      if (!this._bandStart) return;
+      const app = this.app;
+      const q = app.view.eventPt(ev);
+      const wasBand = this._band;
+      const start = this._bandStart;
+      this._endBand();
+      if (!wasBand) return; // a plain click on empty space — nothing to do
+      const x0 = Math.min(start.x, q.x), x1 = Math.max(start.x, q.x);
+      const y0 = Math.min(start.y, q.y), y1 = Math.max(start.y, q.y);
+      const crossing = q.x < start.x;
+      const ids = this._edgesInBox(x0, y0, x1, y1, crossing);
+      // group into curve records (a chain boxes as ONE curve, never N copies)
+      const model = app.model;
+      const seen = new Set();
+      const picks = [];
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        const e = model.edges.get(id);
+        if (!e) continue;
+        const rec = this._pickFromEdge(e);
+        if (!rec) continue;
+        for (const eid of rec.edgeIds) seen.add(eid);
+        picks.push(rec);
+      }
+      if (!picks.length) { app.toast('No lines or arcs in that box'); return; }
+      this.picks = picks;
+      app.view.setHoverEdges(picks.flatMap(p => p.edgeIds));
+      this.status();
+      app.toast(`Offset ${fmtLen(this.dist)}: ${picks.length} curve${picks.length > 1 ? 's' : ''} — click the side to place ${picks.length > 1 ? 'all copies' : 'the copy'}`);
+    }
+
+    _endBand() {
+      if (this.app && this.app.bandEl) this.app.bandEl.classList.remove('active', 'window', 'crossing');
+      this._bandStart = null;
+      this._band = false;
     }
 
     // the un-snapped pointer position on the ground plane (or nearest ray
@@ -204,27 +298,37 @@
       return app.inferPoint(ev, null).p;
     }
 
-    _commit(sign) {
+    _commitAll(cursor) {
       const app = this.app;
-      const pts = this._offsetPts(sign);
-      if (!pts || pts.length < 2 || Math.abs(this.dist) < 1e-5) return;
-      const p = this.pick;
-      app.run('edge offset', m => {
-        const meta = p.kind === 'arc' && p.meta
-          ? { ...p.meta, radius: Math.max(0.02, (p.meta.radius || G.dist(p.meta.center, p.pts[0])) + this.dist * sign) }
-          : null;
-        const closed = meta && meta.type === 'circle';
-        m.addPolyline(closed ? pts.concat([pts[0]]) : pts, meta);
+      if (Math.abs(this.dist) < 1e-5) return;
+      const batch = this.picks;
+      app.run(batch.length > 1 ? `offset ×${batch.length}` : 'edge offset', m => {
+        for (const p of batch) {
+          const sign = this._side(cursor, p);
+          const pts = this._offsetPts(sign, p);
+          if (!pts || pts.length < 2) continue;
+          const meta = p.kind === 'arc' && p.meta
+            ? { ...p.meta, radius: Math.max(0.02, (p.meta.radius || G.dist(p.meta.center, p.pts[0])) + this.dist * sign) }
+            : null;
+          const closed = meta && meta.type === 'circle';
+          m.addPolyline(closed ? pts.concat([pts[0]]) : pts, meta);
+        }
       });
       app.view.setHoverEdges(null);
       app.view.clearPreview();
-      // AutoCAD repeat: distance stays armed, ready for the next curve
-      this.pick = null;
+      // AutoCAD repeat: distance stays armed, ready for the next curve(s)
+      this.picks = null;
       this.status();
     }
 
     onKey(ev) {
-      if (ev.key === 'Escape') { this.activate(); this.app.view.setHoverEdges(null); this.app.view.clearPreview(); return true; }
+      if (ev.key === 'Escape') {
+        this._endBand();
+        this.activate();
+        this.app.view.setHoverEdges(null);
+        this.app.view.clearPreview();
+        return true;
+      }
       return false;
     }
 
@@ -232,10 +336,11 @@
       const d = parseLen(text);
       if (d == null || d <= 0) return false;
       this.dist = d;
-      // typing a new distance while a curve is picked re-arms and clears it
-      if (this.pick) { this.pick = null; this.app.view.setHoverEdges(null); this.app.view.clearPreview(); }
+      // typing a new distance while curve(s) are picked re-arms and clears
+      this._endBand();
+      if (this.picks) { this.picks = null; this.app.view.setHoverEdges(null); this.app.view.clearPreview(); }
       this.status();
-      this.app.toast(`Offset distance ${fmtLen(d)} — click a line, arc, or polyline`);
+      this.app.toast(`Offset distance ${fmtLen(d)} — click a curve, or drag a box around several`);
       return true;
     }
   }

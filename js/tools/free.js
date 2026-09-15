@@ -362,6 +362,8 @@ class SelectTool extends Tool {
       el.style.left = Math.min(this._bandStart.x, q.x) + 'px';
       el.style.top = Math.min(this._bandStart.y, q.y) + 'px';
       el.style.width = Math.abs(dx) + 'px'; el.style.height = Math.abs(dy) + 'px';
+      el.classList.toggle('window', q.x >= this._bandStart.x);   // blue solid
+      el.classList.toggle('crossing', q.x < this._bandStart.x);  // green dashed
     }
   }
   onUp(ev) {
@@ -413,7 +415,7 @@ class SelectTool extends Tool {
     this._hostCandidate = null;
     if (!this._bandStart) return;
     const app = this.app;
-    app.bandEl.classList.remove('active');
+    app.bandEl.classList.remove('active', 'window', 'crossing');
     if (this._band) {
       const q = app.view.eventPt(ev);
       const x0 = Math.min(this._bandStart.x, q.x), x1 = Math.max(this._bandStart.x, q.x);
