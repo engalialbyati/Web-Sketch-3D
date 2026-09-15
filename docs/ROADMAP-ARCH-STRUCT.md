@@ -40,7 +40,7 @@ return one. This is the single highest-leverage phase.
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
 | 1.1 | ✅ **IFC4 STEP writer** — IfcProject/Site/Building/Storey + IfcWall, IfcSlab, IfcColumn, IfcBeam, IfcRoof, IfcStair, IfcRailing | M | Shipped: parametric extrusions, hosted openings via IfcRelVoidsElement/FillsElement, B-Rep fallbacks for complex solids. Verified round-trip: demo building (85 walls/60 columns/85 beams/21 doors/50 windows) exports and re-imports 100% as elements, model validates |
-| 1.2 | ⬜ Project base point, survey point, true/project north | S | Persisted on the model; feeds the writer's IfcMapConversion |
+| 1.2 | ✅ Project base point, survey point, true/project north | S | Edit ▸ Georeferencing… dialog; model.geo survives save/load; north-arrow indicator; IfcProjectedCRS + IfcMapConversion on export; IfcMapConversion read back on import (verified round-trip: 500000E 4649776N 15° EPSG:32633) |
 | 1.3 | ✅ IfcSpace export | S | Shipped with Phase 2 rooms — verified round-trip |
 | 1.4 | ✅ Finish the in-flight import work (grids, curtain walls, door/window fills) | S | Done by the IFC agent (committed) |
 

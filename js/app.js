@@ -3183,6 +3183,50 @@ class App {
     this.dialog('Levels', '<div id="lvl-body"></div>', [['Close', null]]);
     this._renderLevelsBody();
   }
+  // Georeferencing (roadmap 1.2): project base point + survey point + the
+  // angle from project north to TRUE north. Data + IFC export (IfcMapCon-
+  // version) + a north arrow in the viewport — the model itself never moves.
+  georefDialog() {
+    const m = this.model;
+    if (!m.geo) m.geo = {
+      basePoint: { east: 0, north: 0, elev: 0 },
+      surveyPoint: { east: 0, north: 0, elev: 0 },
+      angleToTrueNorth: 0, crsName: 'EPSG:32633', geodeticDatum: 'WGS84', mapProjection: 'UTM',
+    };
+    const g = m.geo;
+    const num = (id, label, val, step = 0.01) =>
+      `<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0">
+        <span style="width:170px;flex:none;opacity:.75;font-size:12px">${label}</span>
+        <input type="number" step="${step}" id="${id}" value="${+val || 0}" style="width:130px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit"></div>`;
+    this.dialog('Georeferencing — Project Base Point & True North', `
+      <p class="dim" style="margin-top:0">The base point anchors the local origin in a projected coordinate system (exported as IfcMapConversion). Geometry never moves — this is a datum, not a transform.</p>
+      <div class="ob-lab">Project base point (East / North / Elev, metres)</div>
+      ${num('geo-be', 'Easting (X)', g.basePoint.east)}
+      ${num('geo-bn', 'Northing (Y)', g.basePoint.north)}
+      ${num('geo-bz', 'Elevation', g.basePoint.elev, 0.1)}
+      <div class="ob-lab" style="margin-top:8px">Survey point (reference marker)</div>
+      ${num('geo-se', 'Easting', g.surveyPoint.east)}
+      ${num('geo-sn', 'Northing', g.surveyPoint.north)}
+      <div class="ob-lab" style="margin-top:8px">Orientation</div>
+      ${num('geo-ang', 'Angle to true north (°, clockwise)', (+g.angleToTrueNorth || 0) * 180 / Math.PI, 0.5)}
+      <div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0">
+        <span style="width:170px;flex:none;opacity:.75;font-size:12px">CRS name</span>
+        <input type="text" id="geo-crs" value="${String(g.crsName || 'EPSG:32633').replace(/"/g, '&quot;')}" style="width:130px;padding:4px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit"></div>
+    `, [
+      ['Reset', false],
+      ['Apply', () => {
+        const v = id => parseFloat(document.getElementById(id).value) || 0;
+        g.basePoint = { east: v('geo-be'), north: v('geo-bn'), elev: v('geo-bz') };
+        g.surveyPoint = { east: v('geo-se'), north: v('geo-sn'), elev: g.surveyPoint.elev || 0 };
+        g.angleToTrueNorth = v('geo-ang') * Math.PI / 180;
+        const crsIn = document.getElementById('geo-crs');
+        if (crsIn && crsIn.value.trim()) g.crsName = crsIn.value.trim();
+        this.run('georeference', mm => { mm.touch(); });
+        this.view.setNorthArrow ? this.view.setNorthArrow(g.angleToTrueNorth) : null;
+        this.toast(`Base point ${g.basePoint.east.toFixed(2)}E ${g.basePoint.north.toFixed(2)}N · true north ${(g.angleToTrueNorth * 180 / Math.PI).toFixed(1)}° — included in IFC exports`);
+      }],
+    ]);
+  }
   _renderLevelsBody() {
     const body = document.getElementById('lvl-body');
     if (!body) return;
@@ -4678,7 +4722,7 @@ class App {
         ['Ungroup', 'ungroup', 'Ctrl+Shift+G'],
         ['Give Thickness…', 'thicken', ''], '-',
         ['Edit In Place…', 'editInPlace', ''],
-        ['Levels…', 'levels', ''],
+        ['Levels…', 'levels', ''], ['Georeferencing…', 'georef', ''],
         ['Grids…', 'grids', ''],
         ['Rebuild from Parameters', 'rebuildParams', ''],
         ['Hide Selected', 'hideSelected', ''], ['Unhide All', 'unhideAll', ''],
@@ -4912,6 +4956,7 @@ class App {
       exportIfc: () => A.exportIfc(),
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
+      georef: () => A.georefDialog(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
       rebuildParams: () => A.rebuildFromParams(),

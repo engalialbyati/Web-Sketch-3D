@@ -689,6 +689,31 @@ class Viewport {
   // the 1 m reference grid follows the ACTIVE BASE LEVEL — the plane being
   // drawn on. Level 0 remains the world ground (terrain veil + shadows).
   setGridLevel(z) { this.grid.position.z = +z || 0; this.invalidate(); }
+  /** True-north arrow (georeference 1.2): a short arrow at the world origin
+   *  pointing along TRUE north — the model's +Y rotated by the project→true
+   *  angle. Hidden until an angle is set. */
+  setNorthArrow(angle) {
+    this.invalidate();
+    if (!this.northArrow) {
+      const mat = new THREE.LineBasicMaterial({ color: 0xc0392b, depthTest: false });
+      const g = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0)]);
+      const l = new THREE.Line(g, mat);
+      l.renderOrder = 28;
+      const head = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-0.12, 0.8, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0.12, 0.8, 0)]);
+      const hl = new THREE.Line(head, mat);
+      const grp = new THREE.Group();
+      grp.add(l); grp.add(hl);
+      grp.name = 'north-arrow';
+      this.northArrow = grp;
+      this.scene.add(grp);
+    }
+    if (angle == null) { this.northArrow.visible = false; return; }
+    this.northArrow.visible = true;
+    this.northArrow.rotation.z = -angle; // CW-positive angle rotates the arrow
+    this.northArrow.scale.setScalar(2.5); // 2.5 m arrow — legible at model scale
+  }
   setAxes(on) { this.axesGroup.visible = on; this.invalidate(); }
 
   // Vertical level reference planes (Precise Drawing mode). Each level gets a

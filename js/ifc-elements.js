@@ -714,6 +714,33 @@
     const buf = new Uint8Array(await file.arrayBuffer());
     const modelID = ifcApi.OpenModel(buf, { COORDINATE_TO_ORIGIN: true });
     try {
+      // georeference (roadmap 1.2): IfcMapConversion → model.geo — the file's
+      // base point + true-north angle land on the app model so a re-export
+      // preserves them (round-trip parity with our own writer)
+      try {
+        const mcIds = ifcApi.GetLineIDsWithType(modelID, WebIFC.IFCMAPCONVERSION);
+        if (mcIds && mcIds.size()) {
+          const mc = ifcApi.GetLine(modelID, mcIds.get(0), true);
+          if (mc && mc.Eastings != null) {
+            let ang = 0;
+            if (mc.XAxisAbscissa != null && mc.XAxisOrdinate != null)
+              ang = -Math.atan2(num(mc.XAxisOrdinate), num(mc.XAxisAbscissa));
+            let crsName = 'EPSG:32633';
+            try {
+              const crsH = mc.TargetCRS;
+              const cid = crsH && crsH.value != null ? crsH.value : crsH;
+              const crs = cid != null ? ifcApi.GetLine(modelID, cid, true) : null;
+              if (crs && crs.Name) crsName = str(crs.Name);
+            } catch (e0) { }
+            app.model.geo = {
+              basePoint: { east: num(mc.Eastings), north: num(mc.Northings), elev: num(mc.OrthogonalHeight) },
+              surveyPoint: { east: 0, north: 0, elev: 0 },
+              angleToTrueNorth: +ang.toFixed(6), crsName,
+            };
+            if (app.view && app.view.setNorthArrow && Math.abs(ang) > 1e-9) app.view.setNorthArrow(ang);
+          }
+        }
+      } catch (eGeo) { }
       const parsed = parseModel(WebIFC, ifcApi, modelID);
       const built = await build(app, parsed, onProgress);
       // ELEMENT MODE IS ELEMENTS ONLY — no raw meshes from the same file

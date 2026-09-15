@@ -124,6 +124,33 @@ module.exports = h => {
     ok(/IFCCARTESIANPOINT\(\(?0\.,0\.,0\.\)?\)/.test(r.text), 'origin point present');
   });
 
+  test('georeference (1.2): model.geo round-trips and emits IfcMapConversion', () => {
+    const app = fakeApp();
+    app.model.geo = {
+      basePoint: { east: 500000, north: 4649776, elev: 12.5 },
+      surveyPoint: { east: 500010, north: 4649780, elev: 12.6 },
+      angleToTrueNorth: 15 * Math.PI / 180, crsName: 'EPSG:32633',
+    };
+    // serialize → load keeps the datum
+    const snap = app.model.serialize();
+    app.model.load(JSON.parse(JSON.stringify(snap)));
+    ok(app.model.geo, 'geo survives load');
+    const g2 = app.model.geo;
+    near(g2.basePoint.east, 500000, 1e-6, 'east');
+    near(g2.angleToTrueNorth, 15 * Math.PI / 180, 1e-9, 'true-north angle');
+    // export carries the CRS + map conversion
+    const r = IfcExport.fromApp(app);
+    ok(r.text.includes("IFCPROJECTEDCRS('EPSG:32633'"), 'projected CRS');
+    ok(r.text.includes('IFCMAPCONVERSION('), 'map conversion present');
+    const mcLine = r.text.split('\n').find(l => l.includes('IFCMAPCONVERSION(')) || '';
+    ok(mcLine.includes('500000') && mcLine.includes('4649776') && mcLine.includes('12.5'), 'E/N/height values', mcLine.slice(0, 90));
+    ok(r.counts.georeference === 1, 'georeference counted');
+    // no geo → no conversion (default models stay clean)
+    const plain = fakeApp();
+    const r2 = IfcExport.fromApp(plain);
+    ok(!r2.text.includes('IFCMAPCONVERSION'), 'no conversion without geo');
+  });
+
   test('no bare reals: every number token carries a decimal point', () => {
     const r = IfcExport.fromApp(fakeApp());
     const data = r.text.slice(r.text.indexOf('DATA;'));

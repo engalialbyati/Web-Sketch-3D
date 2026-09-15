@@ -3355,6 +3355,11 @@ class Model {
       c: [...this.curves.entries()].map(([id, m]) => [id, m]),
       g: [...this.groups.entries()].map(([id, g]) => [id, g]),
       lvl: (this.levels || []).map(l => ({ ...l })),
+      // georeference (roadmap 1.2): the project base point (where the local
+      // origin sits in a projected CRS), the survey point, and the rotation
+      // from project north to TRUE north (radians, positive = clockwise
+      // looking down). Feeds the IFC writer's IfcMapConversion.
+      geo: this.geo ? JSON.parse(JSON.stringify(this.geo)) : null,
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
       lyr: (this.layers || []).map(l => ({ ...l })),
       cur: this.currentLayerId || '0',
@@ -3411,6 +3416,8 @@ class Model {
     // grids hydrate back into GridLine instances (distance/intersection
     // methods) — plain record copies would strip the GridSystem API
     this.grids = data.grid ? data.grid.map(g => (typeof GridLine === 'function' ? GridLine.fromRecord(g) : null) || { ...g }) : (this.grids || []);
+    // georeference: legacy files without `geo` keep whatever is set (or none)
+    this.geo = data.geo ? { ...data.geo } : (this.geo || null);
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
       ...x, params: x.params ? _deepClone(x.params) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],

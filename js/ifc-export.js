@@ -143,6 +143,22 @@
     const uAng = w.e('IFCSIUNIT', ['*', { enum: 'PLANEANGLEUNIT' }, '$', { enum: 'RADIAN' }]);
     const units = w.e('IFCUNITASSIGNMENT', [[uLen, uArea, uVol, uAng]]);
 
+    // ---- georeference (roadmap 1.2): IfcProjectedCRS + IfcMapConversion.
+    // The base point places the local origin in the projected CRS; the
+    // true-north angle becomes the XAxisAbscissa/Ordinate direction pair
+    // (angle measured clockwise from project north, IFC's convention).
+    if (m.geo && m.geo.basePoint) {
+      const geo = m.geo;
+      const crs = w.raw('IFCPROJECTEDCRS',
+        [String(geo.crsName || 'EPSG:32633'), '$', String(geo.geodeticDatum || 'WGS84'),
+          '$', String(geo.mapProjection || 'UTM'), '$', uLen]);
+      const th = +geo.angleToTrueNorth || 0; // radians CW from project north
+      w.raw('IFCMAPCONVERSION',
+        [ctx, crs, +geo.basePoint.east || 0, +geo.basePoint.north || 0,
+          +geo.basePoint.elev || 0, Math.cos(-th), Math.sin(-th), '$']);
+      bump('georeference');
+    }
+
     // ---- spatial tree ----------------------------------------------------
     const levels = (app.levelManager ? app.levelManager.levels : []) || [];
     if (!levels.length) levels.push({ id: 'lvl_1', name: 'Level 1', elevation: 0 });
