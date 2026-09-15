@@ -68,11 +68,11 @@ Built on a new annotation-entity layer: persistent, selectable, world-anchored.
 
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
-| 3.1 | ⬜ Annotation entity framework — stored in the model, serialized, undoable, level-lockable | M | The substrate for everything below |
-| 3.2 | ⬜ Aligned + linear dimensions between references (walls, grids, vertices), tracking geometry edits | M | The hard part is stable references; vertex/element ids survive most edits today |
-| 3.3 | ⬜ Tags by category (door/window/room/wall) with leaders; Tag All Untagged | S | Reads entity params — registry is ready |
-| 3.4 | ⬜ Text notes with leaders, find & replace | S | |
-| 3.5 | ⬜ Spot elevations/coordinates | S | Trivial once 3.1 exists |
+| 3.1 | ✅ Annotation entity framework — stored in the model, serialized, undoable | M | model.annotations records rendered on the HUD layer; never building fabric |
+| 3.2 | ✅ Aligned + linear dimensions between references, tracking geometry edits | M | vertex/wallEnd refs re-resolve while the host lives; dead refs freeze at the stored point |
+| 3.3 | ✅ Tags by category with leaders; Tag All Untagged | S | Live templates (rename a room, its tag updates); 268 elements tagged in one click on the demo |
+| 3.4 | ✅ Text notes with leaders, find & replace | S | Leader when anchored to geometry; Edit ▸ Find & Replace Notes… |
+| 3.5 | ✅ Spot elevations/coordinates | S | Absolute elevation too when the georeference base point is set |
 | 3.6 | ⬜ Angular, radial, arc-length dimensions | M | Guide-arc math already exists (polar guides) |
 | 3.7 | ⬜ Section/elevation markers → saved clipped views (2D projection of the model along a cut plane) | L | The "view system lite" — no sheets yet |
 | 3.8 | ⬜ Detail components, filled/masking regions, revision clouds | M | Linetypes/regions groundwork done |
