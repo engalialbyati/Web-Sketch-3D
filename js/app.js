@@ -101,6 +101,7 @@ const FEATURES = [
 
 const ICONS = {
   select: '<svg viewBox="0 0 24 24"><path d="M6 3l7 16 2.2-6.4L21 10.4z" fill="currentColor" stroke="none"/></svg>',
+  edgeselect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5h16M4 5v14M20 5v14M4 19h16" stroke-dasharray="2.5 2.5"/><path d="M8 9l8 6" stroke-width="2.2"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
   polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
   rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/></svg>',
@@ -6189,12 +6190,61 @@ class App {
           : (Math.abs(n.y) >= Math.abs(n.z) ? 'y' : 'z');
         if (n[ax] < 0) loop.reverse();
       }
-      // one face per loop; non-planar/degenerate rings are skipped, not fatal
-      for (const loop of loops) {
+      // NESTED LOOPS BECOME HOLES: a closed ring lying strictly inside another
+      // (a rectangle drawn inside a rectangle) deducts from the containing
+      // face instead of stacking face over face. Every loop still becomes
+      // its own face; each face's holes are the rings DIRECTLY inside it
+      // (smallest containing loop wins), so multi-level nesting gives one
+      // face per band.
+      const contains = (outer, inner) => {
+        const op = mm.pts(outer), ip = mm.pts(inner);
+        const n = G.loopNormal(op);
+        if (G.isZero(n)) return false;
+        const d0 = G.dot(n, op[0]);
+        if (ip.some(p => Math.abs(G.dot(n, p) - d0) > 1e-6)) return false; // different plane
+        const { u, v } = G.basisForNormal(n);
+        const O = op.map(p => ({ x: G.dot(u, p), y: G.dot(v, p) }));
+        const I = ip.map(p => ({ x: G.dot(u, p), y: G.dot(v, p) }));
+        const d2seg = (p, a, b) => {
+          const dx = b.x - a.x, dy = b.y - a.y;
+          const L2 = dx * dx + dy * dy || 1e-12;
+          const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2));
+          return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t));
+        };
+        const inPoly = pt => {
+          for (let a = 0, b = O.length - 1; a < O.length; b = a++)
+            if (d2seg(pt, O[a], O[b]) < 1e-9) return false; // on the boundary: touching, not nested
+          let hit = false;
+          for (let a = 0, b = O.length - 1; a < O.length; b = a++) {
+            if (((O[a].y > pt.y) !== (O[b].y > pt.y)) &&
+              (pt.x < (O[b].x - O[a].x) * (pt.y - O[a].y) / (O[b].y - O[a].y) + O[a].x)) hit = !hit;
+          }
+          return hit;
+        };
+        return I.every(inPoly);
+      };
+      const parent = loops.map(() => -1);
+      for (let i = 0; i < loops.length; i++) {
+        let best = -1, bestArea = Infinity;
+        for (let j = 0; j < loops.length; j++) {
+          if (i === j || !contains(loops[j], loops[i])) continue;
+          const a = Math.abs(G.loopArea(mm.pts(loops[j])));
+          if (a < bestArea) { bestArea = a; best = j; } // the tightest container
+        }
+        parent[i] = best;
+      }
+      // one face per loop (its direct children as holes); non-planar rings
+      // are skipped, not fatal
+      for (let i = 0; i < loops.length; i++) {
+        const loop = loops[i];
         if (G.isZero(G.loopNormal(mm.pts(loop)))) { skipped++; continue; }
+        const holes = loops
+          .map((_, k) => k)
+          .filter(k => parent[k] === i)
+          .map(k => loops[k].map(id => G.clone(mm.vp(id))));
         // standalone: fresh vertices + private edges — each face is its own
         // island; the source wire stays for the next Create Face
-        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))), [], { standalone: true })) made++;
+        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))), holes, { standalone: true })) made++;
         else skipped++;
       }
       return true;
@@ -6203,7 +6253,7 @@ class App {
     if (err) { this.toast(err, true); return; }
     if (made) {
       this.clearSelection();
-      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — Push/Pull, edit, or delete without touching neighbors; the original lines stay for the next face`);
+      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — nested rings deducted as holes; Push/Pull, edit, or delete without touching neighbors`);
     } else {
       this.toast('Could not create a face from those loops' + (skipped ? ' — the rings are not planar' : ''), true);
     }
