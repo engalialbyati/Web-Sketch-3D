@@ -323,6 +323,11 @@ class Model {
   snapEndpoint(p) {
     for (const e of this.edges.values()) {
       if (e.curveId) continue;
+      // BIM construction never welds onto a drawn wire: the element's ring
+      // vertex stays its own, and the wire stays exactly as drawn (a wall
+      // over a rectangle must not absorb its lines). Free-mode snapping
+      // keeps the classic T-junction weld.
+      if (this.bimHold && e.userData && e.userData.deliberate) continue;
       if (G.distToSeg(p, this.vp(e.a), this.vp(e.b)) < 1e-4) {
         if (G.dist(p, this.vp(e.a)) < G.VEPS) return e.a;
         if (G.dist(p, this.vp(e.b)) < G.VEPS) return e.b;

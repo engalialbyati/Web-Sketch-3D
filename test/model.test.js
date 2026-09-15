@@ -38,15 +38,19 @@ module.exports = h => {
     vclean('rect face');
   });
 
-  test('autoFace: closing a polyline ring creates the face (line-tool flow)', () => {
+  test('wires only: closing a polyline ring creates NO face (explicit Create Face flow)', () => {
     const { m, vclean } = makeWorld();
     const P = [[0, 0, 0], [2, 0, 0], [2, 2, 0], [0, 2, 0]];
     let last = null;
     for (let i = 0; i < 4; i++) last = m.addEdge({ x: P[i][0], y: P[i][1], z: 0 }, { x: P[(i + 1) % 4][0], y: P[(i + 1) % 4][1], z: 0 });
-    eq(m.faces.size, 1, 'closing the loop auto-faces');
-    near(m.faceArea([...m.faces.values()][0]), 4, 1e-9, '2x2 square');
+    eq(m.faces.size, 0, 'free drawing never auto-faces');
     ok(last, 'addEdge returned the closing edge');
-    vclean('autoFace');
+    // the explicit step: a face from the (already existing) ring
+    const f = m.addFaceFromRings(P.map(p => ({ x: p[0], y: p[1], z: 0 })));
+    eq(m.faces.size, 1, 'explicit Create Face works on the wire');
+    near(m.faceArea(f), 4, 1e-9, '2x2 square');
+    eq(m.edges.size, 4, 'the face reuses the wire edges — no duplicates');
+    vclean('wires-only + create face');
   });
 
   test('splitEdgeAt: splitting an edge updates every face ring that uses it', () => {
@@ -580,23 +584,21 @@ module.exports = h => {
     eq(v.warnings.filter(x => x.includes('unwelded')).length, 0, 'no unwelded duplicates');
   });
 
-  test('a closed polygon crossing a footprint generates faces on both partitions', () => {
+  test('a closed polygon crossing a footprint stays WIRES (no auto faces)', () => {
     const w = makeWorld(); const { m } = w;
     w.box(4, 3, 2.5);
+    const before = m.faces.size;
     // band (−1..5) × (1..2) crosses the footprint twice per long side
     m.addEdge({ x: -1, y: 1, z: 0 }, { x: 5, y: 1, z: 0 });
     m.addEdge({ x: 5, y: 1, z: 0 }, { x: 5, y: 2, z: 0 });
     m.addEdge({ x: 5, y: 2, z: 0 }, { x: -1, y: 2, z: 0 });
     m.addEdge({ x: -1, y: 2, z: 0 }, { x: -1, y: 1, z: 0 });
     const flat = [...m.faces.values()].filter(f => Math.abs(m.faceCentroid(f).z) < 1e-9);
-    ok(flat.length >= 5, 'faces form: footprint strips + outside stubs (was: none)');
-    near(flat.reduce((s, f) => s + m.faceArea(f), 0), 12 + 2, 1e-9, 'footprint + the outside band parts');
-    const stubs = flat.filter(f => m.faceArea(f) < 1.5);
-    eq(stubs.length, 2, 'two outside stub faces of 1 m² each');
-    const mid = flat.find(f => Math.abs(m.faceArea(f) - 4) < 1e-6 && Math.abs(m.faceCentroid(f).y - 1.5) < 1e-6);
-    ok(mid, 'the shared middle strip serves as both footprint and band region');
+    near(flat.reduce((s, f) => s + m.faceArea(f), 0), 12, 1e-9, 'flat area is the footprint only — no auto band faces');
+    const wires = [...m.edges.values()].filter(e => e.userData && e.userData.deliberate);
+    eq(wires.length, 8, 'the drawn lines survive as wires (split at the footprint, never consumed)');
     near(w.vol(), 30, 1e-6, 'solid unchanged');
-    const v = w.vclean('crossing polygon');
+    const v = w.vclean('crossing polygon wires');
     eq(v.warnings.filter(x => x.includes('unwelded')).length, 0, 'no unwelded duplicates');
   });
 

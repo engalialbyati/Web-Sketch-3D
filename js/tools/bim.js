@@ -335,11 +335,16 @@ static gridColumnTrim(G, A, B, colA, colB) {
     const h = this._height();
     // Construction-wire sweep brackets the WHOLE commit: join rebuilds and
     // the extrusion hold separately, so residue born attached in one stage
-    // and orphaned in the next would otherwise slip each stage's sweep
+    // and orphaned in the next would otherwise slip each stage's sweep.
+    // The hold also covers the FOOTPRINT stage: drawn wires crossed by the
+    // band must never be split or rewired (the user's rectangle stays
+    // exactly as drawn under the new wall).
     app.model.beginEdgeSweep();
     try {
+      app.model.bimHold = true;
       this._commitInner(r, h);
     } finally {
+      app.model.bimHold = false;
       app.model.endEdgeSweep();
     }
   }
