@@ -6133,6 +6133,20 @@ class App {
       this.toast('The selected edges do not form closed loops', true);
       return;
     }
+    // Consistent orientation: the walk follows whatever direction each edge
+    // was DRAWN in, so sibling rings can come out with opposite windings —
+    // and a typed Push/Pull distance travels along the face NORMAL, which
+    // sent part of a multi-ring extrusion down into the ground. Orient every
+    // loop the same way: the normal's dominant axis points positive
+    // (ground-plane rings always face +Z, so a typed thickness goes UP).
+    for (const loop of loops) {
+      const n = G.loopNormal(m.pts(loop));
+      if (G.isZero(n)) continue;
+      const ax = Math.abs(n.x) >= Math.abs(n.y)
+        ? (Math.abs(n.x) >= Math.abs(n.z) ? 'x' : 'z')
+        : (Math.abs(n.y) >= Math.abs(n.z) ? 'y' : 'z');
+      if (n[ax] < 0) loop.reverse();
+    }
     // one face per loop; non-planar/degenerate rings are skipped, not fatal
     let made = 0, skipped = 0;
     this.run('create faces', mm => {
