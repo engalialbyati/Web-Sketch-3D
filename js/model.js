@@ -51,6 +51,8 @@ class Model {
     // (never intersect, export as IFC annotation later). Survives snapshots
     // like every other model state.
     this.annotations = [];
+    // saved views (Phase 3.7): sections/elevations — camera + clip plane
+    this.views = [];
     // transient: entity ids whose B-Rep was structurally edited (split,
     // punched, trimmed, pushed) since the last drain — the app layer detaches
     // them (plain B-Rep survives, parametric definition goes away)
@@ -298,6 +300,13 @@ class Model {
     if (!e1) e1 = this._addEdge({ id: nid(), a: e.a, b: m, curveId: 0 });
     let e2 = this.findEdge(m, e.b);
     if (!e2) e2 = this._addEdge({ id: nid(), a: m, b: e.b, curveId: 0 });
+    // a split drawn line stays drawn: the halves inherit deliberate, or the
+    // next sweep reaps them as unattached construction residue
+    const del = e.userData && e.userData.deliberate;
+    if (del) {
+      if (e1 !== e && !e1.userData) e1.userData = { deliberate: 1 };
+      if (e2 !== e && !e2.userData) e2.userData = { deliberate: 1 };
+    }
     if (e1.id !== e.id && e2.id !== e.id) this._delEdge(e.id);
     for (const f of this.faces.values()) for (const ring of this.rings(f)) {
       const L = ring, n = L.length;
@@ -341,9 +350,18 @@ class Model {
   }
 
   addEdge(pa, pb) {
-    const e = this._addEdgePublic(pa, pb);
+    this._deliberateNext = true;
+    let e;
+    try { e = this._addEdgePublic(pa, pb); }
+    finally { this._deliberateNext = false; }
     if (e && !e.userData) e.userData = { deliberate: 1 }; // drawn geometry: sweeps never reap it
     return e;
+  }
+  // drawn-edge marker: addEdge/addPolyline set this so EVERY chain piece of
+  // a drawn segment (split at crossings on the way in) stays deliberate —
+  // only the last piece is returned, the rest must not become reap-bait
+  _markPiecesDeliberate(e) {
+    if (this._deliberateNext && e && !e.userData) e.userData = { deliberate: 1 };
   }
   _addEdgePublic(pa, pb) {    if (!pa || !pb || G.dist(pa, pb) < G.VEPS) return null;
     const sa = this.snapEndpoint(pa), sb = this.snapEndpoint(pb);
@@ -385,6 +403,12 @@ class Model {
     }
     if (hits.length && !crossesHole) {
       for (const h of hits) {
+        // BIM construction never cuts drawn wires: a wall (or any element)
+        // built over a rectangle/line leaves every drawn edge EXACTLY as
+        // drawn — the band simply crosses the wire inside the solid. Free
+        // mode keeps the classic behavior (two crossing lines share the
+        // crossing vertex).
+        if (this.bimHold && h.e.userData && h.e.userData.deliberate) continue;
         this.splitEdgeAt(h.e, h.p); // shared vertex lands in every ring using h.e
         events.push({ t: h.t, m: this.vertexAt(h.p), p3: h.p });
       }
@@ -415,19 +439,23 @@ class Model {
         if (!e) {
           e = { id: nid(), a: chain[i], b: chain[i + 1], curveId: 0, gid: this.currentGid || 0 };
           this._addEdge(e);
+          this._markPiecesDeliberate(e);
         }
         // a chain segment whose ends both sit on a crossed face's ring splits
         // that face along the chord (the footprint interior partition)
         this.splitFacesAt(chain[i], chain[i + 1]);
-        this.autoFace(e);
+        // NO auto face from wires: free drawing produces wires only — faces
+        // come from elements' explicit builds, or the user's Create Face
+        // command on a selected closed loop (right-click)
         last = e;
       }
       return last;
     }
     const e = { id: nid(), a, b, curveId: 0, gid: this.currentGid || 0 };
     this._addEdge(e);
+    this._markPiecesDeliberate(e);
     this.splitFacesAt(a, b);
-    this.autoFace(e);
+    // no autoFace — free drawing never creates faces (see the chain branch)
     return e;
   }
   // Open or closed polyline; curveMeta groups segments into an arc/circle entity.
@@ -3366,6 +3394,7 @@ class Model {
       // looking down). Feeds the IFC writer's IfcMapConversion.
       geo: this.geo ? JSON.parse(JSON.stringify(this.geo)) : null,
       ann: (this.annotations || []).map(a => ({ ...a })),
+      views: (this.views || []).map(v => ({ ...v })),
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
       lyr: (this.layers || []).map(l => ({ ...l })),
       cur: this.currentLayerId || '0',
@@ -3425,6 +3454,7 @@ class Model {
     // georeference: legacy files without `geo` keep whatever is set (or none)
     this.geo = data.geo ? { ...data.geo } : (this.geo || null);
     this.annotations = Array.isArray(data.ann) ? data.ann.map(a => ({ ...a })) : [];
+    this.views = Array.isArray(data.views) ? data.views.map(v => ({ ...v })) : [];
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
       ...x, params: x.params ? _deepClone(x.params) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],

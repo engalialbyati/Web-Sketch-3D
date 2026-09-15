@@ -73,10 +73,10 @@ Built on a new annotation-entity layer: persistent, selectable, world-anchored.
 | 3.3 | ✅ Tags by category with leaders; Tag All Untagged | S | Live templates (rename a room, its tag updates); 268 elements tagged in one click on the demo |
 | 3.4 | ✅ Text notes with leaders, find & replace | S | Leader when anchored to geometry; Edit ▸ Find & Replace Notes… |
 | 3.5 | ✅ Spot elevations/coordinates | S | Absolute elevation too when the georeference base point is set |
-| 3.6 | ⬜ Angular, radial, arc-length dimensions | M | Guide-arc math already exists (polar guides) |
-| 3.7 | ⬜ Section/elevation markers → saved clipped views (2D projection of the model along a cut plane) | L | The "view system lite" — no sheets yet |
-| 3.8 | ⬜ Detail components, filled/masking regions, revision clouds | M | Linetypes/regions groundwork done |
-| 3.9 | ⬜ Drawing sheets — arrange views on titled sheets, print/PDF | L | Optional finale of this phase |
+| 3.6 | ✅ Angular, radial dimensions | M | Vertex + two rays → arc-swept angle; circle/arc pick → R dimension. Arc-length rides the arc metadata (deferred) |
+| 3.7 | ✅ Section/elevation markers → saved clipped views | L | Section tool draws a cut line → camera perpendicular + WebGL clip plane opens the model; Elevation tool saves horizontal views; File ▸ Sections & Views… lists/opens/deletes; Camera ▸ Exit Section View restores |
+| 3.8 | ✅ Filled/masking regions, revision clouds | M | HUD polygon regions with hatch fill; scalloped cloud rings. Detail components (2D families) deferred to the asset pipeline |
+| 3.9 | ✅ Print Sheet (current view + title block → browser Print/PDF) | L | File ▸ Print Sheet… composes the live view with a title block (date, base point, sheet no) in a print-ready window. Multi-view sheet layout deferred |
 
 ---
 
@@ -84,14 +84,14 @@ Built on a new annotation-entity layer: persistent, selectable, world-anchored.
 
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
-| 4.1 | ⬜ Compound walls — layered material stacks (core/insulation/finish) with priority-based corner joins | L | The taxonomy's compound-wall tier; joins are the algorithm to get right |
-| 4.2 | ⬜ Curtain walls — UV grid → mullions (IfcMember) + panels (IfcPlate) | M | Import-side bounds logic (WIP) inverts into authoring |
-| 4.3 | ⬜ Ceilings (IfcCovering) — suspended grids | M | |
-| 4.4 | ⬜ Ramps (IfcRamp) | S | Stairs infra generalizes |
-| 4.5 | ⬜ Wall sweeps & reveals (hosted profile sweeps: cornices, baseboards) | M | Extrude-along-path exists; hosting + mitering is the work |
-| 4.6 | ⬜ Spiral & winder stair runs | M | |
-| 4.7 | ⬜ Elevators/escalators (IfcTransportElement) — shaft + car as parametric families | M | Optional; asset-based first pass is cheaper |
-| 4.8 | ⬜ Site-lite: property lines, simple TIN topography import + building pads | L | Only what an architect needs for context |
+| 4.1 | 🔶 Compound walls — layer data + IfcMaterialLayerSet export + panel editing | L | params.layers on walls: text field "name:t, name:t" in the panel, exported as IfcMaterialLayerSet/Usage. Geometric layer splitting + priority joins deferred |
+| 4.2 | ✅ Curtain walls — generator | M | Two clicks → mullion grid (columns) + glass wall panels along the run; VCB sets panel width/height |
+| 4.3 | ✅ Ceilings — region-detected plates at level − drop | M | Click inside an enclosed region; VCB "drop" sets the height |
+| 4.4 | ✅ Ramps — sloped slab from level with typed rise | S | Two clicks + VCB "rise" / "rise,width" |
+| 4.5 | ✅ Wall sweeps (cornices/baseboards) — hosted profile boxes | M | Click a wall; VCB "height,offset". Reveals (subtractions) deferred |
+| 4.6 | ⬜ Spiral & winder stair runs | M | Deferred — the stairs feature covers straight/U today |
+| 4.7 | ⬜ Elevators/escalators | M | Deferred — shaft = walls + slab; a scripted element can cover it |
+| 4.8 | 🔶 Site-lite: property lines | L | File ▸ Property Lines… table → closed boundary + area entity. TIN/pads deferred |
 
 ---
 
@@ -99,13 +99,13 @@ Built on a new annotation-entity layer: persistent, selectable, world-anchored.
 
 | # | Feature | Effort | Notes |
 |---|---------|-------|-------|
-| 5.1 | ⬜ Analytical model — decoupled 1D centerlines + nodes (per the taxonomy's multi-representation rule), member end releases | M | Beams/columns already carry centerlines; add the analytical rep + toggle view |
-| 5.2 | ⬜ Structural export — IFC structural entities or analysis-neutral format (for Robot/ETABS pipelines) | M | |
-| 5.3 | ⬜ Strip & mat foundations, piles + pile caps | M | Footing entity generalizes |
-| 5.4 | ⬜ Bracing + trusses (assemblies from the beam engine) | M | Scripted-elements can seed parametric truss types |
-| 5.5 | ⬜ Base plates, gussets, bolt groups | M | Fabrication detail — after 5.1/5.2 |
-| 5.6 | ⬜ Rebar — area reinforcement on slabs/walls, bar sets with hooks, IfcReinforcingBar export | L | The last big structural block; needs its own sub-roadmap |
-| 5.7 | ⬜ Precast pieces (hollow-core, spandrels) | L | Optional, market-dependent |
+| 5.1 | ✅ Analytical model — derived 1D centerlines + viewport overlay | M | View ▸ Analytical Model derives members live from the registry (columns red, beams purple, braces orange, walls grey) and draws them |
+| 5.2 | ✅ Analytical CSV export — nodes + members | M | File ▸ Export Analytical CSV… (welded node list + member table, analysis-neutral) |
+| 5.3 | 🔶 Strip foundations | M | Insert ▸ Strip Footing: click a wall, VCB "width x thickness". Mat = a thick floor slab (existing); piles/caps deferred |
+| 5.4 | ✅ Bracing + truss generator | M | Brace tool (two snapped 3D points → diagonal beam); File ▸ Truss Generator (span/height/bays → chords + zig-zag webs) |
+| 5.5 | 🔶 Base plates | M | Insert ▸ Base Plate: click a column; VCB "size x thickness". Gussets/bolts deferred |
+| 5.6 | ⬜ Rebar | L | Deferred — needs its own sub-roadmap |
+| 5.7 | ⬜ Precast | L | Deferred |
 
 ---
 

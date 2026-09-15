@@ -899,10 +899,9 @@ class RectTool extends Tool {
     const app = this.app;
     const loop = this._build(a, b);
     if (G.loopArea(loop) < 1e-9) { app.toast('Rectangle is flat'); return; }
-    app.run('rectangle', m => {
-      const f = m.addFaceFromRings(loop, []);
-      if (f) m.punchOrSplit(f);
-    });
+    // WIRES ONLY: a rectangle is four drawn edges; the face is created
+    // explicitly (select the edges → right-click → Create Face)
+    app.run('rectangle', m => m.addPolyline(loop));
     this.activate();
     this.status();
   }
@@ -1037,9 +1036,8 @@ class CircleTool extends Tool {
       pts.push(G.add(G.add(this.center, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
     }
     app.run(this.polygon ? 'polygon' : 'circle', m => {
+      // WIRES ONLY — the face is created explicitly via Create Face
       m.addPolyline(pts, { type: this.polygon ? 'polygon' : 'circle', center: G.clone(this.center), radius: r, normal: G.clone(this.plane.n), sides: this.sides });
-      const f = m.addFaceFromRings(pts.slice(0, this.sides), []);
-      if (f) m.punchOrSplit(f);
     });
     this.activate();
     this.status();

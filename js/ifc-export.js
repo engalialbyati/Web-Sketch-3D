@@ -333,6 +333,16 @@
       }
       const rep = pds(shapeRep(solid, 'SweptSolid'));
       const ref = product(straight ? 'IFCWALLSTANDARDCASE' : 'IFCWALL', ent, pl, rep);
+      // compound wall (4.1): a layer stack rides the params — emit
+      // IfcMaterialLayerSet + IfcMaterialLayerSetUsage on the wall
+      if (Array.isArray(p.layers) && p.layers.length) {
+        const layerRefs = p.layers.map(ly => w.raw('IFCMATERIALLAYER',
+          [w.e('IFCMATERIAL', [String(ly.material || ly.name || 'Layer')]), +ly.thickness || 0.05, '$']));
+        const set = w.raw('IFCMATERIALLAYERSET', [layerRefs, String(p.name || ent.name || 'Wall assembly')]);
+        const usage = w.raw('IFCMATERIALLAYERSETUSAGE',
+          [set, { enum: 'AXIS2' }, { enum: 'POSITIVE' }, 0]);
+        w.raw('IFCRELASSOCIATESMATERIAL', [guid('mat:' + ent.id), oh, '$', '$', [ref], usage]);
+      }
       assign(ent, ref); bump('wall');
 
       // hosted openings cut this wall
@@ -555,7 +565,8 @@
 
     // ---- everything else: proxy with B-Rep ------------------------------------
     const KNOWN = ['wall', 'floor', 'slab', 'roof', 'column', 'beam', 'foundation',
-      'stairs', 'handrail', 'door', 'window', 'opening', 'room'];
+      'stairs', 'handrail', 'door', 'window', 'opening', 'room',
+      'ramp', 'ceiling', 'sweep', 'plate', 'brace', 'property'];
     for (const ent of bim.entities) {
       if (KNOWN.includes(ent.type)) continue;
       const { pl, zOff } = elemPlace(ent);

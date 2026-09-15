@@ -142,6 +142,19 @@ const ICONS = {
   measurearea: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V9l5-5h10v10l-5 5z"/><path d="M4 9l5 5 6-6 5 5" opacity=".6"/><path d="M9 4v5h5" opacity=".6"/></svg>',
   mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 2v20" stroke-dasharray="3 2.4"/><path d="M9 6L3 12l6 6z"/><path d="M15 6l6 6-6 6z" opacity=".45"/></svg>',
   array: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="6" height="6"/><rect x="15" y="3" width="6" height="6" opacity=".45"/><rect x="3" y="15" width="6" height="6" opacity=".45"/><rect x="15" y="15" width="6" height="6" opacity=".45"/></svg>',
+  ramp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 19h18M3 19l6-10h9l3 5"/><path d="M7 19l3-5"/></svg>',
+  ceiling: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7h18M3 7v3M21 7v3M7 10v3M12 10v3M17 10v3"/></svg>',
+  sweep: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V6a2 2 0 012-2h12a2 2 0 012 2v14"/><path d="M8 4v6h8V4"/></svg>',
+  curtain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16"/><path d="M8 4v16M12 4v16M16 4v16"/></svg>',
+  stripfoot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 20V9l9-5 9 5v11"/><path d="M7 20v-8M17 20v-8"/></svg>',
+  brace: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20L20 4M4 20V8M20 4H8"/></svg>',
+  plate: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="14" width="14" height="4"/><path d="M9 14V8M15 14V8M12 14V8"/></svg>',
+  dimang: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20L14 10"/><path d="M4 20l8-16"/><path d="M4 20a8 8 0 0 1 3-6.2"/></svg>',
+  dimrad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 12h8"/></svg>',
+  cloud: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 16c-1.5-3 1-5 3-4.5C7 8 10 7 11 9c1-2 5-2 5 1 2-.5 4 1.5 3 3.5.5 2-2 3-4 2.5-1 1.5-4 1.5-5 0-1 1-4 1-4-1-.5.5-1.5 0-2-1z"/></svg>',
+  region: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l8-12 8 12z"/><path d="M6.7 14h10.6M8 11.4h8" opacity=".6"/></svg>',
+  section: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M4 12h16"/><circle cx="12" cy="12" r="2"/></svg>',
+  elevmark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/><path d="M8 6v12M16 6v12" opacity=".5"/></svg>',
   dim: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19V7M20 19V7M4 13h16"/><path d="M4 5v4M2 7h4M20 5v4M18 7h4"/></svg>',
   tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 11l8-8h10v10l-8 8z"/><circle cx="16" cy="8" r="1.4"/></svg>',
   text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 6h14M12 6v13M9 19h6"/></svg>',
@@ -199,6 +212,19 @@ const TOOL_DEFS = {
     { id: 'tag', label: 'Tag', key: '' },
     { id: 'text', label: 'Text Note', key: '' },
     { id: 'spot', label: 'Spot Elevation', key: '' },
+    { id: 'dimang', label: 'Angular Dim', key: '' },
+    { id: 'dimrad', label: 'Radial Dim', key: '' },
+    { id: 'cloud', label: 'Revision Cloud', key: '' },
+    { id: 'region', label: 'Filled Region', key: '' },
+    { id: 'section', label: 'Section', key: '' },
+    { id: 'elevmark', label: 'Elevation', key: '' },
+    { id: 'ramp', label: 'Ramp', key: '' },
+    { id: 'ceiling', label: 'Ceiling', key: '' },
+    { id: 'curtain', label: 'Curtain Wall', key: '' },
+    { id: 'sweep', label: 'Wall Sweep', key: '' },
+    { id: 'stripfoot', label: 'Strip Footing', key: '' },
+    { id: 'brace', label: 'Brace', key: '' },
+    { id: 'plate', label: 'Base Plate', key: '' },
     { id: 'convert', label: 'Convert to BIM', key: '' },
     'sep',
     { id: 'door', label: 'Door', key: '' },
@@ -251,8 +277,9 @@ const RIBBON_GROUPS = {
     { title: 'Select', tools: ['select'] },
     { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'levelview'] },
     { title: 'Build', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
-    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof'] },
-    { title: 'Circulation', tools: ['stairs', 'handrail'] },
+    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
+    { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
+    { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
     { title: 'Modify', tools: ['pushpull', 'move', 'mirror', 'array'] },
     { title: 'Tools', tools: ['eraser', 'trim', 'tape', 'measurearea'] },
@@ -297,7 +324,8 @@ const RIBBON_TABS = {
     { title: 'Libraries', tools: ['browser', 'families', 'kit'] },
   ] },
   annotate: { label: 'Annotate', groups: [
-    { title: 'Annotate', tools: ['dim', 'tag', 'text', 'spot'] },
+    { title: 'Annotate', tools: ['dim', 'dimang', 'dimrad', 'tag', 'text', 'spot', 'cloud', 'region'] },
+    { title: 'Views', tools: ['section', 'elevmark'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
   ] },
@@ -4716,8 +4744,11 @@ class App {
         ['Remove Imported IFC', 'removeIfc', ''],
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
+        '-', ['Sections & Views…', 'viewsDlg', ''],
+        '-', ['Analytical Model', 'analytical', ''], ['Export Analytical CSV…', 'analyticalCsv', ''],
+        ['Truss Generator…', 'trussDlg', ''], ['Property Lines…', 'propDlg', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
-        ['Export IFC…', 'exportIfc', ''],
+        ['Export IFC…', 'exportIfc', ''], ['Print Sheet…', 'printSheet', ''],
       ]],
       ['Edit', [
         ['Undo', 'undo', 'Ctrl+Z'], ['Redo', 'redo', 'Ctrl+Y'], '-',
@@ -4754,6 +4785,7 @@ class App {
         ['Standard View: Bottom', 'viewBottom', ''], ['Standard View: Front', 'viewFront', ''],
         ['Standard View: Back', 'viewBack', ''], ['Standard View: Left', 'viewLeft', ''],
         ['Standard View: Right', 'viewRight', ''], '-',
+        ['Exit Section View', 'exitSection', ''],
         ['Zoom Extents', 'zoomExtents', 'Ctrl+Shift+E'],
       ]],
       ['Draw', [
@@ -4968,6 +5000,13 @@ class App {
       levels: () => A.levelsDialog(),
       georef: () => A.georefDialog(),
       tagAll: () => A.tagAllUntagged(),
+      viewsDlg: () => A.viewsDialog(),
+      exitSection: () => (window.Annotate2 ? Annotate2.clearSection(A) : null),
+      printSheet: () => (window.Annotate2 ? Annotate2.printSheet(A) : null),
+      analytical: () => A.toggleAnalytical(),
+      analyticalCsv: () => A.exportAnalyticalCsv(),
+      trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
+      propDlg: () => A.propertyDialog(),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
@@ -5520,6 +5559,11 @@ class App {
         // chain that extrudes/converts as a single polyline
         if (selEdges.length >= 2)
           items.push(['Join Edges into Polyline', () => this.joinSelectedEdges(selEdges.map(e => e.id))]);
+        // CREATE FACE: the explicit wire→face step (free drawing never makes
+        // faces on its own) — a standalone face, unconnected to any element,
+        // ready for Push/Pull or the Convert tool
+        if (selEdges.length >= 3)
+          items.push([`Create Face (${selEdges.length} Edges)`, () => this.createFaceFromSelectedEdges()]);
       }
       // EDGE ➔ ELEMENT: free line(s) convert directly into solid members —
       // the line becomes the element's centerline (no face needed first)
@@ -6029,6 +6073,47 @@ class App {
     else this.toast(`Extruded ${n} edge${n > 1 ? 's' : ''} toward the point — ${Math.abs(dist).toFixed(2)} m`);
     this.clearSelection();
     return n;
+  }
+  // Create Face from the SELECTED edge loop — the explicit wire→face step
+  // (free drawing produces wires only). The face is standalone: no element
+  // stamp, no host punch — Push/Pull extrudes it, the Convert tool turns it
+  // into an element.
+  createFaceFromSelectedEdges() {
+    const m = this.model, G = window.G;
+    const edges = [...this.sel.edges].map(id => m.edges.get(id)).filter(Boolean);
+    if (edges.length < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
+    const adj = new Map();
+    const link = (v, other) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(other); };
+    for (const e of edges) { link(e.a, e.b); link(e.b, e.a); }
+    for (const [, ns] of adj) if (ns.length !== 2) {
+      this.toast('The selected edges do not form one closed loop — every corner needs exactly two selected edges', true);
+      return;
+    }
+    const start = adj.keys().next().value;
+    const loop = [start];
+    let prev = null, cur = start;
+    do {
+      const [n1, n2] = adj.get(cur);
+      const next = n1 === prev ? n2 : n1;
+      loop.push(next);
+      prev = cur; cur = next;
+    } while (cur !== start && loop.length <= adj.size + 1);
+    loop.pop(); // drop the closing repeat
+    if (cur !== start || loop.length < 3) {
+      this.toast('The selected edges do not form one closed loop', true);
+      return;
+    }
+    if (G.isZero(G.loopNormal(m.pts(loop)))) {
+      this.toast('That loop is not planar (or is degenerate) — a face needs a flat ring', true);
+      return;
+    }
+    let made = false;
+    this.run('create face', mm => {
+      const f = mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))));
+      made = !!f;
+    });
+    if (made) { this.clearSelection(); this.toast('Face created — Push/Pull to extrude, or Convert to make it an element'); }
+    else this.toast('Could not create a face from that loop', true);
   }
   // Join selected free EDGE(S) into one polyline: endpoint gaps within 2 cm
   // weld shut, and collinear consecutive segments fuse into single edges.
@@ -7058,6 +7143,59 @@ class App {
       }]]);
   }
 
+  // (Phase 3.7) saved section/elevation views: list + activate + delete.
+  viewsDialog() {
+    if (!window.Annotate2) { this.toast('Annotation module not loaded', true); return; }
+    const views = this.model.views || [];
+    const rows = views.map(v => '<tr data-vid="' + v.id + '"><td>' + (v.kind === 'section' ? 'Section' : 'Elevation') + '</td><td>' + String(v.name).replace(/</g, '&lt;') + '</td><td>' + (v.clip ? 'clipped' : '—') + '</td><td><button class="mini-btn vw-open">Open</button> <button class="mini-btn vw-del">✕</button></td></tr>').join('');
+    this.dialog('Sections & Views', '<table class="lvl-table"><thead><tr><th>Kind</th><th>Name</th><th>Clip</th><th></th></tr></thead><tbody>' + (rows || '<tr><td colspan="4" class="dim">No saved views yet — use the Section or Elevation tool</td></tr>') + '</tbody></table>', [['Close', null]]);
+    const body = document.querySelector('.dialog-body');
+    if (body) body.addEventListener('click', ev => {
+      const tr = ev.target.closest('tr[data-vid]');
+      if (!tr) return;
+      const v = views.find(x => x.id === tr.dataset.vid);
+      if (!v) return;
+      if (ev.target.classList.contains('vw-open')) { Annotate2.activateView(this, v); this.closeDialog(); }
+      if (ev.target.classList.contains('vw-del')) {
+        this.run('delete view', m => { m.views = m.views.filter(x => x.id !== v.id); m.touch(); });
+        this.closeDialog(); this.viewsDialog();
+      }
+    });
+  }
+
+  // (Phase 5) analytical model: 1D centerlines derived live from the
+  // registry, rendered as an overlay, exported as nodes+members CSV.
+  toggleAnalytical() {
+    if (!window.Struct2) { this.toast('Structural module not loaded', true); return; }
+    this.showAnalytical = !this.showAnalytical;
+    this.view.setAnalytical(this.showAnalytical ? Struct2.Analytical.derive(this) : null);
+    this.toast(this.showAnalytical ? 'Analytical model ON' : 'Analytical model off');
+  }
+  exportAnalyticalCsv() {
+    if (!window.Struct2) { this.toast('Structural module not loaded', true); return; }
+    const members = Struct2.Analytical.derive(this);
+    if (!members.length) { this.toast('No columns/beams/walls to derive', true); return; }
+    const csv = Struct2.Analytical.toCSV(members);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    a.download = 'analytical-model.csv';
+    a.click();
+    this.toast(`Exported ${members.length} members as analytical-model.csv`);
+  }
+  propertyDialog() {
+    if (!window.Arch2) { this.toast('Architecture module not loaded', true); return; }
+    const ta = '<textarea id="pl-pts" rows="6" style="width:100%;margin:4px 0 8px;padding:6px 8px;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent;color:inherit;font:inherit" placeholder="0, 0&#10;40, 0&#10;40, 30&#10;0, 30"></textarea>';
+    this.dialog('Property Lines',
+      '<div class="ob-lab">Vertices — one per line: E, N (metres, local)</div>' + ta,
+      [['Cancel', null], ['Place', () => {
+        const raw = document.getElementById('pl-pts').value;
+        const pts = raw.split('\n').map(l => l.split(/[,;\s]+/).map(parseFloat)).filter(a => a.length >= 2 && isFinite(a[0]) && isFinite(a[1]));
+        if (pts.length < 3) { this.toast('Need at least 3 vertices', true); return false; }
+        const ent = Arch2.makeProperty(this, pts);
+        this.toast(ent ? `Property line placed — ${ent.params.area} m²` : 'Property failed');
+      }]]);
+  }
+
   _bimParamFields(ent) {
     const p = ent.params || {};
     // FIXED converted elements: the drawn geometry IS the design — no
@@ -7073,7 +7211,11 @@ class App {
       : null);
     let list;
     switch (ent.type) {
-      case 'wall': list = [num('height', 'Height m', 0.05), num('thickness', 'Thickness m', 0.01), loc]; break;
+      case 'wall': list = [num('height', 'Height m', 0.05), num('thickness', 'Thickness m', 0.01), loc,
+        { key: 'layers', label: 'Layers (name:t, …)', kind: 'text',
+          value: String(Array.isArray(p.layers) && p.layers.length
+            ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
+            : '') }]; break;
       case 'column': list = [num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
         num('height', 'Height m', 0.05), rot]; break;
       case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05)]; break;

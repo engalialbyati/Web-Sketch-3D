@@ -689,6 +689,39 @@ class Viewport {
   // the 1 m reference grid follows the ACTIVE BASE LEVEL — the plane being
   // drawn on. Level 0 remains the world ground (terrain veil + shadows).
   setGridLevel(z) { this.grid.position.z = +z || 0; this.invalidate(); }
+  /** Analytical model overlay (Phase 5.1): 1D centerlines of columns/
+   *  beams/braces drawn as thick screen-space lines on the HUD. */
+  setAnalytical(members) {
+    this._analytical = members || null;
+    this.invalidate();
+  }
+  _drawAnalytical(ctx, cam, w, h) {
+    const mem = this._analytical;
+    if (!mem || !mem.length) return;
+    const prj = p0 => {
+      const v = new THREE.Vector3(p0[0], p0[1], p0[2]).project(cam);
+      if (v.z > 1) return null;
+      return { x: (v.x + 1) / 2 * w, y: (-v.y + 1) / 2 * h };
+    };
+    ctx.save();
+    ctx.lineWidth = 2.2;
+    const COLS = { column: '#c0392b', beam: '#8e44ad', brace: '#d35400', wall: '#7f8c8d' };
+    for (const m2 of mem) {
+      const A = prj(m2.a), B = prj(m2.b);
+      if (!A || !B) continue;
+      ctx.strokeStyle = COLS[m2.kind] || '#333';
+      ctx.beginPath();
+      ctx.moveTo(A.x, A.y);
+      ctx.lineTo(B.x, B.y);
+      ctx.stroke();
+      // node dots
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fillRect(A.x - 2, A.y - 2, 4, 4);
+      ctx.fillRect(B.x - 2, B.y - 2, 4, 4);
+    }
+    ctx.restore();
+  }
+
   /** True-north arrow (georeference 1.2): a short arrow at the world origin
    *  pointing along TRUE north — the model's +Y rotated by the project→true
    *  angle. Hidden until an angle is set. */
@@ -1840,6 +1873,66 @@ class Viewport {
           if (lf) line(lf, at, on ? '#e07a00' : '#9a9a9a');
         }
         text(at.x, at.y, a.text || '', on ? '#a35a00' : '#333');
+      } else if (a.kind === 'dimang') {
+        const V = prj(a.V), R1 = prj(a.p1), R2 = prj(a.p2);
+        if (!V || !R1 || !R2) continue;
+        const col = on ? '#e07a00' : '#9a9a9a';
+        line(V, R1, col, true);
+        line(V, R2, col, true);
+        const rr = Math.min(Math.max(Math.hypot(R1.x - V.x, R1.y - V.y), 24), Math.hypot(R2.x - V.x, R2.y - V.y) + 30);
+        let a1 = Math.atan2(R1.y - V.y, R1.x - V.x), a2 = Math.atan2(R2.y - V.y, R2.x - V.x);
+        let dAng = a2 - a1;
+        while (dAng > Math.PI) dAng -= Math.PI * 2;
+        while (dAng < -Math.PI) dAng += Math.PI * 2;
+        ctx.strokeStyle = cMain;
+        ctx.beginPath();
+        ctx.arc(V.x, V.y, rr, a1, a1 + dAng, dAng < 0);
+        ctx.stroke();
+        const am = a1 + dAng / 2;
+        const deg = Math.abs(dAng) * 180 / Math.PI;
+        text(V.x + Math.cos(am) * (rr + 6), V.y + Math.sin(am) * (rr + 6), deg.toFixed(1) + '\u00B0', on ? '#a35a00' : '#333');
+      } else if (a.kind === 'dimrad') {
+        const C = prj(a.c), Rm = prj(a.rim);
+        if (!C || !Rm) continue;
+        line(C, Rm, cMain);
+        arrow(Rm.x, Rm.y, Rm.x - C.x, Rm.y - C.y, cMain);
+        text((C.x + Rm.x) / 2, (C.y + Rm.y) / 2 - 8, 'R ' + (+a.r).toFixed(3), on ? '#a35a00' : '#333');
+      } else if (a.kind === 'cloud' || a.kind === 'region') {
+        const pts = (a.pts || []).map(prj).filter(Boolean);
+        if (pts.length < 3) continue;
+        if (a.kind === 'region') {
+          ctx.fillStyle = 'rgba(47,111,219,0.18)';
+          ctx.beginPath();
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (let i2 = 1; i2 < pts.length; i2++) ctx.lineTo(pts[i2].x, pts[i2].y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.save();
+          ctx.setLineDash([6, 3]);
+          ctx.strokeStyle = on ? '#e07a00' : '#2f6fdb';
+          ctx.stroke();
+          ctx.restore();
+        } else {
+          ctx.strokeStyle = on ? '#e07a00' : '#d23c2e';
+          for (let i2 = 0; i2 < pts.length; i2++) {
+            const q1 = pts[i2], q2 = pts[(i2 + 1) % pts.length];
+            const segL = Math.hypot(q2.x - q1.x, q2.y - q1.y);
+            const n2 = Math.max(2, Math.round(segL / 22));
+            for (let k = 0; k < n2; k++) {
+              const t1 = k / n2, t2 = (k + 1) / n2;
+              const m1 = { x: q1.x + (q2.x - q1.x) * t1, y: q1.y + (q2.y - q1.y) * t1 };
+              const m2 = { x: q1.x + (q2.x - q1.x) * t2, y: q1.y + (q2.y - q1.y) * t2 };
+              const bulge = 0.55;
+              const mx2 = (m1.x + m2.x) / 2 + (m2.y - m1.y) * bulge * 0.5;
+              const my2 = (m1.y + m2.y) / 2 - (m2.x - m1.x) * bulge * 0.5;
+              const r2 = Math.hypot(m2.x - m1.x, m2.y - m1.y) / 2 * 1.25;
+              ctx.beginPath();
+              ctx.moveTo(m1.x, m1.y);
+              ctx.arcTo(mx2, my2, m2.x, m2.y, r2);
+              ctx.stroke();
+            }
+          }
+        }
       } else if (a.kind === 'spot') {
         const at = prj(a.at);
         if (!at) continue;
@@ -1936,6 +2029,18 @@ class Viewport {
       this._fps = Math.round(this._fpsFrames * 1000 / (now - this._fpsLast));
       this._fpsLast = now; this._fpsFrames = 0;
     }
+    // SECTION VIEW (Phase 3.7): the active saved view carries a clip plane —
+    // everything in front of the cut is culled, opening the model like a
+    // section. Toggled by view._activeSection (activateView/clearSection).
+    if (this._activeSection && this._activeSection.clip) {
+      if (!this.renderer.localClippingEnabled) this.renderer.localClippingEnabled = true;
+      if (!this._sectionPlane) this._sectionPlane = new THREE.Plane();
+      const c = this._activeSection.clip;
+      this._sectionPlane.set(new THREE.Vector3(c.n[0], c.n[1], c.n[2]), c.d);
+      this.renderer.clippingPlanes = [this._sectionPlane];
+    } else if (this.renderer.clippingPlanes && this.renderer.clippingPlanes.length) {
+      this.renderer.clippingPlanes = [];
+    }
     this.renderer.render(this.scene, this.activeCamera());
     // HUD
     const ctx = this.hudCtx;
@@ -1981,6 +2086,7 @@ class Viewport {
     // world-anchored drawing entities that re-project every frame (they
     // never enter the B-Rep mesh).
     this._drawAnnotations(ctx, cam, w, h);
+    this._drawAnalytical(ctx, cam, w, h);
     // Performance HUD (View ▸ Performance HUD): the article's diagnosis
     // numbers at a glance — fps, draw calls, triangles
     if (this.perfHud) {

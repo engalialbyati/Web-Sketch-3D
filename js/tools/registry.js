@@ -20,6 +20,11 @@ const TOOLS = {
   // annotations (Phase 3) — dimension/tag/text/spot drawing tools
   dim: Annotate.DimensionTool, tag: Annotate.TagTool,
   text: Annotate.TextTool, spot: Annotate.SpotTool,
+  dimang: Annotate2.AngularDimTool, dimrad: Annotate2.RadialDimTool,
+  cloud: Annotate2.CloudTool, region: Annotate2.RegionTool,
+  section: Annotate2.SectionTool, elevmark: Annotate2.ElevationTool,
+  ramp: Arch2.RampTool, ceiling: Arch2.CeilingTool, sweep: Arch2.SweepTool, curtain: Arch2.CurtainTool,
+  stripfoot: Struct2.StripFootingTool, brace: Struct2.BraceTool, plate: Struct2.PlateTool,
   // tools/bim/*
   draw: BimTools.DrawTool, wall: BimTools.WallTool, floor: BimTools.FloorTool,
   convert: BimTools.ConvertTool,
