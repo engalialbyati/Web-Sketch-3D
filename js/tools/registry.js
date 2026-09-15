@@ -14,6 +14,7 @@ const TOOLS = {
   move: FreeTools.MoveTool, rotate: FreeTools.RotateTool, scale: FreeTools.ScaleTool,
   offset: FreeTools.OffsetTool, paint: FreeTools.PaintTool, eraser: FreeTools.EraserTool,
   trim: FreeTools.TrimTool, mirror: FreeTools.MirrorTool, array: FreeTools.ArrayTool,
+  edgeoffset: EdgeOffset.EdgeOffsetTool,
   revolve: FreeTools.RevolveTool, followme: FreeTools.FollowMeTool,
   tape: FreeTools.TapeMeasureTool, orbit: FreeTools.OrbitTool, pan: FreeTools.PanTool,
   zoom: FreeTools.ZoomTool, resize: FreeTools.ResizeTool, extrude: FreeTools.ExtrudeCurveTool,
