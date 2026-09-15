@@ -231,10 +231,14 @@ const G = {
     const D = G.solve3(M, b);
     if (D && isFinite(D[0] + D[1] + D[2])) {
       const v = G.v(D[0], D[1], D[2]);
-      // miter cap: the exact solve is unbounded as adjacent normals oppose
-      // (a razor crease) — clamp to the averaged normal so sharp corners
-      // keep uniform thickness instead of spiking
-      if (G.len(v) <= Math.abs(t) * 2.5) return v;
+      const cap = Math.abs(t) * 20;
+      const L = G.len(v);
+      if (L <= cap) return v;
+      // razor crease (normals nearly opposing): the exact miter is unbounded.
+      // Clamp ALONG the miter ray — shortening to the averaged normal instead
+      // would pinch the shell until its facets self-intersect (a see-through
+      // notch at the cusp), which is worse than a long-but-sealed corner.
+      return G.mul(v, cap / L);
     }
     // coplanar / degenerate: offset along the average normal
     const s = normals.reduce((acc, n) => G.add(acc, n), G.v());

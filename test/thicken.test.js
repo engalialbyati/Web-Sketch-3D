@@ -112,13 +112,54 @@ module.exports = h => {
     near(G.len(dir), t * Math.SQRT2, 1e-6, 'length t·√2 — exact miter, uniform thickness');
   });
 
-  test('miter cap: a razor crease never spikes beyond 2.5×t', () => {
-    const normals = [G.v(0, 0, 1), G.v(Math.sin(2.96), 0, Math.cos(2.96))]; // ~170° apart
-    const d = G.miterOffset(normals, 0.1);
-    ok(G.len(d) <= 0.1 * 2.5 + 1e-9, `capped at 2.5×t (got ${G.len(d).toFixed(3)})`);
+  test('miter cap: sharp cusps stay EXACT, only razors clamp on the miter ray', () => {
+    // a 160° cusp (scalloped plates): exact miter t/cos(80°) = 5.76·t — must
+    // NOT be shortened to the averaged normal, or the shell pinches into a
+    // self-intersecting notch at the cusp
+    const t = 0.1, a160 = 160 * Math.PI / 180;
+    const d = G.miterOffset([G.v(0, 0, 1), G.v(Math.sin(a160), 0, Math.cos(a160))], t);
+    near(G.len(d), t / Math.cos(a160 / 2), 1e-9, '160° cusp gets the exact miter (5.76·t)');
+    // a razor crease (~179°): unbounded solve clamps at 20·t along the ray
+    const a179 = 179 * Math.PI / 180;
+    const dr = G.miterOffset([G.v(0, 0, 1), G.v(Math.sin(a179), 0, Math.cos(a179))], t);
+    near(G.len(dr), t * 20, 1e-9, 'razor clamps to exactly 20·t');
+    ok(Math.abs(dr.z) > 0.9 * t * 20 * Math.cos(a179 / 2), 'clamp stays on the miter ray (bisector)');
     // coplanar fallback stays exactly t
     const d2 = G.miterOffset([G.v(0, 0, 1), G.v(0, 0, 1)], 0.1);
     near(G.len(d2), 0.1, 1e-9, 'coplanar offset is exactly t');
+  });
+
+  test('shell at a 160° cusp: no pinch, uniform perpendicular thickness', () => {
+    const m = new Model(); // two plates folded 160°, sharing the ridge edge
+    const th = 160 * Math.PI / 180, W = 1, L = 2;
+    const u1 = G.v(-Math.cos(th / 2), 0, Math.sin(th / 2));
+    const u2 = G.v(Math.cos(th / 2), 0, Math.sin(th / 2));
+    const e0 = G.v(0, -L / 2, 0), e1 = G.v(0, L / 2, 0);
+    m.addFaceFromRings([e0, e1, G.add(e1, G.mul(u2, W)), G.add(e0, G.mul(u2, W))], [], { standalone: true });
+    m.addFaceFromRings([G.add(e0, G.mul(u1, W)), G.add(e1, G.mul(u1, W)), e1, e0], [], { standalone: true });
+    const ids = [...m.faces.keys()];
+    const t = 0.15;
+    const data = m.thickenGeometry(ids, t);
+    m.commitThicken(data);
+    // watertight around the cusp
+    const pk = q => Math.round(q.x * 1e5) + ',' + Math.round(q.y * 1e5) + ',' + Math.round(q.z * 1e5);
+    const cnt = new Map();
+    for (const f of m.faces.values())
+      for (const ring of m.rings(f))
+        for (let i = 0; i < ring.length; i++) {
+          const ka = pk(m.vp(ring[i])), kb = pk(m.vp(ring[(i + 1) % ring.length]));
+          const k = ka < kb ? ka + '|' + kb : kb + '|' + ka;
+          cnt.set(k, (cnt.get(k) || 0) + 1);
+        }
+    ok(![...cnt.values()].some(c => c !== 2), `cusp shell is watertight (${[...cnt.values()].filter(c => c !== 2).length} bad edges)`);
+    // the ridge vertex offsets to the exact miter point, not the averaged pinch:
+    // verify the offset ring's ridge point sits exactly t off plate 1's plane
+    const { p, dist } = offsetOf(data, G.v(0, -L / 2, 0));
+    ok(p && dist < 1, 'ridge offset found');
+    const n1 = G.v(Math.sin(th / 2), 0, Math.cos(th / 2)); // plate1 normal (+z-ish)
+    // signed distance from ridge offset point to plate1's plane (plane through 0)
+    const dp = Math.abs(n1.x * p.x + n1.y * p.y + n1.z * p.z);
+    near(dp, t, 1e-6, 'offset ridge sits exactly t off plate 1 (no pinch)');
   });
 
   test('loose and welded shells offset to the SAME positions', () => {
