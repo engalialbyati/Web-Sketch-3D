@@ -251,6 +251,33 @@ class Model {
     this._vhAdd(vid, p, Model.WELD_EPS * 2);
     this.version++; // a move: cached triangulations/AABBs are stale
   }
+  // fuse vertex `gone` onto `keep`: every edge referencing `gone` rewires to
+  // `keep` (same edge ids, so external references stay valid); an edge that
+  // collapses onto itself or duplicates an existing pair is dropped, and
+  // face rings splice `gone` out. Callers move/accept the position first.
+  mergeVertices(keep, gone) {
+    if (keep === gone) return 0;
+    let n = 0;
+    for (const e of [...this.edges.values()]) {
+      let a = e.a, b = e.b, hit = false;
+      if (a === gone) { a = keep; hit = true; }
+      if (b === gone) { b = keep; hit = true; }
+      if (!hit) continue;
+      this._delEdge(e.id);
+      n++;
+      if (a === b) continue; // collapsed to a point
+      if (this.findEdge(a, b)) continue; // duplicate after the fuse — keep the twin
+      this._addEdge({ ...e, a, b });
+    }
+    for (const f of this.faces.values()) for (const ring of this.rings(f)) {
+      const i = ring.indexOf(gone);
+      if (i >= 0) ring.splice(i, 1);
+    }
+    let orphan = true;
+    for (const e of this.edges.values()) if (e.a === gone || e.b === gone) { orphan = false; break; }
+    if (orphan) { this._vhRemove(gone); this.vertices.delete(gone); this.version++; }
+    return n;
+  }
 
   // B-rep invariant #2 — T-junction welding for drawn points: reuse a nearby
   // vertex, and if the point falls on an existing straight edge (strictly

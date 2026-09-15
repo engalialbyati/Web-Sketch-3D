@@ -6085,77 +6085,99 @@ class App {
   // tightest turn, the planar-correct continuation.
   createFaceFromSelectedEdges() {
     const m = this.model, G = window.G;
-    const edges = [...this.sel.edges].map(id => m.edges.get(id)).filter(Boolean);
-    if (edges.length < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
-    const adj = new Map();
-    const link = (v, rec) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(rec); };
-    for (const e of edges) { link(e.a, { e, o: e.b }); link(e.b, { e, o: e.a }); }
-    for (const [, ns] of adj) if (ns.length % 2 !== 0) {
-      this.toast('The selected edges do not form closed loops — every corner needs an even number of selected edges (2 per loop)', true);
-      return;
-    }
-    // decompose the edge set into cycles: each directed edge used once; at a
-    // junction (two loops sharing a corner) continue with the edge that
-    // turns tightest — the same planar rule the room detector walks with
-    const used = new Set();
-    const loops = [];
-    for (const e0 of edges) {
-      if (used.has(e0.id)) continue;
-      used.add(e0.id);
-      let u = e0.a, v = e0.b;
-      const loop = [u, v];
-      let guard = 0;
-      while (v !== e0.a && guard++ <= edges.length + 1) {
-        const outs = (adj.get(v) || []).filter(r => !used.has(r.e.id));
-        if (!outs.length) break;
-        let best = outs[0];
-        if (outs.length > 1) {
-          const vp = m.vp(v), up = m.vp(u);
-          const rev = Math.atan2(up.y - vp.y, up.x - vp.x);
-          let bestC = Infinity;
-          for (const r of outs) {
-            const q = m.vp(r.o);
-            const a = Math.atan2(q.y - vp.y, q.x - vp.x);
-            let d = rev - a;
-            while (d <= 1e-9) d += Math.PI * 2;
-            while (d >= Math.PI * 2) d -= Math.PI * 2;
-            if (d < bestC) { bestC = d; best = r; }
+    if (this.sel.edges.size < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
+    let made = 0, skipped = 0, err = null;
+    const ok = this.run('create faces', mm => {
+      // NEAR-MISS HEAL: a closing click that landed just off its snap point
+      // leaves two free ends millimeters apart — the loop LOOKS shut but the
+      // audit refuses it. Fuse free ends of the selection under 1 cm (the
+      // same job Join does, silently, at creation time). Note a T-junction
+      // split could never help here: splitting adds 2 to one corner's
+      // degree, so odd stays odd — parity is only fixed by fusing ends.
+      {
+        const deg = new Map();
+        for (const id of this.sel.edges) {
+          const e = mm.edges.get(id); if (!e) continue;
+          deg.set(e.a, (deg.get(e.a) || 0) + 1); deg.set(e.b, (deg.get(e.b) || 0) + 1);
+        }
+        const free = [...deg.entries()].filter(([, d]) => d === 1).map(([v]) => v);
+        for (let i = 0; i < free.length; i++) {
+          for (let j = i + 1; j < free.length; j++) {
+            if (mm.vp(free[i]) == null || mm.vp(free[j]) == null) continue;
+            if (G.dist(mm.vp(free[i]), mm.vp(free[j])) >= 0.01) continue;
+            mm.mergeVertices(free[i], free[j]); // edges bend ≤1 cm to fuse
           }
         }
-        used.add(best.e.id);
-        loop.push(best.o);
-        u = v; v = best.o;
       }
-      if (v === e0.a) loop.pop(); // drop the closing repeat
-      if (v === e0.a && loop.length >= 3 && new Set(loop).size === loop.length) loops.push(loop);
-    }
-    if (!loops.length) {
-      this.toast('The selected edges do not form closed loops', true);
-      return;
-    }
-    // Consistent orientation: the walk follows whatever direction each edge
-    // was DRAWN in, so sibling rings can come out with opposite windings —
-    // and a typed Push/Pull distance travels along the face NORMAL, which
-    // sent part of a multi-ring extrusion down into the ground. Orient every
-    // loop the same way: the normal's dominant axis points positive
-    // (ground-plane rings always face +Z, so a typed thickness goes UP).
-    for (const loop of loops) {
-      const n = G.loopNormal(m.pts(loop));
-      if (G.isZero(n)) continue;
-      const ax = Math.abs(n.x) >= Math.abs(n.y)
-        ? (Math.abs(n.x) >= Math.abs(n.z) ? 'x' : 'z')
-        : (Math.abs(n.y) >= Math.abs(n.z) ? 'y' : 'z');
-      if (n[ax] < 0) loop.reverse();
-    }
-    // one face per loop; non-planar/degenerate rings are skipped, not fatal
-    let made = 0, skipped = 0;
-    this.run('create faces', mm => {
+      const edges = [...this.sel.edges].map(id => mm.edges.get(id)).filter(Boolean);
+      if (edges.length < 3) { err = 'Select at least 3 edges forming a closed loop'; return true; }
+      const adj = new Map();
+      const link = (v, rec) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(rec); };
+      for (const e of edges) { link(e.a, { e, o: e.b }); link(e.b, { e, o: e.a }); }
+      for (const [, ns] of adj) if (ns.length % 2 !== 0) {
+        err = 'The selected edges do not form closed loops — every corner needs an even number of selected edges (2 per loop). Check the selection for a gap or a dangling line';
+        return true;
+      }
+      // decompose the edge set into cycles: each directed edge used once; at a
+      // junction (two loops sharing a corner) continue with the edge that
+      // turns tightest — the same planar rule the room detector walks with
+      const used = new Set();
+      const loops = [];
+      for (const e0 of edges) {
+        if (used.has(e0.id)) continue;
+        used.add(e0.id);
+        let u = e0.a, v = e0.b;
+        const loop = [u, v];
+        let guard = 0;
+        while (v !== e0.a && guard++ <= edges.length + 1) {
+          const outs = (adj.get(v) || []).filter(r => !used.has(r.e.id));
+          if (!outs.length) break;
+          let best = outs[0];
+          if (outs.length > 1) {
+            const vp = mm.vp(v), up = mm.vp(u);
+            const rev = Math.atan2(up.y - vp.y, up.x - vp.x);
+            let bestC = Infinity;
+            for (const r of outs) {
+              const q = mm.vp(r.o);
+              const a = Math.atan2(q.y - vp.y, q.x - vp.x);
+              let d = rev - a;
+              while (d <= 1e-9) d += Math.PI * 2;
+              while (d >= Math.PI * 2) d -= Math.PI * 2;
+              if (d < bestC) { bestC = d; best = r; }
+            }
+          }
+          used.add(best.e.id);
+          loop.push(best.o);
+          u = v; v = best.o;
+        }
+        if (v === e0.a) loop.pop(); // drop the closing repeat
+        if (v === e0.a && loop.length >= 3 && new Set(loop).size === loop.length) loops.push(loop);
+      }
+      if (!loops.length) { err = 'The selected edges do not form closed loops'; return true; }
+      // Consistent orientation: the walk follows whatever direction each edge
+      // was DRAWN in, so sibling rings can come out with opposite windings —
+      // and a typed Push/Pull distance travels along the face NORMAL, which
+      // sent part of a multi-ring extrusion down into the ground. Orient every
+      // loop the same way: the normal's dominant axis points positive
+      // (ground-plane rings always face +Z, so a typed thickness goes UP).
+      for (const loop of loops) {
+        const n = G.loopNormal(mm.pts(loop));
+        if (G.isZero(n)) continue;
+        const ax = Math.abs(n.x) >= Math.abs(n.y)
+          ? (Math.abs(n.x) >= Math.abs(n.z) ? 'x' : 'z')
+          : (Math.abs(n.y) >= Math.abs(n.z) ? 'y' : 'z');
+        if (n[ax] < 0) loop.reverse();
+      }
+      // one face per loop; non-planar/degenerate rings are skipped, not fatal
       for (const loop of loops) {
         if (G.isZero(G.loopNormal(mm.pts(loop)))) { skipped++; continue; }
         if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))))) made++;
         else skipped++;
       }
+      return true;
     });
+    if (!ok) return;
+    if (err) { this.toast(err, true); return; }
     if (made) {
       this.clearSelection();
       this.toast(`Created ${made} face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — Push/Pull to extrude, or Convert to make element${made === 1 ? '' : 's'}`);

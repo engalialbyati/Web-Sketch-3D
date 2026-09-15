@@ -600,12 +600,12 @@ class SelectTool extends Tool {
 // =========================================================== line
 class LineTool extends Tool {
   static id = 'line';
-  activate() { this.anchor = null; this.previewEnd = null; this.plane = null; this._plid = null; }
-  cleanup() { super.cleanup(); this.anchor = null; this.previewEnd = null; this.plane = null; this._plid = null; }
+  activate() { this.anchor = null; this.previewEnd = null; this.plane = null; }
+  cleanup() { super.cleanup(); this.anchor = null; this.previewEnd = null; this.plane = null; }
   get hint() {
     return this.anchor
-      ? 'Polyline: click the next point (chains until Esc). Type a length, Tab for the angle, Enter draws. Arrow keys (→ X, ← Y, ↑ Z) lock axes — draw in 3D by snapping endpoint dots.'
-      : 'Polyline/Line: click the first point — click an existing endpoint (green dot) to continue from it or draw in 3D. Chains click to click; Esc ends. Closing a loop creates a face.';
+      ? 'Line: click the next point (keeps drawing from the last point until Esc). Type a length, Tab for the angle, Enter draws. Arrow keys (→ X, ← Y, ↑ Z) lock axes — draw in 3D by snapping endpoint dots.'
+      : 'Line: click the first point — click an existing endpoint (green dot) to continue from it or draw in 3D. Keeps drawing from the last point; Esc ends. Every segment is its own line.';
   }
   _point(ev) {
     const app = this.app;
@@ -734,16 +734,10 @@ class LineTool extends Tool {
     const app = this.app;
     if (app.dynHide) app.dynHide();
     const e = app.run('line', m => m.addEdge(this.anchor, p));
-    // POLYLINE ENTITY (AutoCAD semantics): all segments of one drawing
-    // session share a curveId chain — click-selecting any segment grabs
-    // the whole polyline, extrude/convert/offset chain it end to end
-    if (e && !e.curveId) {
-      if (!this._plid) {
-        this._plid = Date.now();
-        app.model.curves.set(this._plid, { type: 'polyline' });
-      }
-      e.curveId = this._plid;
-    }
+    // LINE ENTITY (AutoCAD LINE semantics): every click-to-click segment is
+    // its OWN line — drawing continues from the last endpoint, but selecting
+    // one segment never grabs its stroke siblings (join them explicitly with
+    // the Join tool when a chain is wanted)
     this.anchor = e ? p : null;
     this.status();
   }
