@@ -900,8 +900,10 @@ class RectTool extends Tool {
     const loop = this._build(a, b);
     if (G.loopArea(loop) < 1e-9) { app.toast('Rectangle is flat'); return; }
     // WIRES ONLY: a rectangle is four drawn edges; the face is created
-    // explicitly (select the edges → right-click → Create Face)
-    app.run('rectangle', m => m.addPolyline(loop));
+    // explicitly (select the edges → right-click → Create Face). The loop is
+    // closed with a repeated first point — an open polyline would commit
+    // only three sides
+    app.run('rectangle', m => m.addPolyline(loop.concat([loop[0]])));
     this.activate();
     this.status();
   }
