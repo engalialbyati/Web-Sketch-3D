@@ -3015,14 +3015,14 @@ class Model {
   // to the first (a full revolution); caps close the profile at the ends.
   // Degenerate quads (poles, repeated points) are skipped silently — the
   // caller cannot always avoid them (a revolve apex).
-  loftRings(rings, { closed = false, capStart = true, capEnd = true, color = null, ringClosed = true } = {}) {
+  loftRings(rings, { closed = false, capStart = true, capEnd = true, color = null, ringClosed = true, loose = false } = {}) {
     if (!rings || rings.length < 2) return [];
     const n = rings[0].length;
     if (rings.some(r => r.length !== n)) return [];
     const out = [];
     const quad = (a, b, c, d) => {
       if (G.loopArea([a, b, c, d]) < 1e-10) return;
-      const f = this.addFaceFromRings([a, b, c, d]);
+      const f = this.addFaceFromRings([a, b, c, d], [], loose ? { standalone: true } : undefined);
       if (f) { if (color != null) f.color = color; out.push(f.id); }
     };
     const last = closed ? rings.length : rings.length - 1;
@@ -3034,8 +3034,64 @@ class Model {
         quad(G.clone(R0[j]), G.clone(R0[j2]), G.clone(R1[j2]), G.clone(R1[j]));
       }
     }
-    if (capStart) { const f = this.addFaceFromRings(rings[0].map(G.clone)); if (f) out.push(f.id); }
-    if (capEnd) { const f = this.addFaceFromRings(rings[rings.length - 1].map(G.clone)); if (f) out.push(f.id); }
+    const cap = (ring) => {
+      const f = this.addFaceFromRings(ring.map(G.clone), [], loose ? { standalone: true } : undefined);
+      if (f) out.push(f.id);
+    };
+    if (capStart) cap(rings[0]);
+    if (capEnd) cap(rings[rings.length - 1]);
+    return out;
+  }
+
+  // ------------------------------------------------------------ rebar
+  /** A reinforcement bar: a solid tube of `diameter` swept along a polyline
+   *  centerline. One ring per path vertex (mitered by the bisector tangent,
+   *  parallel-transported so planar paths never twist), lofted into LOOSE
+   *  standalone faces — rebar never welds into the host B-Rep, so editing or
+   *  deleting concrete leaves bars untouched. Faces carry userData.rebar
+   *  {shape, diameter, length, ...meta} for the future schedules. */
+  addRebarPath(pts, diameter, { color = null, ringSegs = 8, meta = null } = {}) {
+    const P = [];
+    for (const q of pts) {
+      const c = G.clone(q);
+      if (!P.length || G.dist(P[P.length - 1], c) > 1e-6) P.push(c);
+    }
+    if (P.length < 2 || !(diameter > 1e-6)) return [];
+    const r = diameter / 2;
+    const dirs = P.map((p, i) => {
+      const d0 = i > 0 ? G.sub(P[i], P[i - 1]) : null;
+      const d1 = i < P.length - 1 ? G.sub(P[i + 1], p) : null;
+      let d = d0 && d1 ? G.add(G.norm(d0), G.norm(d1)) : (d0 || d1);
+      if (G.len(d) < 1e-9) d = d0 || d1; // 180° fold-back: keep the segment
+      return G.norm(G.clone(d));
+    });
+    const anyPerp = t => (Math.abs(t.z) < 0.9
+      ? G.norm(G.cross(G.v(0, 0, 1), t))
+      : G.norm(G.cross(G.v(1, 0, 0), t)));
+    let b1 = null;
+    const rings = P.map((p, i) => {
+      const t = dirs[i];
+      if (!b1) b1 = anyPerp(t);
+      else {
+        b1 = G.sub(b1, G.mul(t, G.dot(b1, t))); // transport: re-project ⟂ t
+        if (G.len(b1) < 1e-9) b1 = anyPerp(t); else b1 = G.norm(b1);
+      }
+      const b2 = G.norm(G.cross(t, b1));
+      const ring = [];
+      for (let j = 0; j < ringSegs; j++) {
+        const a = (j / ringSegs) * Math.PI * 2;
+        ring.push(G.add(p, G.add(G.mul(b1, Math.cos(a) * r), G.mul(b2, Math.sin(a) * r))));
+      }
+      return ring;
+    });
+    const out = this.loftRings(rings, { closed: false, capStart: true, capEnd: true, color, loose: true });
+    let length = 0;
+    for (let i = 1; i < P.length; i++) length += G.dist(P[i - 1], P[i]);
+    for (const id of out) {
+      const f = this.faces.get(id);
+      if (!f) continue;
+      f.userData = { ...(f.userData || {}), rebar: { ...(meta || {}), diameter, length: +length.toFixed(6) } };
+    }
     return out;
   }
 

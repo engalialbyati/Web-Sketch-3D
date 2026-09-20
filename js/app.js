@@ -102,6 +102,9 @@ const FEATURES = [
 const ICONS = {
   select: '<svg viewBox="0 0 24 24"><path d="M6 3l7 16 2.2-6.4L21 10.4z" fill="currentColor" stroke="none"/></svg>',
   edgeselect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 5h16M4 5v14M20 5v14M4 19h16" stroke-dasharray="2.5 2.5"/><path d="M8 9l8 6" stroke-width="2.2"/></svg>',
+  'rebar-straight': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 18L20 6"/><path d="M7.5 15.9l1.5 1.3M10.6 13.7l1.5 1.3M13.7 11.5l1.5 1.3" stroke-width="1.1"/></svg>',
+  'rebar-lshape': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 4v11a2 2 0 0 0 2 2h10"/><path d="M6 7.5l1.5.6M6 11l1.5.6M9.5 17l.6-1.5M13 17l.6-1.5" stroke-width="1.1"/></svg>',
+  'rebar-stirrup': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 4v10a1.5 1.5 0 0 0 1.5 1.5H20"/><path d="M9 4l3.2-1.4M20 15.5l1.4-3.2" stroke-width="1.1"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
   polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
   rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/></svg>',
@@ -249,11 +252,15 @@ const TOOL_DEFS = {
     { id: 'orbit', label: 'Orbit', key: 'O' },
     { id: 'pan', label: 'Pan', key: 'H' },
   ],
-  // Structural design ribbon — calculators over the same model. Empty for
-  // now: the owner walks the contents in step by step (column design first)
+  // Structural design ribbon — calculators over the same model. Rebar
+  // detailing tools live here and surface on the Detailing ribbon tab.
   design: [
     { id: 'select', label: 'Select', key: 'Space' },
     { id: 'edgeselect', label: 'Edge Select', key: 'K' },
+    'sep',
+    { id: 'rebar-straight', label: 'Straight Rebar', key: '' },
+    { id: 'rebar-lshape', label: 'L-Shape Rebar', key: '' },
+    { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
   ],
 };
 
@@ -338,6 +345,10 @@ const RIBBON_TABS = {
     { title: 'Views', tools: ['section', 'elevmark'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+  ] },
+  detailing: { label: 'Detailing', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
+    { title: 'Rebar', tools: ['rebar-straight', 'rebar-lshape', 'rebar-stirrup'] },
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
