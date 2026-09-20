@@ -142,6 +142,23 @@ module.exports = h => {
       near(Math.hypot(bar.pts[0].x - 0.15, bar.pts[0].y - 0.15), rMain, 1e-6, 'main bar on the circle');
   });
 
+  test('corners never lighter than inners: a bigger set diameter sizes the corners up', () => {
+    const m = column();
+    const p = { type: 'multiple', tie: baseTie, main: baseMain, xSets: [[1, 0.02]], ySets: [] };
+    const pv = CR.previewCage(m, topFace(m), p);
+    const dia20 = pv.paths.filter(q => q.dia === 0.02 && q.pts.length === 2);
+    // 4 corners + 1 set x 2 rows = 6 bars at 20 mm (corners follow the max)
+    eq(dia20.length, 6, `all longitudes at the max diameter (${dia20.length})`);
+    ok(!pv.paths.some(q => q.dia === 0.016 && q.pts.length === 2), 'no thinner 16 mm corners left');
+    // corner line moved out to fit the fatter bar, and the tie mandrel
+    // nests on it: inset + mandrel == corner axis (arc center == bar axis)
+    const inset = 0.04 + 0.004;
+    const uL = inset + 0.004 + 0.01;
+    const xs = [...new Set(dia20.map(b => +b.pts[0].x.toFixed(4)))].sort((a, b2) => a - b2);
+    near(xs[0], uL, 1e-6, 'corner line at cover + tie dia + corner r');
+    near(uL, inset + (0.004 + 0.01), 1e-9, 'tie bend arc center coincides with the corner bar axis');
+  });
+
   test('preview sink records paths without touching the model', () => {
     const m = column();
     const before = m.faces.size;

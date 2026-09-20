@@ -116,8 +116,12 @@
     }
 
     // ---------------------------------------------------------------- ties
+    // the tie bends AROUND the corner bar: with the mandrel radius set to
+    // tieR + cornerR the bend's arc center coincides with the corner bar
+    // axis, so the tie wraps the bar cleanly (FreeCAD's default relation)
+    const cornerDiaForTie = Math.max(p.main.dia, ...(p.xSets || []).map(([, d]) => d), ...(p.ySets || []).map(([, d]) => d), 0);
     const tieRounding = p.tie.rounding != null && p.tie.rounding > 0
-      ? p.tie.rounding : (p.tie.dia / 2 + p.main.dia / 2) / p.tie.dia;
+      ? p.tie.rounding : (p.tie.dia / 2 + cornerDiaForTie / 2) / p.tie.dia;
     const tieDist = window.Rebar.distribute(fr, { mode: p.tie.mode, value: p.tie.value, front: p.tie.front, dia: p.tie.dia });
     const tiePaths = [];
     if (p.type === 'twoties') {
@@ -137,7 +141,12 @@
       }
 
     // ----------------------------------------------------------- main bars
-    const r = p.main.dia / 2;
+    // corner bars are never lighter than the inner bars: their size is the
+    // largest longitudinal diameter in the cage (FreeCAD keeps one main
+    // diameter; mixed set strings could otherwise out-size the corners)
+    const setDias = [...(p.xSets || []), ...(p.ySets || [])].map(([, d]) => d);
+    const cornerDia = Math.max(p.main.dia, ...setDias, 0);
+    const r = cornerDia / 2;
     const uL = fr.u0 + p.tie.l + p.tie.dia + r;
     const uR = fr.u1 - p.tie.r - p.tie.dia - r;
     const vB = fr.v0 + p.tie.b + p.tie.dia + r;
@@ -147,7 +156,7 @@
     const rows = p.type === 'twoties'
       ? [...corners, [(uL + uR) / 2, vB], [(uL + uR) / 2, vT]] : corners;
     for (const [a, b] of rows) {
-      verticalBar(add, fr, at, a, b, zA, zB, p.main.dia, p.main);
+      verticalBar(add, fr, at, a, b, zA, zB, cornerDia, p.main);
       bars++;
     }
 
@@ -159,12 +168,12 @@
         if (!N) return;
         const sumW = sets.reduce((s, [n, d]) => s + n * d, 0);
         const lo = axis === 'u' ? uL : vB, hi = axis === 'u' ? uR : vT;
-        const span = hi - lo - p.main.dia - sumW;
+        const span = hi - lo - cornerDia - sumW;
         const s = span / (N + 1);
         if (s < 0) return { error: `too many ${axis}-dir bars for the section` };
         const rowsAt = axis === 'u' ? [[null, vB], [null, vT]] : [[uL, null], [uR, null]];
         for (const [rowA, rowB] of rowsAt) {
-          let cursor = lo + p.main.dia / 2; // surface of the corner bar line
+          let cursor = lo + cornerDia / 2; // surface of the corner bar line
           for (const [n, d] of sets) {
             for (let i = 0; i < n; i++) {
               cursor += s + d / 2;

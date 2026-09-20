@@ -3050,7 +3050,7 @@ class Model {
    *  standalone faces — rebar never welds into the host B-Rep, so editing or
    *  deleting concrete leaves bars untouched. Faces carry userData.rebar
    *  {shape, diameter, length, ...meta} for the future schedules. */
-  addRebarPath(pts, diameter, { color = null, ringSegs = 8, meta = null } = {}) {
+  addRebarPath(pts, diameter, { color = null, ringSegs = 12, meta = null } = {}) {
     const P = [];
     for (const q of pts) {
       const c = G.clone(q);
