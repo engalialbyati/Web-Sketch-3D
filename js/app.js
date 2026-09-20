@@ -106,6 +106,7 @@ const ICONS = {
   'rebar-lshape': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 4v11a2 2 0 0 0 2 2h10"/><path d="M6 7.5l1.5.6M6 11l1.5.6M9.5 17l.6-1.5M13 17l.6-1.5" stroke-width="1.1"/></svg>',
   'rebar-stirrup': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 4v10a1.5 1.5 0 0 0 1.5 1.5H20"/><path d="M9 4l3.2-1.4M20 15.5l1.4-3.2" stroke-width="1.1"/></svg>',
   'rebar-column': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M8 7h8M8 11h8M8 15h8M8 19h8" stroke-width="1.1"/><path d="M6 3l-2 2M18 3l2 2M6 21l-2-2M18 21l2-2" stroke-width="1.1"/></svg>',
+  'rebar-element': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="6" cy="4" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="18" cy="4" r="1.4"/><circle cx="6" cy="10" r="1.4"/><circle cx="18" cy="10" r="1.4"/><circle cx="6" cy="16" r="1.4"/><circle cx="12" cy="16" r="1.4"/><circle cx="18" cy="16" r="1.4"/><path d="M6 4v16M18 4v16" opacity=".6"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
   polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
   rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/></svg>',
@@ -263,6 +264,7 @@ const TOOL_DEFS = {
     { id: 'rebar-lshape', label: 'L-Shape Rebar', key: '' },
     { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
     { id: 'rebar-column', label: 'Column Reinforcement', key: '' },
+    { id: 'rebar-element', label: 'Element Reinforcement', key: '' },
   ],
 };
 
@@ -350,7 +352,7 @@ const RIBBON_TABS = {
   ] },
   detailing: { label: 'Detailing', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Rebar', tools: ['rebar-column', 'rebar-straight', 'rebar-lshape', 'rebar-stirrup'] },
+    { title: 'Rebar', tools: ['rebar-element', 'rebar-column', 'rebar-straight', 'rebar-lshape', 'rebar-stirrup'] },
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
