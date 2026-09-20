@@ -3091,6 +3091,14 @@ class Model {
       const f = this.faces.get(id);
       if (!f) continue;
       f.userData = { ...(f.userData || {}), rebar: { ...(meta || {}), diameter, length: +length.toFixed(6) } };
+      // edges carry the tag too: bulk selections (Ctrl+A) must not silently
+      // grab rebar hidden inside concrete — deleting "the element" would
+      // take the invisible cage with it
+      for (const ring of this.rings(f))
+        for (let i = 0; i < ring.length; i++) {
+          const e = this.findEdge(ring[i], ring[(i + 1) % ring.length]);
+          if (e && !e.userData) e.userData = { rebar: true };
+        }
     }
     return out;
   }

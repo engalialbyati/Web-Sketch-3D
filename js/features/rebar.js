@@ -321,10 +321,13 @@
          <p class="dim">Covers are measured to the bar surface. Bars are independent solids — editing the host never touches them.</p>`,
         [['Cancel', null], ['Create', () => {
           const p = this.readParams();
-          const res = app.run(`rebar ${shape}`, m => buildRebars(m, this.fid, shape, p));
+          const res = app.run(`rebar ${shape}`, m => {
+            const r = buildRebars(m, this.fid, shape, p);
+            if (r && r.ids.length) m.createGroup({ faces: new Set(r.ids), edges: new Set() }, 'Rebar · ' + shape);
+            return r;
+          });
           app.view.clearPreview();
           if (!res || !res.ids.length) { app.toast('Could not build the rebar — check the covers', true); return; }
-          try { app.model.createGroup({ faces: new Set(res.ids), edges: new Set() }, 'Rebar · ' + shape); } catch (e) { }
           app.toast(`${res.count} × ${shape === 'stirrup' ? 'stirrup' : 'bar'} created (⌀${fmt(p.dia)} mm, @ ${(res.spacing * 1000).toFixed(0)} mm)`);
           this.fid = null;
           this.status();
