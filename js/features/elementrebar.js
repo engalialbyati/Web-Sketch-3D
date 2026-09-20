@@ -39,6 +39,36 @@
     return Math.max(1, Math.ceil((span - dia) / Math.max(value, 1e-6)) + 1);
   }
 
+  /** ACI 318 special seismic tie layout along a span (positions from the
+   *  start support face): first tie at `first` (2 in / 50 mm), confinement
+   *  zones of 2h at each end spaced sc = min(d/4, 125 mm), the central
+   *  portion at sm = d/2. Short spans whose zones overlap run at sc
+   *  throughout. Returns sorted, deduped positions. */
+  function seismicTiePositions(span, h, d, first = 0.05) {
+    const sc = Math.max(0.02, Math.min(d / 4, 0.125));
+    const sm = Math.max(sc, d / 2);
+    const zone = 2 * Math.max(0.05, h);
+    const out = new Set();
+    const add = x => {
+      if (x < first - 1e-9 || x > span - first + 1e-9) return;
+      out.add(Math.round(x * 1e6) / 1e6);
+    };
+    // left confinement zone: first tie at `first`, stepping <= sc up to 2h
+    for (let x = first; x <= Math.min(zone, span - first) + 1e-9; x += sc) add(x);
+    // right confinement zone, mirrored off the far support face
+    for (let x = span - first; x >= Math.max(span - zone, first) - 1e-9; x -= sc) add(x);
+    // central portion at <= d/2 between the innermost zone ties
+    const all = [...out].sort((a, b) => a - b);
+    const rightStart = Math.min(...all.filter(v => v >= span - zone - 1e-9));
+    const leftEnd = Math.max(...all.filter(v => v <= zone + 1e-9));
+    const mid = rightStart - leftEnd;
+    if (mid > 1e-9) {
+      const n = Math.ceil(mid / sm - 1e-9); // gaps, each <= sm
+      for (let i = 1; i < n; i++) add(leftEnd + mid * i / n);
+    }
+    return [...out].sort((a, b) => a - b);
+  }
+
   /** Inside intervals of the scanline y = fixed across regions
    *  [{outer, holes}] (even-odd pairing of every edge crossing). */
   function clipScanline(regions, fixed, minLen) {
@@ -161,10 +191,20 @@
       l: lCov, r: rCov, t: q.side, b: q.side, dia: tie,
       bentAngle: q.bentAngle || 135, bentFactor: q.bentFactor || 6, rounding,
     });
-    const d = window.Rebar.distribute(fr, { mode: q.mode, value: q.value, front: q.end, dia: tie });
-    for (let i = 0; i < d.count; i++) {
-      add(path.map(pt => G.sub(pt, G.mul(fr.n, d.off + i * d.step))), tie,
-        { shape: 'stirrup', count: d.count, spacing: d.spacing });
+    // tie positions along the span: ACI 318 special seismic shear when
+    // armed (2h confinement zones at min(d/4, 125 mm), first tie 50 mm off
+    // the support, mid-span at d/2), else uniform spacing/amount
+    const hSec = Math.abs(fr.v1 - fr.v0);
+    const dEff = hSec - (q.bot + tie + q.botDia / 2); // to the tension row
+    const positions = q.seismic
+      ? seismicTiePositions(fr.depth, hSec, dEff, (q.first || 0.05) + tie / 2) // cover to the tie SURFACE
+      : (() => {
+        const d = window.Rebar.distribute(fr, { mode: q.mode, value: q.value, front: q.end, dia: tie });
+        return Array.from({ length: d.count }, (_, i) => d.off + i * d.step);
+      })();
+    for (const t of positions) {
+      add(path.map(pt => G.sub(pt, G.mul(fr.n, t))), tie,
+        { shape: 'stirrup', count: positions.length, spacing: q.seismic ? 'zones' : undefined });
       ties++;
     }
     // longitudinal rows: straight bars the clear span long
@@ -455,6 +495,8 @@
             <label class="chk"><input type="radio" name="er-tie" value="spacing" checked> Spacing</label>
             <label class="chk"><input type="radio" name="er-tie" value="amount"> Amount</label>
             <input id="eb-tval" type="number" step="0.01" value="0.15" style="width:70px"> m</div>
+          <div class="form-row"><label>Seismic Shear (ACI 318)</label>
+            <label class="chk"><input type="checkbox" id="eb-seis" checked> first 50 mm, 2h zones @ min(d/4, 125 mm), mid @ d/2</label></div>
           <div class="form-row"><label>Top Bars</label>
             <input id="eb-topn" type="number" step="1" min="1" value="2" style="width:50px"> ×
             <input id="eb-topd" type="number" step="0.002" value="0.014" style="width:70px"> m dia</div>
@@ -575,6 +617,8 @@
         bentFactor: v('eb-bf') || 6,
         mode: (document.querySelector('input[name="er-tie"]:checked') || {}).value || 'spacing',
         value: v('eb-tval'),
+        seismic: !!(document.getElementById('eb-seis') || {}).checked,
+        first: 0.05,
         topCount: Math.max(1, Math.round(v('eb-topn'))), topDia: v('eb-topd'),
         botCount: Math.max(1, Math.round(v('eb-botn'))), botDia: v('eb-botd'),
         top: v('eb-top'), bot: v('eb-bot'),
@@ -603,5 +647,5 @@
     }
   }
 
-  window.ElementRebar = { ElementRebarTool, buildElementRebar, previewElementRebar, TYPE_OF };
+  window.ElementRebar = { ElementRebarTool, buildElementRebar, previewElementRebar, seismicTiePositions, TYPE_OF };
 })();

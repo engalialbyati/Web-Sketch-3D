@@ -93,6 +93,71 @@ module.exports = h => {
     }
   });
 
+  test('seismic tie layout: ACI 318 zones (first 50mm, 2h @ min(d/4,125), mid @ d/2)', () => {
+    const SP = ER.seismicTiePositions;
+    // 4 m span, h = 0.5, d = 0.454: sc = min(0.1135, 0.125) = 0.1135, sm = 0.227
+    const span = 4, h = 0.5, dEff = 0.454;
+    const pos = SP(span, h, dEff);
+    ok(pos.length > 10, `${pos.length} ties`);
+    near(pos[0], 0.05, 1e-9, 'first tie 50 mm off the support face');
+    near(pos[pos.length - 1], span - 0.05, 1e-6, 'mirror: last tie 50 mm off the far face');
+    const sc = Math.min(dEff / 4, 0.125), zone = 2 * h, sm = dEff / 2;
+    // every gap with BOTH ends inside a confinement zone <= sc; a gap
+    // straddling the zone boundary is the first middle tie - it answers to
+    // d/2 like the rest of the central portion
+    for (let i = 1; i < pos.length; i++) {
+      const bothInZone = pos[i] <= zone + 1e-9 || pos[i - 1] >= span - zone - 1e-9;
+      if (bothInZone) ok(pos[i] - pos[i - 1] <= sc + 2e-4,
+        `zone gap ${((pos[i] - pos[i - 1]) * 1000).toFixed(1)} mm <= sc`);
+    }
+    // every central gap <= d/2 (+ rounding)
+    for (let i = 1; i < pos.length; i++) {
+      if (pos[i - 1] >= zone - 1e-9 && pos[i] <= span - zone + 1e-9)
+        ok(pos[i] - pos[i - 1] <= sm + 2e-4,
+          `mid gap ${((pos[i] - pos[i - 1]) * 1000).toFixed(1)} mm <= d/2`);
+    }
+    // zones are DENSER than the middle: min zone gap < min mid gap
+    const zoneGaps = [], midGaps = [];
+    for (let i = 1; i < pos.length; i++) {
+      if (pos[i - 1] < zone || pos[i] > span - zone) zoneGaps.push(pos[i] - pos[i - 1]);
+      else if (pos[i - 1] >= zone && pos[i] <= span - zone) midGaps.push(pos[i] - pos[i - 1]);
+    }
+    ok(Math.min(...zoneGaps) < Math.min(...midGaps) - 1e-6, 'confinement denser than mid-span');
+    // short beam: zones (2 x 2h = 2 m) cover the 1.6 m span -> all gaps <= sc
+    const short = SP(1.6, 0.5, 0.454);
+    for (let i = 1; i < short.length; i++)
+      ok(short[i] - short[i - 1] <= sc + 2e-4, 'short span: zone spacing throughout');
+    near(short[0], 0.05, 1e-9, 'short span first tie still 50 mm');
+  });
+
+  test('beam: seismic mode places ties on the ACI layout (element build)', () => {
+    const { m, ent } = beamWorld();
+    const p = beamParams();
+    p.beam.seismic = true; p.beam.first = 0.05;
+    const pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    ok(!pv.error, pv.error || 'no error');
+    const ties = pv.paths.filter(q => q.dia === 0.008 && q.pts.length > 2);
+    const xs = ties.map(q => q.pts.reduce((s, r) => s + r.x, 0) / q.pts.length).sort((a, b) => a - b);
+    near(xs[0], 0.05 + 0.004, 2e-3, 'first tie at 50 mm + tie r from the end');
+    near(xs[xs.length - 1], 4 - 0.054, 2e-3, 'last tie mirrored');
+    const dEff = 0.5 - (0.03 + 0.008 + 0.008); // h - (cover + tie + r)
+    const sc = Math.min(dEff / 4, 0.125);
+    let worstZone = 0;
+    for (let i = 1; i < xs.length; i++) {
+      // both ends of the gap inside a confinement zone (2h = 1 m here);
+      // a boundary-straddling gap is the first mid-span tie (d/2 governs)
+      const bothInZone = xs[i] <= 1.0 + 1e-9 || xs[i - 1] >= 3.0 - 1e-9;
+      if (bothInZone) worstZone = Math.max(worstZone, xs[i] - xs[i - 1]);
+    }
+    ok(worstZone <= sc + 3e-3, `worst confinement gap ${worstZone.toFixed(4)} <= ${sc.toFixed(4)}`);
+    const dHalf = dEff / 2;
+    let worstMid = 0;
+    for (let i = 1; i < xs.length; i++)
+      if (xs[i - 1] >= 1.0 - 1e-9 && xs[i] <= 3.0 + 1e-9) worstMid = Math.max(worstMid, xs[i] - xs[i - 1]);
+    ok(worstMid <= dHalf + 3e-3, `worst mid gap ${worstMid.toFixed(4)} <= d/2 ${dHalf.toFixed(4)}`);
+    eq(pv.ties, xs.length, 'tie count');
+  });
+
   test('beam: skin bars stack between the rows; committed cage is loose + tagged', () => {
     const { m, ent } = beamWorld();
     const p = beamParams();
