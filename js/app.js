@@ -4082,7 +4082,7 @@ class App {
         // erase the elements' B-Rep: opDone reaps the entities + db rows
         const edgeIds = [];
         for (const ent of ents) {
-          for (const fid of ent.faces) m.deleteFace(fid);
+          m.deleteFaces(ent.faces);
           for (const eid of ent.edges) if (!edgeIds.includes(eid)) edgeIds.push(eid);
         }
         if (edgeIds.length) m.deleteEdgeIds(edgeIds);
@@ -8215,7 +8215,7 @@ class App {
     if (skipped) this.toast(`Skipped ${skipped} locked item${skipped === 1 ? '' : 's'} — unlock in the Element Browser to delete`, true);
     if (!faces.length && !edges.length) { this.clearSelection(); return; }
     this.run('delete', m => {
-      for (const id of faces) m.deleteFace(id);
+      m.deleteFaces(faces); // one gc for the whole sweep - per-face gc froze on big selections
       // EDGE-DESTRUCTION GUARD: an edge shared with a face's boundary IS
       // that face's geometry — deleting it would cascade-delete the face
       // (the "drew a rect over my line, deleting the line killed the rect"

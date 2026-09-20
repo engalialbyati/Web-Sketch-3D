@@ -329,8 +329,7 @@
     if (d.error) return false;
     let ok = false;
     app.transaction.run('rebuild room', mm => {
-      for (const fid of [...(ent.faces || [])]) if (mm.faces.has(fid)) mm.deleteFace(fid);
-      mm.gc();
+      mm.deleteFaces([...(ent.faces || [])].filter(fid => mm.faces.has(fid)));
       const lvl = app.levelManager.levels.find(l => l.id === (p.levelId || p.baseLevel));
       const z = ((lvl && lvl.elevation) || 0) + 0.002;
       const f = mm.addFaceFromRings(d.ring.map(q => G.v(q[0], q[1], z)));

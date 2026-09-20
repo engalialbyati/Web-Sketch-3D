@@ -1124,6 +1124,46 @@ class Model {
   }
 
   deleteFace(id) { this.faces.delete(id); this.version++; this.gc(); }
+  /** Batch face deletion: one version bump and ONE gc for the whole set.
+   *  deleteFace gc's per face - O(model) each - so sweeping a 4,000-face
+   *  rebar cage through it was O(n^2) and froze the UI for minutes.
+   *  Ring edges that no surviving face uses die with the set too:
+   *  standalone faces (rebar tubes, circle plates) own private and
+   *  curve-registered edges that the orphan reaper deliberately spares
+   *  (drawn wires are curve-owned and faceless by design), so without
+   *  this they leak and keep their groups alive forever. */
+  deleteFaces(ids) {
+    const ringEdges = new Set();
+    for (const id of ids) {
+      const f = this.faces.get(id);
+      if (!f) continue;
+      for (const ring of this.rings(f))
+        for (let i = 0; i < ring.length; i++) {
+          const e = this.findEdge(ring[i], ring[(i + 1) % ring.length]);
+          if (e) ringEdges.add(e.id);
+        }
+    }
+    let n = 0;
+    for (const id of ids) if (this.faces.delete(id)) n++;
+    if (!n) return 0;
+    const adj = new Set();
+    for (const f of this.faces.values())
+      for (const ring of this.rings(f))
+        for (let i = 0; i < ring.length; i++) {
+          const a = ring[i], b = ring[(i + 1) % ring.length];
+          adj.add(a < b ? a + 'x' + b : b + 'x' + a);
+        }
+    for (const eid of ringEdges) {
+      const e = this.edges.get(eid);
+      if (!e) continue;
+      const k = e.a < e.b ? e.a + 'x' + e.b : e.b + 'x' + e.a;
+      if (adj.has(k)) continue; // still bounds a survivor
+      this._delEdge(eid);
+    }
+    this.version++;
+    this.gc();
+    return n;
+  }
 
   // Wide construction sweep: bracket a whole tool commit (which may span
   // several nested bimHold sections — join rebuild, extrusion, stamping)
