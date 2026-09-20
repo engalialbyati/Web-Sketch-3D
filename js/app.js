@@ -2917,6 +2917,7 @@ class App {
       top.addEventListener('change', () => {
         this.bimOptions.topConstraint = top.value;
         el('opt-height').disabled = top.value !== 'unconnected';
+        this.applyTopConstraintToSelection(top.value);
       });
     }
     el('opt-height').disabled = this.bimOptions.topConstraint !== 'unconnected';
@@ -7377,15 +7378,25 @@ class App {
       ? { key: 'locationLine', label: 'Location Line', kind: 'select', value: p.locationLine,
           options: [['centerline', 'Centerline'], ['exterior', 'Exterior face'], ['interior', 'Interior face']] }
       : null);
+    const constrained = p.topConstraint != null && p.topConstraint !== 'unconnected';
+    // Revit properties semantics: the constraint select retargets the
+    // element (and re-heights it); Height stays editable only when
+    // unconstrained, mirroring the options bar
+    const topSel = (p.topConstraint != null || p.topLevelId != null)
+      ? { key: 'topConstraint', label: 'Top Constraint', kind: 'select',
+          value: p.topConstraint || 'unconnected',
+          options: [['unconnected', 'Unconnected']]
+            .concat(this.levelManager.levels.map(l => [l.id, l.name])) }
+      : null;
     let list;
     switch (ent.type) {
-      case 'wall': list = [num('height', 'Height m', 0.05), num('thickness', 'Thickness m', 0.01), loc,
+      case 'wall': list = [topSel, !constrained ? num('height', 'Height m', 0.05) : null, num('thickness', 'Thickness m', 0.01), loc,
         { key: 'layers', label: 'Layers (name:t, …)', kind: 'text',
           value: String(Array.isArray(p.layers) && p.layers.length
             ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
             : '') }]; break;
       case 'column': list = [num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
-        num('height', 'Height m', 0.05), rot]; break;
+        !constrained ? num('height', 'Height m', 0.05) : null, topSel, rot]; break;
       case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05)]; break;
       case 'floor': case 'slab': list = [num('thickness', 'Thickness m', 0.01)]; break;
       case 'door': case 'window':
@@ -7406,6 +7417,7 @@ class App {
   // failed rebuild (the caller's transaction rolls params + geometry back).
   _applyBimParam(ent, key, v) {
     const p = ent.params;
+    if (key === 'topConstraint') return this._setTopConstraint(ent, v);
     if (key === 'rotation') p.rotation = v * Math.PI / 180; // field is degrees
     else p[key] = v;
     switch (ent.type) {
@@ -7425,6 +7437,57 @@ class App {
       }
       default: return false;
     }
+  }
+  // Write one element's top constraint and regenerate it. Columns take
+  // the level-driven height directly (placeColumn builds from p.height);
+  // constrained walls re-fit through syncStructuralWalls on opDone.
+  _setTopConstraint(ent, lvlId) {
+    const p = ent.params;
+    if (lvlId == null || lvlId === '') return false; // a failed select set
+    const unconnected = lvlId === 'unconnected';
+    let h = null;
+    if (ent.type === 'column' && !unconnected) {
+      h = this.levelManager.getElevation(lvlId) - p.base[2];
+      if (!(h >= 0.05)) { this.toast('The top level is below the column base', true); return false; }
+    }
+    // entity params are NOT in the model snapshot a transaction rolls back - restore by hand when the rebuild refuses
+    const prev = { c: p.topConstraint, t: p.topLevelId, h: p.height };
+    p.topConstraint = unconnected ? 'unconnected' : lvlId;
+    p.topLevelId = unconnected ? null : lvlId;
+    if (h != null) p.height = h; // keep the unconnected fallback in step
+    const ok = ent.type === 'column'
+      ? !!this.bim.rebuildColumnEntity(ent.id)
+      : ent.type === 'wall' ? !!this.bim.rebuildWallWithHosts(ent.id) : false;
+    if (!ok) { p.topConstraint = prev.c; p.topLevelId = prev.t; p.height = prev.h; }
+    return ok;
+  }
+  // The options bar's Top Constraint with an element selected retargets
+  // THE SELECTION (Revit properties semantics); with nothing selected it
+  // only arms the next placement.
+  applyTopConstraintToSelection(lvlId) {
+    const ids = new Set();
+    for (const fid of this.sel.faces) {
+      const f = this.model.faces.get(fid);
+      const uid = f && f.userData && f.userData.bimEntityId;
+      if (!uid) continue;
+      const ent = this.bim.getEntityById(uid);
+      if (ent && !ent.params.fixed && (ent.type === 'column' || ent.type === 'wall')) ids.add(uid);
+    }
+    if (!ids.size) return false;
+    let n = 0, lastId = null;
+    for (const id of ids) {
+      lastId = id;
+      if (this.transaction.run('top constraint', () => {
+        if (!this._setTopConstraint(this.bim.getEntityById(id), lvlId)) throw new Error('failed');
+        return true;
+      })) n++;
+    }
+    if (!n) return false;
+    const lv = this.levelManager.getLevel(lvlId);
+    this.toast(`Top constraint \u2192 ${lv ? lv.name : 'unconnected'} for ${n} element${n > 1 ? 's' : ''}`);
+    this.selectElement(lastId); // keep it selected across the rebuild
+    this.updateInfo();
+    return true;
   }
   updateInfo() {
     const el = document.getElementById('entityinfo');
