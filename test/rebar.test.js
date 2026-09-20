@@ -97,9 +97,15 @@ module.exports = h => {
     near(Math.max(...us), fr.u1 - 0.04 - r, 2e-3, 'right leg at cover');
     near(Math.min(...vs), fr.v0 + 0.04 + r, 2e-3, 'bottom leg at cover');
     near(Math.max(...vs), fr.v1 - 0.04 - r, 2e-3, 'top leg at cover');
-    // a point ON the left leg (past the hook corner arc) hugs the cover line
-    const leg = pts.find(q => Math.abs(G.dot(q, fr.v) - (fr.v1 - 0.04 - r - Rk)) < 1e-6);
-    ok(leg && Math.abs(G.dot(leg, fr.u) - (fr.u0 + 0.04 + r)) < 1e-6, 'left leg hugs its cover line');
+    // the SHARP hook corner (FreeCAD p1) sits exactly on both cover lines —
+    // both hook tails anchor there as one compact seismic hook
+    const corner = pts.find(q => Math.abs(G.dot(q, fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
+      && Math.abs(G.dot(q, fr.v) - (fr.v1 - 0.04 - r)) < 1e-6);
+    ok(corner, 'hook corner A sits on both cover lines');
+    // left leg runs straight from that corner down to the bottom-left arc
+    const legIdx = pts.indexOf(corner);
+    ok(legIdx > 0 && Math.abs(G.dot(pts[legIdx + 1], fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
+      && G.dot(pts[legIdx + 1], fr.v) < G.dot(corner, fr.v), 'left leg runs down the cover line');
     // hooks: the two extreme hook ends must sit INSIDE the cover ring (core side)
     const first = pts[0], last = pts[pts.length - 1];
     ok(G.dot(first, fr.v) < fr.v1 - 0.04, 'start hook dives below the top cover line');
