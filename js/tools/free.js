@@ -2662,8 +2662,16 @@ class OffsetTool extends Tool {
 // =========================================================== navigation tools
 class OrbitTool extends Tool {
   static id = 'orbit';
-  get hint() { return 'Orbit: drag to orbit the camera (middle-mouse drag works in any tool).'; }
-  onDown(ev) { if (ev.button === 0) this._last = this.app.view.eventPt(ev); }
+  get hint() { return 'Orbit: drag to orbit the camera - with an element selected the orbit pivots on it (F frames the selection). Middle-mouse drag works in any tool.'; }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    this._pivotToSelection();
+    this._last = this.app.view.eventPt(ev);
+  }
+  _pivotToSelection() {
+    const s = this.app.selectionFocus && this.app.selectionFocus();
+    if (s) this.app.view.aimAt(s.center);
+  }
   onMove(ev) {
     if (!this._last) return;
     const q = this.app.view.eventPt(ev);

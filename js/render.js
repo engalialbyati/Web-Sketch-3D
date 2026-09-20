@@ -1470,21 +1470,25 @@ class Viewport {
     this.viewLocked = name !== 'iso';
     this.lockedViewName = this.viewLocked ? name : null;
   }
-  zoomExtents() {
-    const model = this.app.model;
-    const vids = [...model.vertices.keys()];
-    const bb = model.bbox(vids);
-    let center, radius;
-    if (bb) {
-      center = bb.center;
-      radius = Math.max(G.len(bb.size) / 2, 0.6);
-    } else { center = G.v(); radius = 6; }
+  /** Frame a sphere: camera aimed at its center, distance so it fills
+   *  the view; the shadow camera follows so close-ups stay lit. */
+  zoomTo(center, radius) {
     this.cam.target = G.clone(center);
     this.cam.dist = Math.max(radius / Math.tan(this.cam.fov * RAD / 2) * 1.15, 0.8);
     const sc2 = radius * 1.35;
     const s = this.sun.shadow.camera;
-    s.left = -sc2; s.right = sc2; s.top = sc2; s.bottom = -sc2;
+    s.left = -sc2; s.right = sc2; s.top = sc2; s.bottom = sc2;
     s.updateProjectionMatrix();
+  }
+  /** Re-aim the orbit pivot without changing distance: a selection-driven
+   *  orbit start swings the camera to circle the selected element. */
+  aimAt(center) { this.cam.target = G.clone(center); }
+  zoomExtents() {
+    const model = this.app.model;
+    const vids = [...model.vertices.keys()];
+    const bb = model.bbox(vids);
+    if (bb) this.zoomTo(bb.center, Math.max(G.len(bb.size) / 2, 0.6));
+    else this.zoomTo(G.v(), 6);
   }
 
   // ------------------------------------------------- coordinate boundary

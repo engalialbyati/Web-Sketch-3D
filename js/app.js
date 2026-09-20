@@ -5173,6 +5173,10 @@ class App {
       this.view.invalidate();
       try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* capture is optional; some synthetic/stylus pointers have no id */ }
       if (ev.button === 1) {
+        if (!ev.shiftKey && this.selectionFocus) {
+          const s = this.selectionFocus();
+          if (s) this.view.aimAt(s.center); // orbit pivots on the selection
+        }
         this.nav = { mode: ev.shiftKey ? 'pan' : 'orbit', last: this.view.eventPt(ev) };
         ev.preventDefault();
         return;
@@ -5453,6 +5457,15 @@ class App {
         return;
       }
       if (k === 'Delete' || k === 'Backspace') { ev.preventDefault(); this.deleteSelection(); return; }
+      if (k.toLowerCase() === 'f' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+        // F frames the selection (orbit then pivots on it); falls back to
+        // zoom extents with nothing selected. Tools that own 'f' win.
+        if (!(this.tool && this.tool.onKey && this.tool.onKey({ key: 'f' }))) {
+          ev.preventDefault();
+          if (this.zoomToSelection()) this.setStatus('Framed the selection - orbit pivots on it; F again to re-frame, Esc to deselect');
+        }
+        return;
+      }
       if (k === 'Enter') {
         // hosted placement: Enter commits at the current hover/pin position
         const ht = this.tool;
@@ -7256,6 +7269,44 @@ class App {
     for (const id of [...this.sel.faces]) if (!this.model.faces.has(id)) this.sel.faces.delete(id);
     for (const id of [...this.sel.edges]) if (!this.model.edges.has(id)) this.sel.edges.delete(id);
     if (this.assets) for (const id of [...this.selAssets]) if (!this.assets.get(id)) this.selAssets.delete(id);
+  }
+  // Bounding sphere of the current selection: a picked BIM face brings
+  // its WHOLE entity (Revit-style element selection), loose faces and
+  // standalone edges contribute their own vertices.
+  selectionFocus() {
+    const m = this.model;
+    const vids = new Set();
+    const entIds = new Set();
+    const takeFace = fid => {
+      const f = m.faces.get(fid);
+      if (!f) return;
+      const uid = f.userData && f.userData.bimEntityId;
+      if (uid && this.bim.getEntityById(uid)) { entIds.add(uid); return; }
+      for (const ring of m.rings(f)) for (const v of ring) vids.add(v);
+    };
+    for (const fid of this.sel.faces) takeFace(fid);
+    if (entIds.size)
+      for (const ent of this.bim.entities) {
+        if (!entIds.has(ent.id)) continue;
+        for (const fid of ent.faces || []) takeFace(fid);
+      }
+    for (const eid of this.sel.edges) {
+      const e = m.edges.get(eid);
+      if (e) { vids.add(e.a); vids.add(e.b); }
+    }
+    if (!vids.size) return null;
+    const bb = m.bbox([...vids]);
+    if (!bb) return null;
+    return { center: bb.center, radius: Math.max(G.len(bb.size) / 2, 0.15) };
+  }
+  // F: frame the selection - the camera centers on the element and orbit
+  // pivots on it; with nothing selected it falls back to zoom extents.
+  zoomToSelection() {
+    const s = this.selectionFocus();
+    if (!s) { this.view.zoomExtents(); return false; }
+    this.view.zoomTo(s.center, s.radius);
+    this.view.invalidate();
+    return true;
   }
   onSelectionChanged() {
     this.view.updateSelectionVisuals();
