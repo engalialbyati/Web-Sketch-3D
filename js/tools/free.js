@@ -2691,7 +2691,7 @@ class ZoomTool extends Tool {
   onMove(ev) {
     if (!this._last) return;
     const q = this.app.view.eventPt(ev);
-    this.app.view.zoomBy(Math.pow(1.01, this._last.y - q.y));
+    this.app.view.zoomBy(Math.pow(1.01, this._last.y - q.y), q);
     this._last = q;
   }
   onUp(ev) { this._last = null; }

@@ -5192,7 +5192,9 @@ class App {
     canvas.addEventListener('wheel', (ev) => {
       this.view.invalidate();
       ev.preventDefault();
-      this.view.zoomBy(Math.pow(1.1, -ev.deltaY / 100));
+      // dist shrinks as you scroll up (deltaY < 0) — the CAD convention:
+      // wheel forward dives toward the cursor point, wheel back pulls out
+      this.view.zoomBy(Math.pow(1.1, ev.deltaY / 100), this.view.eventPt(ev));
     }, { passive: false });
     canvas.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();

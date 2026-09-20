@@ -1379,6 +1379,15 @@ class Viewport {
       this.ortho.top = h; this.ortho.bottom = -h;
       this.ortho.left = -h * asp; this.ortho.right = h * asp;
       this.ortho.updateProjectionMatrix();
+    } else {
+      // close-up zoom: keep the near plane a small fraction of the camera
+      // distance (down to 0.4 mm) so geometry an inch from the lens never
+      // clips away; at normal distances it stays at the usual 2 cm
+      const near = Math.min(0.02, Math.max(0.0004, dist * 0.004));
+      if (Math.abs(near - this.persp.near) > 1e-9) {
+        this.persp.near = near;
+        this.persp.updateProjectionMatrix();
+      }
     }
     cam.updateMatrixWorld(true); // keep picks correct even if the render loop is paused
     this.sky.position.set(target.x, target.y, target.z);
@@ -1404,8 +1413,50 @@ class Viewport {
     this.cam.target.y -= (right.y * dx - up.y * dy) * k;
     this.cam.target.z -= (right.z * dx - up.z * dy) * k;
   }
-  zoomBy(f) {
-    this.cam.dist = Math.max(0.05, Math.min(1800, this.cam.dist * f));
+  /** The world point under a screen point: the nearest element-mesh or
+   *  merged-face hit along the cursor ray (falling back to the ground plane
+   *  when the ray points downward into empty space). Drives zoom-to-cursor. */
+  worldAtScreen(s) {
+    this.applyCamera();
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const targets = this.elementsRoot ? this.elementsRoot.children : [];
+    const hits = targets.length ? this.raycaster.intersectObjects(targets, true) : [];
+    const ray = this.raycaster.ray;
+    const merged = this._pickMergedFaces(ray.origin, ray.direction);
+    let d = Infinity, P = null;
+    if (hits.length) { d = hits[0].distance; P = hits[0].point.clone(); }
+    if (merged.length && merged[0].t < d) {
+      d = merged[0].t;
+      P = ray.origin.clone().add(ray.direction.clone().multiplyScalar(d));
+    }
+    if (!P && ray.direction.z < -1e-9 && ray.origin.z > -1e-9) {
+      const t = -ray.origin.z / ray.direction.z; // ground plane z = 0
+      // near-horizon rays hit the ground absurdly far away — pivoting the
+      // zoom target out there would teleport the view, so only trust a
+      // ground point within a local neighborhood of the camera
+      if (t > 0 && t < Math.max(30, this.cam.dist * 2))
+        P = ray.origin.clone().add(ray.direction.clone().multiplyScalar(t));
+    }
+    return P;
+  }
+  zoomBy(f, s) {
+    const old = this.cam.dist;
+    this.cam.dist = Math.max(0.002, Math.min(1800, old * f));
+    if (!s) return;
+    // zoom-to-cursor: scale the camera→cursor-point vector by the zoom
+    // ratio — the point under the mouse stays fixed on screen while the
+    // orbit target dives toward it, so you can park the view right on any
+    // element (rebar hooks, small faces) and keep zooming into it.
+    const k = this.cam.dist / old;
+    if (!isFinite(k) || k === 1) return;
+    const P = this.worldAtScreen(s);
+    if (!P) return;
+    const t = this.cam.target;
+    this.cam.target = {
+      x: P.x + (t.x - P.x) * k,
+      y: P.y + (t.y - P.y) * k,
+      z: P.z + (t.z - P.z) * k,
+    };
   }
   setStandardView(name) {
     const views = {
