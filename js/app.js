@@ -8722,6 +8722,63 @@ class App {
     const ta = document.getElementById('paste-json');
     if (ta) ta.focus();
   }
+  // Autosave dual-store: localStorage is the fast path but its ~5 MB quota
+  // silently truncated every rebar cage (the multi-MB snapshot blew the
+  // quota, the catch swallowed it, and reload restored the pre-cage save).
+  // IndexedDB keeps the latest snapshot with a serial; the restore picks
+  // whichever copy is newer. The LS payload stays the legacy raw snapshot.
+  _idbSaveDb() {
+    if (this._idbSavePromise) return this._idbSavePromise;
+    this._idbSavePromise = new Promise(res => {
+      try {
+        const req = indexedDB.open('websketch3d-save', 1);
+        req.onupgradeneeded = () => { req.result.createObjectStore('snap'); };
+        req.onsuccess = () => res(req.result);
+        req.onerror = () => res(null);
+      } catch (e) { res(null); }
+    });
+    return this._idbSavePromise;
+  }
+  async _autosaveWriteIdb(sv, str) {
+    const db = await this._idbSaveDb();
+    if (!db) return false;
+    return new Promise(res => {
+      try {
+        const tx = db.transaction('snap', 'readwrite');
+        tx.objectStore('snap').put({ sv, s: str, at: Date.now() }, 'latest');
+        tx.oncomplete = () => res(true);
+        tx.onerror = tx.onabort = () => res(false);
+      } catch (e) { res(false); }
+    });
+  }
+  async _autosaveReadIdb() {
+    const db = await this._idbSaveDb();
+    if (!db) return null;
+    return new Promise(res => {
+      try {
+        const rq = db.transaction('snap').objectStore('snap').get('latest');
+        rq.onsuccess = () => res(rq.result || null);
+        rq.onerror = () => res(null);
+      } catch (e) { res(null); }
+    });
+  }
+  _autosaveStore(str) {
+    const sv = (this._autosaveSv = (this._autosaveSv || 0) + 1);
+    this._autosaveWriteIdb(sv, str).then(ok => {
+      if (ok && this._asLsFull && !this._asWarned) {
+        this._asWarned = true;
+        this.toast('Model too large for browser storage - autosave persists to IndexedDB (survives reload)');
+      }
+    });
+    try {
+      localStorage.setItem('websketch3d', str);
+      localStorage.setItem('websketch3d.sv', String(sv));
+      this._asLsFull = false;
+    } catch (e) {
+      this._asLsFull = true; // quota: the IDB copy above is the durable one
+      console.warn('[autosave] localStorage quota exceeded - latest snapshot lives in IndexedDB');
+    }
+  }
   _saveAutosave() {
     clearTimeout(this._asTimer);
     this._asTimer = setTimeout(() => {
@@ -8731,7 +8788,7 @@ class App {
           try { this._asWorker = new Worker('js/autosaveWorker.js'); } catch (e) { this._asWorker = null; }
         }
         if (!this._asWorker) { // no workers (or blob CSP): old inline path
-          try { localStorage.setItem('websketch3d', JSON.stringify(snap)); } catch (e) { }
+          this._autosaveStore(JSON.stringify(snap));
           return;
         }
         // coalesce: only the LATEST snapshot matters; if the worker is still
@@ -8740,7 +8797,7 @@ class App {
         this._asBusy = true;
         this._asWorker.onmessage = (ev) => {
           this._asBusy = false;
-          if (ev.data) { try { localStorage.setItem('websketch3d', ev.data); } catch (e) { } }
+          if (ev.data) this._autosaveStore(ev.data);
           if (this._asPending) { const p = this._asPending; this._asPending = null; this._saveAutosaveNow(p); }
         };
         this._saveAutosaveNow(snap);
@@ -8751,9 +8808,19 @@ class App {
     this._asBusy = true;
     this._asWorker.postMessage(snap);
   }
-  _restoreAutosave() {
+  async _restoreAutosave() {
     try {
-      const s = localStorage.getItem('websketch3d');
+      let s = null, sv = 0;
+      try {
+        s = localStorage.getItem('websketch3d');
+        sv = +(localStorage.getItem('websketch3d.sv') || 0) || 0;
+      } catch (e) { }
+      // the IDB copy outranks localStorage when its serial is newer (the
+      // LS write fails on quota for big models - rebar cages are MBs)
+      try {
+        const rec = await this._autosaveReadIdb();
+        if (rec && rec.s && rec.sv > sv) s = rec.s;
+      } catch (e) { }
       if (!s) return;
       const data = JSON.parse(s);
       // a project with only datums (grids/levels, no geometry yet) still
