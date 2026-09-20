@@ -160,6 +160,14 @@
     if (!fid) return { error: 'cannot find the beam end face (fully embedded?)' };
     const fr = window.Rebar.faceFrame(m, fid);
     if (!fr) return { error: 'cannot frame the beam section' };
+    // stirrup hooks belong at the section's TOP: faceFrame's v sign flips
+    // with which end face was picked, so mirror the mapping when needed -
+    // frT guarantees the numerically larger v maps upward in world z
+    const vUpZ = fr.map(fr.u0, fr.v1).z, vDnZ = fr.map(fr.u0, fr.v0).z;
+    const frT = vUpZ >= vDnZ ? fr : {
+      ...fr,
+      map: (a, b) => fr.map(a, fr.v0 + fr.v1 - b),
+    };
 
     const q = p.beam;
     const tie = q.tieDia, mainDia = Math.max(q.topDia, q.botDia);
@@ -187,9 +195,11 @@
     let ties = 0, bars = 0;
     // ties along the span (stirrupPath on the section frame, copies -n)
     const rounding = (tie / 2 + mainDia / 2) / tie;
-    const path = window.Rebar.stirrupPath(fr, {
+    // 135-degree seismic hooks everywhere: extension >= max(6 db, 75 mm)
+    const hookFactor = Math.max(q.bentFactor || 6, 6, 0.075 / tie);
+    const path = window.Rebar.stirrupPath(frT, {
       l: lCov, r: rCov, t: q.side, b: q.side, dia: tie,
-      bentAngle: q.bentAngle || 135, bentFactor: q.bentFactor || 6, rounding,
+      bentAngle: q.bentAngle || 135, bentFactor: hookFactor, rounding,
     });
     // tie positions along the span: ACI 318 special seismic shear when
     // armed (2h confinement zones at min(d/4, 125 mm), first tie 50 mm off
@@ -206,6 +216,49 @@
       add(path.map(pt => G.sub(pt, G.mul(fr.n, t))), tie,
         { shape: 'stirrup', count: positions.length, spacing: q.seismic ? 'zones' : undefined });
       ties++;
+    }
+    // ---- MULTI-LEG RULE (ACI 300 mm): when the clear transverse distance
+    // between the outer tie legs exceeds 300 mm, inner hoops wrap the
+    // intermediate bars so no adjacent leg-to-leg spacing exceeds it.
+    // Hoop leg lines split the outer span into cells <= 300 mm; lines pair
+    // into hoops (a lone line gets a hoop centred on it).
+    const legL = fr.u0 + lCov + rt, legR = fr.u1 - rCov - rt;
+    const aTs = (legR - legL) - tie;
+    const hoopDia = tie;
+    const rH = hoopDia / 2;    if (aTs > 0.300) {
+      const k = Math.ceil(aTs / 0.300);
+      const s = (legR - legL) / k;
+      const lines = [];
+      for (let i = 1; i < k; i++) lines.push(legL + i * s);
+      const pairs = [];
+      for (let i = 0; i < lines.length; i += 2)
+        pairs.push(lines[i + 1] != null ? [lines[i], lines[i + 1]]
+          : [lines[i] - s / 2, lines[i] + s / 2]);
+      // the hoop rectangle sweeps around the intermediate rows: bottom
+      // leg tangent under the bottom bars, 135-degree lap hooks diving
+      // inward from just above the top bars - same closed-loop stirrup
+      // generator on a sub-frame of the section
+      if (Math.abs(vTopBar - vBotBar) < 0.12) pairs.length = 0; // too shallow to bend hoops
+      const vBotHo = vBotBar + q.botDia / 2 + rH;
+      const vTopHo = vTopBar - q.topDia / 2 - rH;
+      for (const [a, b] of pairs) {
+        if (b - a < 4 * rH + 0.02) continue; // too narrow to bend a hoop
+        // frT: larger v = world up, so v1 (the hook side) is the hoop top
+        const fr2 = { n: fr.n, u: fr.u, v: fr.v,
+          u0: a - rH, u1: b + rH,
+          v0: Math.min(vBotHo, vTopHo) - rH, v1: Math.max(vBotHo, vTopHo) + rH,
+          map: frT.map };
+        const hoopPath = window.Rebar.stirrupPath(fr2, {
+          l: 0, r: 0, t: 0, b: 0, dia: hoopDia,
+          bentAngle: 135, bentFactor: hookFactor,
+          rounding: Math.min((hoopDia / 2 + q.botDia / 2) / hoopDia, (b - a) / 2 / hoopDia),
+        });
+        for (const t of positions) {
+          add(hoopPath.map(pt => G.sub(pt, G.mul(fr.n, t))), hoopDia,
+            { shape: 'stirrup', role: 'inner-hoop', count: positions.length });
+          ties++;
+        }
+      }
     }
     // longitudinal rows: straight bars the clear span long
     const zA = q.end, zB = fr.depth - q.end;
@@ -508,7 +561,7 @@
           <div class="form-row"><label>Skin Bars / side (0 = none)</label>
             <input id="eb-skin" type="number" step="1" min="0" value="0" style="width:60px">
             <input id="eb-skind" type="number" step="0.002" value="0.012" style="width:70px"> m dia</div>
-          <p class="dim">Ties wrap the web (T/L beams too); top bars spread the flange on T/L.</p>
+          <p class="dim">Ties wrap the web (T/L beams too); top bars spread the flange on T/L. Inner hoops auto-insert when leg spacing exceeds 300 mm.</p>
         </div>`;
       if (type === 'column') body = `
         <div id="er-col">

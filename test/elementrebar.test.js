@@ -158,6 +158,56 @@ module.exports = h => {
     eq(pv.ties, xs.length, 'tie count');
   });
 
+  test('beam multi-leg (ACI 300 mm): wide beams get inner hoops, narrow do not', () => {
+    // narrow 0.3 beam: clear between legs ~0.224 m - no hoops
+    const N = m2Beam(0.3);
+    const narrow = ER.previewElementRebar(N.m, faceAtZ(N.m, 3.0), beamParams(), [N.ent]);
+    ok(!narrow.error, narrow.error || 'no error');
+    const nOuter = narrow.paths.filter(q => q.dia === 0.008 && q.pts.length > 2).length;
+    ok(narrow.ties === nOuter, `narrow beam: outer ties only (${narrow.ties})`);
+
+    // wide 0.7 beam: clear a_ts = 0.7 - 2*(0.03+0.004) - 0.008 = 0.524 > 0.3
+    const W = m2Beam(0.7);
+    const p = beamParams();
+    p.beam.mode = 'amount'; p.beam.value = 4; // uniform 4 stations for exact counts
+    p.beam.seismic = false;
+    const pv = ER.previewElementRebar(W.m, faceAtZ(W.m, 3.0), p, [W.ent]);
+    ok(!pv.error, pv.error || 'no error');
+    const hoopish = pv.paths.filter(q => q.dia === 0.008 && q.pts.length > 2);
+    // k = ceil(0.524/0.3) = 2 -> one interior line -> ONE hoop per station
+    eq(hoopish.length, 4 * 2, '4 stations x (outer + 1 inner hoop)');
+    // leg lines across the transverse axis (y): outer tie legs at the
+    // covers (+-0.316), the inner hoop's legs at its extremes - every
+    // adjacent leg-to-leg gap must be <= 300 mm
+    const outer = hoopish.find(q => Math.max(...q.pts.map(r2 => Math.abs(r2.y))) > 0.3);
+    const hoop = hoopish.find(q => Math.max(...q.pts.map(r2 => Math.abs(r2.y))) < 0.3);
+    near(Math.max(...outer.pts.map(r2 => Math.abs(r2.y))), 0.316, 2e-3, 'outer legs at the covers');
+    const hoopLeg = Math.max(...hoop.pts.map(r2 => Math.abs(r2.y)));
+    near(hoopLeg, 0.1053, 3e-3, 'hoop legs on the 300 mm division lines');
+    const legLines = [-0.316, -hoopLeg, hoopLeg, 0.316];
+    for (let i = 1; i < legLines.length; i++)
+      ok(legLines[i] - legLines[i - 1] <= 0.300 + 3e-3,
+        `leg-to-leg ${((legLines[i] - legLines[i - 1]) * 1000).toFixed(1)} mm <= 300`);
+    // hooks: tail length >= max(6 db, 75 mm) - outer and inner alike
+    for (const q of hoopish) {
+      const e0 = q.pts[0], T = q.pts[1];
+      const L = Math.hypot(e0.x - T.x, e0.y - T.y, e0.z - T.z);
+      ok(L >= 0.075 - 1e-6, `hook tail ${ (L * 1000).toFixed(1) } mm >= 75`);
+    }
+    ok(hoop, 'inner hoop present');
+    ok(Math.max(...hoop.pts.map(r2 => Math.abs(r2.y))) <= 0.316 + 1e-6, 'hoop inside the outer legs');
+    ok(Math.min(...hoop.pts.map(r2 => r2.z)) > 3.02 && Math.max(...hoop.pts.map(r2 => r2.z)) < 3.48,
+      'hoop spans between the bar rows');
+  });
+
+  function m2Beam(width) {
+    const m = new Model();
+    const bp = { baseline: [[0, -(width / 2 - 0.15), 3], [4, -(width / 2 - 0.15), 3]], profile: 'rectangular',
+      webWidth: width, height: 0.5, referenceLevelId: 'lvl1', zJustification: 'Bottom' };
+    const ent = stamp(m, box(m, 0, 4, -(width / 2), width / 2, 3, 3.5), 'bw', 'beam', bp);
+    return { m, ent };
+  }
+
   test('beam: skin bars stack between the rows; committed cage is loose + tagged', () => {
     const { m, ent } = beamWorld();
     const p = beamParams();
