@@ -91,9 +91,9 @@ module.exports = h => {
     ok(pts.length >= 10, `tessellated tie (${pts.length} points)`);
     const us = pts.map(q => G.dot(q, fr.u)), vs = pts.map(q => G.dot(q, fr.v));
     const r = 0.004, Rk = 0.016; // bar radius, corner mandrel 2×dia
-    // the top leg overshoots past the left cover line by the corner tangent
-    // (FreeCAD's p5); the legs themselves sit exactly at the covers
-    near(Math.min(...us), fr.u0 + 0.04 + r - Rk, 2e-3, 'top leg overshoots by the tangent');
+    // NOTHING extends past the tie lines: the extreme tie centerline is the
+    // hook corner itself — no overshoot, so no tube enters the cover zone
+    near(Math.min(...us), fr.u0 + 0.04 + r, 2e-3, 'leftmost point is the hook corner (no overshoot)');
     near(Math.max(...us), fr.u1 - 0.04 - r, 2e-3, 'right leg at cover');
     near(Math.min(...vs), fr.v0 + 0.04 + r, 2e-3, 'bottom leg at cover');
     near(Math.max(...vs), fr.v1 - 0.04 - r, 2e-3, 'top leg at cover');
@@ -106,10 +106,15 @@ module.exports = h => {
     const legIdx = pts.indexOf(corner);
     ok(legIdx > 0 && Math.abs(G.dot(pts[legIdx + 1], fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
       && G.dot(pts[legIdx + 1], fr.v) < G.dot(corner, fr.v), 'left leg runs down the cover line');
-    // hooks: the two extreme hook ends must sit INSIDE the cover ring (core side)
+    // hooks: the two extreme hook ends must sit INSIDE the cover ring (core
+    // side), diving from the corner along the SAME inward diagonal (the lap)
     const first = pts[0], last = pts[pts.length - 1];
     ok(G.dot(first, fr.v) < fr.v1 - 0.04, 'start hook dives below the top cover line');
     ok(G.dot(last, fr.v) < fr.v1 - 0.04, 'end hook dives below the top cover line');
+    ok(G.dot(first, fr.u) > fr.u0 + 0.04, 'start hook is on the core side of the left cover line');
+    ok(G.dot(last, fr.u) > fr.u0 + 0.04, 'end hook is on the core side of the left cover line');
+    near(first.x, last.x, 1e-9); near(first.y, last.y, 1e-9);
+    near(first.z, last.z, 1e-9, 'the lap closes on the same diagonal tip');
   });
 
   test('distribute: amount mode solves spacing; spacing mode solves count', () => {

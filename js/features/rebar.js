@@ -180,10 +180,10 @@
 
   /** Stirrup (tie): a rectangle inset by the four covers with rounded
    *  corners at the three closed bends, OPEN at the top-left hook corner:
-   *  the top leg overshoots the corner by the tangent and both bar ends
-   *  anchor at that same corner pair, hooking INTO the core at bentAngle
-   *  with a tail of bentFactor bar diameters — FreeCAD's classic seismic
-   *  tie (open path p0..p6). */
+   *  both bar ends anchor at that same corner and hook INTO the core at
+   *  bentAngle with a tail of bentFactor bar diameters — FreeCAD's classic
+   *  seismic tie (open path p0..p6). The lap stays entirely INSIDE the tie
+   *  outline: no tangent overshoot, so no tube ever enters the cover. */
   function stirrupPath(fr, p) {
     const r = p.dia / 2;
     const A = [fr.u0 + p.l + r, fr.v1 - p.t - r]; // top-left (the hook corner)
@@ -212,26 +212,28 @@
       out.push(e);
       return out;
     };
-    const tp = R; // top-leg overshoot past the hook corner ≈ the corner tangent
-    // FreeCAD's open path p0..p6: the hook corner stays SHARP so both tails
-    // anchor at the same corner (p0 from p1, p6 from p5) and hug it as one
-    // compact seismic hook — the other three corners keep their bar-nesting arcs
+    // FreeCAD's open path p0..p6 with the closing lap anchored AT the hook
+    // corner (no tangent overshoot): the tube never leaves the tie outline,
+    // so nothing penetrates the outer cover. Both 135° tails leave the
+    // corner itself and dive into the core, hugging the corner bar; the
+    // other three corners keep their bar-nesting arcs.
     const walk = [
       A,                               // p1: the hook corner (sharp miter)
       ...arc90(B, [0, -1], [1, 0]),    // p2 zone: bottom-left
       ...arc90(C, [1, 0], [0, 1]),     // p3 zone: bottom-right
       ...arc90(D, [0, 1], [-1, 0]),    // p4 zone: ends on the top edge heading -u
-      [A[0] - tp, A[1]],               // p5: overshoot past the hook corner
+      [A[0], A[1]],                    // p5: the top leg closes back ON the corner
     ];
     // hook tails (FreeCAD p0/p6): (sin θ, -cos θ) with θ = 180 - bentAngle,
-    // diving from the corner pair into the core
+    // from the corner into the core
     const th = (180 - (p.bentAngle || 135)) * Math.PI / 180;
     const tail = [Math.sin(th), -Math.cos(th)];
     const L = (p.bentFactor || 4) * p.dia;
+    const tip = [A[0] + tail[0] * L, A[1] + tail[1] * L];
     const uv = [
-      [A[0] + tail[0] * L, A[1] + tail[1] * L],       // p0: start hook from the corner
+      tip,                       // p0: start hook from the corner
       ...walk,
-      [A[0] - tp + tail[0] * L, A[1] + tail[1] * L],  // p6: end hook from the overshoot
+      tip.slice(),               // p6: the lap closes on the same diagonal
     ];
     return uv.map(([a, b]) => fr.map(a, b));
   }
