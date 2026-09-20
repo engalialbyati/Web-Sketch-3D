@@ -148,6 +148,24 @@
 
   const dist2D = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
+  // ------------------------------------------------- ACI 25.3 bar bends
+  // Longitudinal-bar bends live in the (t, z) plane: t along the span from
+  // the START end face, z world-up. All bends share the standard mandrel:
+  // centerline radius 3.5 db (inside diameter 6 db, bars <= 25 mm).
+  /** Bent-up (cranked) bar, symmetric: 90-degree hooks DOWN at both ends at
+   *  the top elevation, 45-degree cranks rising from the bottom run that
+   *  starts `at` from each support face (Ln/6 typical). */
+  function crankPts(L, at, zTop, zBot, ext, R) {
+    const rise = Math.abs(zTop - zBot), dx = rise; // 45 degrees
+    const tA = Math.max(R + 0.02, at), tB = L - tA;
+    if (tB - tA - 2 * dx < 0.05) return null; // too short to crank
+    return [
+      { a: R, b: zTop - ext - R }, { a: R, b: zTop }, { a: tA, b: zTop },
+      { a: tA + dx, b: zBot }, { a: tB - dx, b: zBot }, { a: tB, b: zTop },
+      { a: L - R, b: zTop }, { a: L - R, b: zTop - ext - R },
+    ];
+  }
+
   // --------------------------------------------------------------- BEAM
   function buildBeamRebar(m, ent, p, add) {
     const bp = ent.params || {};
@@ -212,11 +230,17 @@
         const d = window.Rebar.distribute(fr, { mode: q.mode, value: q.value, front: q.end, dia: tie });
         return Array.from({ length: d.count }, (_, i) => d.off + i * d.step);
       })();
-    for (const t of positions) {
-      add(path.map(pt => G.sub(pt, G.mul(fr.n, t))), tie,
+    // seismic laps ALTERNATE along the top corners (congestion relief
+    // at one corner): every other tie mirrors the section frame
+    const pathAlt = window.Rebar.stirrupPath({
+      ...frT, map: (a, b) => frT.map(frT.u0 + frT.u1 - a, b),
+    }, { l: lCov, r: rCov, t: q.side, b: q.side, dia: tie,
+      bentAngle: q.bentAngle || 135, bentFactor: hookFactor, rounding });
+    positions.forEach((t, i) => {
+      add((i % 2 ? pathAlt : path).map(pt => G.sub(pt, G.mul(fr.n, t))), tie,
         { shape: 'stirrup', count: positions.length, spacing: q.seismic ? 'zones' : undefined });
       ties++;
-    }
+    });
     // ---- MULTI-LEG RULE (ACI 300 mm): when the clear transverse distance
     // between the outer tie legs exceeds 300 mm, inner hoops wrap the
     // intermediate bars so no adjacent leg-to-leg spacing exceeds it.
@@ -260,23 +284,107 @@
         }
       }
     }
-    // longitudinal rows: straight bars the clear span long
+    // ---- longitudinal rows: ACI 25.3 end hooks, curtailed extra bars
+    // (Ln/4 top at the supports, Ln/8 bottom short of them), second-layer
+    // fallback when the primary layer cannot host the bar count, and
+    // symmetric 45-degree bent-up bars with hooked ends.
     const zA = q.end, zB = fr.depth - q.end;
-    const row = (n, dia, vPos, lo, hi) => {
-      for (const u of spread(n, lo, hi)) {
-        const P0 = fr.map(u, vPos);
-        add([G.sub(P0, G.mul(fr.n, zA)), G.sub(P0, G.mul(fr.n, zB))], dia,
-          { shape: 'straight', count: n });
-        bars++;
-      }
+    const Ln = Math.max(0.05, fr.depth - 2 * q.end); // clear span between supports
+    // world mapping for bend polylines: (t, z), t along the span from the
+    // START end face, z world-up, at transverse u on row vRow
+    const bendMap = (u, vRow) => {
+      const base = fr.map(u, vRow);
+      // z is an OFFSET from the row plane (bends go toward the core)
+      return (t, z) => G.add(G.sub(base, G.mul(fr.n, t)), G.v(0, 0, z));
+    };
+    const Rb = 3.5; // every bend: centerline radius 3.5 db (6 db inside dia)
+    const addBar = (u, vRow, dia, kind, t0, t1, toward, ret) => {
+      if (t1 - t0 < 2 * Rb * dia) return; // no room to bend
+      const R = Rb * dia, E = 12 * dia, map = bendMap(u, vRow);
+      const hS = t0 <= zA + 1e-9, hE = t1 >= zB - 1e-9; // hooked ends
+      let pts2;
+      if (kind === '90') pts2 = [
+        ...(hS ? [{ a: R, b: toward * (E + R) }, { a: R, b: 0 }] : [{ a: t0, b: 0 }]),
+        ...(hE ? [{ a: t1 - R, b: 0 }, { a: t1 - R, b: toward * (E + R) }] : [{ a: t1, b: 0 }]),
+      ];
+      else if (kind === '180') pts2 = [
+        ...(hS ? [{ a: ret, b: toward * 2 * R }, { a: 0, b: toward * 2 * R }, { a: 0, b: 0 }] : [{ a: t0, b: 0 }]),
+        ...(hE ? [{ a: t1, b: 0 }, { a: t1, b: toward * 2 * R }, { a: t1 - ret, b: toward * 2 * R }] : [{ a: t1, b: 0 }]),
+      ];
+      else pts2 = [{ a: t0, b: 0 }, { a: t1, b: 0 }];
+      const pts = window.Rebar.roundedPath(pts2, R).map(w => map(w.a, w.b));
+      add(pts, dia, { shape: kind === 'none' ? 'straight' : 'hooked', count: 1 });
+      bars++;
     };
     const topLo = web ? fr.u0 + q.side + q.topDia / 2 : uLo;
     const topHi = web ? fr.u1 - q.side - q.topDia / 2 : uHi;
-    row(q.topCount, q.topDia, vTopBar, topLo, topHi);
-    row(q.botCount, q.botDia, vBotBar, uLo, uHi);
+    const zTopRow = fr.map(fr.u0, vTopBar).z, zBotRow = fr.map(fr.u0, vBotBar).z;
+    const tTop = zTopRow >= zBotRow ? -1 : 1; // top bars bend toward the core
+    const tBot = -tTop;
+    // layer plan: continuous + extra in ONE layer when every clear gap
+    // stays >= max(db, 25 mm); otherwise the extras stack 25 mm clear
+    // toward the core in a second layer
+    const layerPlan = (nCont, nExtra, dia, lo, hi) => {
+      if (nExtra <= 0) return { primary: spread(nCont, lo, hi), sameLayerExtra: [], second: [] };
+      const n = nCont + nExtra;
+      const clear = n > 1 ? (hi - lo - n * dia) / (n - 1) : Infinity;
+      if (clear >= Math.max(dia, 0.025)) {
+        const all = spread(n, lo, hi);
+        return { primary: all.slice(0, nCont), sameLayerExtra: all.slice(nCont), second: [] };
+      }
+      return { primary: spread(nCont, lo, hi), sameLayerExtra: [], second: spread(nExtra, lo, hi) };
+    };
+    const secondLayerV = (vRow, dia, toward) => vRow - toward * (dia + 0.025); // 25 mm clear
+    // TOP: continuous full span (hooked ends) + extra curtailed Ln*ratio
+    // from each support face, outer end hooked like the row
+    const tCut = Ln * (q.topCut != null ? q.topCut : 0.25);
+    const topPlan = layerPlan(q.topCount, q.topExtra || 0, q.topDia, topLo, topHi);
+    for (const u of topPlan.primary)
+      addBar(u, vTopBar, q.topDia, q.topHook || 'none', zA, zB, tTop, q.hookRet || 0.4);
+    if (topPlan.second.length) {
+      const v2 = secondLayerV(vTopBar, q.topDia, tTop);
+      for (const u of topPlan.second)
+        addBar(u, v2, q.topDia, 'none', zA + tCut, zB - tCut, tTop, 0);
+    } else {
+      for (const u of topPlan.sameLayerExtra) {
+        addBar(u, vTopBar, q.topDia, q.topHook || '90', zA, zA + tCut, tTop, q.hookRet || 0.4);
+        addBar(u, vTopBar, q.topDia, 'none', zB - tCut, zB, tTop, 0); // mirror segment
+      }
+    }
+    // BOTTOM: continuous (hooked ends) + extra stopped Ln*ratio short of
+    // both supports (positive-moment mid-span bars, square-cut ends)
+    const bCut = Ln * (q.botCut != null ? q.botCut : 0.125);
+    const botPlan = layerPlan(q.botCount, q.botExtra || 0, q.botDia, uLo, uHi);
+    for (const u of botPlan.primary)
+      addBar(u, vBotBar, q.botDia, q.botHook || 'none', zA, zB, tBot, q.hookRet || 0.4);
+    const bv2 = secondLayerV(vBotBar, q.botDia, tBot);
+    for (const u of botPlan.second)
+      addBar(u, bv2, q.botDia, 'none', zA + bCut, zB - bCut, tBot, 0);
+    for (const u of botPlan.sameLayerExtra)
+      addBar(u, vBotBar, q.botDia, 'none', zA + bCut, zB - bCut, tBot, 0);
+    // CRANKED (bent-up) bars: symmetric, 45-degree cranks starting ~Ln/6
+    // from each support face, 90-degree hooks down at the top elevation
+    const crankN = Math.max(0, Math.round(q.crank || 0));
+    if (crankN > 0) {
+      const at = q.end + Ln * (q.crankAt || 1 / 6);
+      const R = Rb * q.botDia, E = 12 * q.botDia;
+      const pts2 = crankPts(fr.depth, at, Math.abs(zTopRow - zBotRow), 0, E, R);
+      if (pts2) {
+        const slots = spread(Math.max(2, q.botCount), uLo, uHi);
+        const picked = crankN <= 2
+          ? [slots[0], slots[slots.length - 1]].filter(Boolean).slice(0, crankN)
+          : spread(crankN, uLo, uHi);
+        for (const u of picked) {
+          const map = bendMap(u, vBotBar);
+          add(window.Rebar.roundedPath(pts2, R).map(w => map(w.a, w.b)), q.botDia,
+            { shape: 'cranked', count: crankN });
+          bars++;
+        }
+      }
+    }
     // skin bars: per side, stacked between the top and bottom rows
     if (q.skin > 0 && q.skinDia > 0) {
-      const sides = [fr.u0 + q.side + tie + q.skinDia / 2, fr.u1 - q.side - tie - q.skinDia / 2];
+      const sides = [fr.u0 + q.side + tie + q.skinDia / 2, fr.u1 - q.side + 0 - tie - q.skinDia / 2];
       const gap = q.topDia / 2 + q.skinDia;
       const vHi = Math.max(vTopBar + gap, vBotBar - q.botDia / 2 - q.skinDia / 2);
       const vLo = Math.min(vTopBar + gap, vBotBar - q.botDia / 2 - q.skinDia / 2);
@@ -556,6 +664,20 @@
           <div class="form-row"><label>Bottom Bars</label>
             <input id="eb-botn" type="number" step="1" min="1" value="3" style="width:50px"> ×
             <input id="eb-botd" type="number" step="0.002" value="0.016" style="width:70px"> m dia</div>
+          <div class="form-row"><label>End Hooks T/B</label>
+            <select id="eb-th" style="width:76px"><option value="none">None</option><option value="90" selected>90\u00b0</option><option value="180">180\u00b0</option></select>
+            <select id="eb-bh" style="width:76px"><option value="none">None</option><option value="90" selected>90\u00b0</option><option value="180">180\u00b0</option></select></div>
+          <div class="form-row"><label>180\u00b0 Return m</label>
+            <input id="eb-hret" type="number" step="0.05" value="0.4" style="width:70px"></div>
+          <div class="form-row"><label>Extra Top (cut)</label>
+            <input id="eb-topx" type="number" step="1" min="0" value="0" style="width:44px"> \u00d7 <span>Ln/</span>
+            <input id="eb-topcut" type="number" step="1" value="4" style="width:44px"></div>
+          <div class="form-row"><label>Extra Bottom (stop)</label>
+            <input id="eb-botx" type="number" step="1" min="0" value="0" style="width:44px"> \u00d7 <span>Ln/</span>
+            <input id="eb-botcut" type="number" step="1" value="8" style="width:44px"></div>
+          <div class="form-row"><label>Bent-Up Bars (45\u00b0)</label>
+            <input id="eb-crank" type="number" step="1" min="0" value="0" style="width:44px"> from Ln/
+            <input id="eb-crankat" type="number" step="1" value="6" style="width:44px"></div>
           ${F('eb-top', 'Top Bar Cover', 0.03)}
           ${F('eb-bot', 'Bottom Bar Cover', 0.03)}
           <div class="form-row"><label>Skin Bars / side (0 = none)</label>
@@ -676,6 +798,15 @@
         botCount: Math.max(1, Math.round(v('eb-botn'))), botDia: v('eb-botd'),
         top: v('eb-top'), bot: v('eb-bot'),
         skin: Math.max(0, Math.round(v('eb-skin'))), skinDia: v('eb-skind'),
+        topHook: (document.getElementById('eb-th') || {}).value || 'none',
+        botHook: (document.getElementById('eb-bh') || {}).value || 'none',
+        hookRet: v('eb-hret') || 0.4,
+        topExtra: Math.max(0, Math.round(v('eb-topx'))),
+        topCut: v('eb-topcut') > 0 ? 1 / v('eb-topcut') : 0.25,
+        botExtra: Math.max(0, Math.round(v('eb-botx'))),
+        botCut: v('eb-botcut') > 0 ? 1 / v('eb-botcut') : 0.125,
+        crank: Math.max(0, Math.round(v('eb-crank'))),
+        crankAt: v('eb-crankat') > 0 ? 1 / v('eb-crankat') : 1 / 6,
       } };
       if (type === 'column') return { type, column: {
         type: 'singletie',

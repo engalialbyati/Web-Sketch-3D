@@ -158,6 +158,105 @@ module.exports = h => {
     eq(pv.ties, xs.length, 'tie count');
   });
 
+  test('beam ACI detailing: standard hooks, curtailed extras, layers, cranks', () => {
+    const { m, ent } = beamWorld();
+    const P = () => {
+      const p = beamParams();
+      p.beam.mode = 'amount'; p.beam.value = 4; p.beam.seismic = false;
+      return p;
+    };
+    // ---- 90-degree standard end hooks on both rows
+    let p = P();
+    p.beam.topHook = '90'; p.beam.botHook = '90';
+    let pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    ok(!pv.error, pv.error || 'no error');
+    const hooked = pv.paths.filter(q => q.pts.length > 2 && (q.dia === 0.014 || q.dia === 0.016));
+    ok(hooked.length >= 5, `${hooked.length} hooked bars`);
+    const top = hooked.filter(q => Math.abs(q.pts[0].z - 3.455) < 1e-6 || Math.abs(q.pts[0].z - 3.455) < 1e-3);
+    // top tips: 12 db + 3.5 db below the row (3.455 - 0.217 = 3.238)
+    const topHooked = hooked.filter(q => q.dia === 0.014);
+    ok(topHooked.length === 2, '2 top bars hooked');
+    for (const q of topHooked) near(Math.min(...q.pts.map(w => w.z)), 3.455 - (12 + 3.5) * 0.014, 2e-3,
+      'top hook tips 12db down');
+    const botHooked = hooked.filter(q => q.dia === 0.016);
+    for (const q of botHooked) near(Math.max(...q.pts.map(w => w.z)), 3.046 + (12 + 3.5) * 0.016, 2e-3,
+      'bottom hook tips 12db up');
+    // the vertical hook legs sit 3.5 db in from the end faces
+    const xs = [...new Set(botHooked[0].pts.map(w => +w.x.toFixed(3)))];
+    ok(xs.includes(+(3.5 * 0.016).toFixed(3)) || Math.min(...xs) <= 3.5 * 0.016 + 2e-3,
+      'hook bend 3.5 db from the support face');
+    // ---- 180-degree hairpin returns
+    p = P();
+    p.beam.topHook = '180'; p.beam.botHook = 'none';
+    pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    const hp = pv.paths.filter(q => q.dia === 0.014 && q.pts.length > 2);
+    ok(hp.length === 2, 'hairpins on both top bars');
+    for (const q of hp) {
+      near(Math.min(...q.pts.map(w => w.z)), 3.455 - 7 * 0.014, 3e-3, 'return leg 7 db toward the core (6 db inside dia)');
+      ok(q.pts.some(w => w.x < 0.4 + 1e-6 && w.x > 0.3), `return runs ~0.4 m back (x=${Math.min(...q.pts.map(w => w.x)).toFixed(3)})`);
+    }
+    // ---- curtailed extras: top Ln/4 at the supports, bottom Ln/8 short
+    p = P();
+    p.beam.topHook = 'none'; p.beam.topExtra = 2; p.beam.topCut = 0.25;
+    p.beam.botExtra = 1; p.beam.botCut = 0.125;
+    pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    const Ln = 4 - 0.1;
+    const zTop = 3.455, zBot = 3.046;
+    const topCut = pv.paths.filter(q => q.dia === 0.014 && Math.abs(q.pts[0].z - zTop) < 1e-3
+      && Math.max(...q.pts.map(w => w.x)) - Math.min(...q.pts.map(w => w.x)) < Ln * 0.26 + 0.02);
+    ok(topCut.length >= 2, `${topCut.length} curtailed top bars (Ln/4 end segments)`);
+    for (const q of topCut) {
+      const x0 = Math.min(...q.pts.map(w => w.x)), x1 = Math.max(...q.pts.map(w => w.x));
+      const left = x0 < 0.1, right = x1 > 3.9;
+      ok(left || right, 'curtailed top bar hugs a support face');
+      near(left ? x0 : 4 - x1, 0.05, 2e-3, 'outer end at the end cover');
+    }
+    const botMid = pv.paths.filter(q => q.dia === 0.016 && q.pts.length === 2
+      && Math.abs(q.pts[0].z - zBot) < 1e-3
+      && Math.min(...q.pts.map(w => w.x)) > 0.5 && Math.max(...q.pts.map(w => w.x)) < 3.5);
+    ok(botMid.length >= 1, 'bottom extra stopped short of both supports');
+    for (const q of botMid) {
+      near(Math.min(...q.pts.map(w => w.x)), 0.05 + Ln / 8, 4e-3, 'bottom extra cut at Ln/8');
+      near(4 - Math.max(...q.pts.map(w => w.x)), 0.05 + Ln / 8, 4e-3, 'mirrored at the far face');
+    }
+    // ---- second layer when the primary cannot host the extras
+    // (6 extras on the 0.3 m web: 13.7 mm gaps < max(db, 25 mm))
+    p = P();
+    p.beam.topHook = 'none'; p.beam.topExtra = 6;
+    pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    const layer2 = pv.paths.filter(q => q.dia === 0.014
+      && Math.abs(Math.min(...q.pts.map(w => w.z)) - (zTop - (0.014 + 0.025))) < 2e-3);
+    ok(layer2.length >= 3, `${layer2.length} extras in a second layer 25 mm clear below`);
+    // ---- cranked (bent-up) bars
+    p = P();
+    p.beam.crank = 2; p.beam.crankAt = 1 / 6;
+    pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    const cranked = pv.paths.filter(q => q.pts.length > 6
+      && Math.abs(Math.max(...q.pts.map(w => w.z)) - zTop) < 2e-3);
+    ok(cranked.length === 2, `${cranked.length} bent-up bars`);
+    for (const q of cranked) {
+      // hooks DOWN at both ends at the top elevation
+      near(q.pts[0].z, zTop - (12 + 3.5) * 0.016, 3e-3, 'crank end hooks 12 db down');
+      near(q.pts[q.pts.length - 1].z, zTop - (12 + 3.5) * 0.016, 3e-3, 'crank far hook 12 db down');
+      // 45-degree diagonal between the rows, starting ~Ln/6 from the face
+      const diag = q.pts.find(w => w.z > zBot + 0.05 && w.z < zTop - 0.05 && w.x > 0.5 && w.x < 1.3);
+      ok(diag, 'diagonal rises between the rows');
+      if (diag) ok(diag.x > 0.05 + Ln / 6 - 0.42 && diag.x < 0.05 + Ln / 6 + 0.42, 'crank starts near Ln/6');
+      const xm = 0.05 + (4 - 0.1) / 2 + 0.05;
+      near((Math.min(...q.pts.map(w => w.x)) + Math.max(...q.pts.map(w => w.x))) / 2, 2, 0.05,
+        'bent-up bar symmetric about midspan');
+    }
+    // ---- stirrup laps alternate along the top corners
+    p = P();
+    p.beam.mode = 'amount'; p.beam.value = 4; p.beam.seismic = false;
+    pv = ER.previewElementRebar(m, faceAtZ(m, 3.0), p, [ent]);
+    const ties = pv.paths.filter(q => q.dia === 0.008 && q.pts.length > 2);
+    ok(ties.length === 4, '4 ties');
+    const lapY = ties.map(q => q.pts[0].y);
+    ok(lapY[0] * lapY[1] < 0 && lapY[1] * lapY[2] < 0,
+      `lap corners alternate (${lapY.map(v => v.toFixed(3)).join(', ')})`);
+  });
+
   test('beam multi-leg (ACI 300 mm): wide beams get inner hoops, narrow do not', () => {
     // narrow 0.3 beam: clear between legs ~0.224 m - no hoops
     const N = m2Beam(0.3);
