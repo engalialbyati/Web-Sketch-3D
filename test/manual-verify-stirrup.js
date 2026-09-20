@@ -67,8 +67,8 @@ const check = (name, cond, extra = '') => {
   check('cage built', st.ties >= 4 && st.bars === 4 && st.rebarFaces > 50,
     `${st.rebarFaces} rebar faces`);
   const r = 0.004, Rk = 0.012, L = 8 * 0.008; // tie r, mandrel R (auto 1.5×dia), tail
-  check('pts[1] is the sharp hook corner on both cover lines',
-    Math.abs(st.corner.u - (0.15 - 0.15 + 0.03 + r)) < 1e-9 && Math.abs(st.corner.v - (0.15 + 0.15 - 0.03 - r)) < 1e-9,
+  check('pts[1] is the lap point T on the top edge (arc + R in)',
+    Math.abs(st.corner.u - (0.15 - 0.15 + 0.03 + r + Rk)) < 1e-9 && Math.abs(st.corner.v - (0.15 + 0.15 - 0.03 - r)) < 1e-9,
     `corner at (${st.corner.u.toFixed(4)}, ${st.corner.v.toFixed(4)})`);
   const diag = Math.hypot(st.startTail.du, st.startTail.dv);
   check('start tail anchors AT the corner, diving 135° into the core',

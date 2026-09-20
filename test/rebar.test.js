@@ -97,15 +97,23 @@ module.exports = h => {
     near(Math.max(...us), fr.u1 - 0.04 - r, 2e-3, 'right leg at cover');
     near(Math.min(...vs), fr.v0 + 0.04 + r, 2e-3, 'bottom leg at cover');
     near(Math.max(...vs), fr.v1 - 0.04 - r, 2e-3, 'top leg at cover');
-    // the SHARP hook corner (FreeCAD p1) sits exactly on both cover lines —
-    // both hook tails anchor there as one compact seismic hook
-    const corner = pts.find(q => Math.abs(G.dot(q, fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
-      && Math.abs(G.dot(q, fr.v) - (fr.v1 - 0.04 - r)) < 1e-6);
-    ok(corner, 'hook corner A sits on both cover lines');
-    // left leg runs straight from that corner down to the bottom-left arc
-    const legIdx = pts.indexOf(corner);
-    ok(legIdx > 0 && Math.abs(G.dot(pts[legIdx + 1], fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
-      && G.dot(pts[legIdx + 1], fr.v) < G.dot(corner, fr.v), 'left leg runs down the cover line');
+    // ALL FOUR corners are rounded: the top-left (hook) arc's points sit
+    // at the mandrel radius Rk from its center (A + (1,-1)*Rk)
+    const ctrU = fr.u0 + 0.04 + r + Rk, ctrV = fr.v1 - 0.04 - r - Rk;
+    const onArc = pts.filter(q => G.dot(q, fr.u) < ctrU && G.dot(q, fr.v) > ctrV)
+      .some(q => Math.abs(Math.hypot(G.dot(q, fr.u) - ctrU, G.dot(q, fr.v) - ctrV) - Rk) < 2e-3);
+    ok(onArc, 'hook corner is a nesting arc like the other three');
+    // with the AUTO rounding for a 16 mm main bar the arc center lands on
+    // the corner bar's axis (cover + tie dia + bar r from each face)
+    const auto = R.stirrupPath(fr, { ...p, rounding: (0.008 / 2 + 0.016 / 2) / 0.008 });
+    const aU = fr.u0 + 0.04 + 0.008 + 0.008, aV = fr.v1 - 0.04 - 0.008 - 0.008;
+    ok(auto.filter(q => q.x < aU && q.y > aV)
+      .some(q => Math.abs(Math.hypot(G.dot(q, fr.u) - aU, G.dot(q, fr.v) - aV) - 0.012) < 2e-3),
+      'auto rounding wraps the corner longitudinal bar axis');
+    // the left leg continues below the arc at the cover line
+    const leg = pts.find(q => Math.abs(G.dot(q, fr.u) - (fr.u0 + 0.04 + r)) < 1e-6
+      && G.dot(q, fr.v) < ctrV - 1e-3);
+    ok(leg, 'left leg runs down the cover line below the arc');
     // hooks: the two extreme hook ends must sit INSIDE the cover ring (core
     // side), diving from the corner along the SAME inward diagonal (the lap)
     const first = pts[0], last = pts[pts.length - 1];
