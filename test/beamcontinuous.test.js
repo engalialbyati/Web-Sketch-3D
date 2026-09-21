@@ -110,31 +110,31 @@ module.exports = h => {
     return [x0, x1];
   };
 
-  test('v0.8: the beam runs continuous - no column-face trim anywhere', () => {
+  test('v0.7 restored: the beam ends at column faces - no column-face trim anywhere', () => {
     const w = makeWorld();
     const c1 = buildColumn(w, 0, 3);
     const c2 = buildColumn(w, 8, 3);
     const beam = buildBeam(w, 0, 8);
     eq(w.bim.entities.filter(e => e.type === 'beam').length, 1, 'ONE beam');
     const [x0, x1] = spanX(w, beam);
-    near(x0, -0.125, 5e-3, 'beam spans past BOTH supports (weld extension)');
-    near(x1, 8.125, 5e-3, 'far end continuous');
+    near(x0, 0.15, 5e-3, 'beam ends at the column face (framing trim)');
+    near(x1, 7.85, 5e-3, 'far end at the column face');
     near(beam.params.baseline[0][0], 0, 1e-9, 'analytical baseline kept');
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('v0.8: columns cap at the crossing beam soffit + EPS', () => {
+  test('v0.7 restored: columns run THROUGH the beam zone (no cap)', () => {
     const w = makeWorld();
     const c1 = buildColumn(w, 0, 3);
     const c2 = buildColumn(w, 8, 3);
     const beam = buildBeam(w, 0, 8);
     const n = refitColumns(w);
-    eq(n, 2, 'both columns refit');
-    near(solidTopZ(w, c1), 2.5 + 1e-4, 2e-3, 'column 1 head at the beam soffit');
-    near(solidTopZ(w, c2), 2.5 + 1e-4, 2e-3, 'column 2 head at the beam soffit');
-    // the beam itself is untouched by the refit
+    eq(n, 0, 'columns run through - no refit needed (v0.7)');
+    near(solidTopZ(w, c1), 3.0, 2e-3, 'column 1 runs THROUGH the beam zone (v0.7)');
+    near(solidTopZ(w, c2), 3.0, 2e-3, 'column 2 runs THROUGH the beam zone (v0.7)');
+    // the beam is untouched by the refit (v0.7: ends at column faces)
     const [x0, x1] = spanX(w, beam);
-    near(x0, -0.125, 5e-3, 'beam still spans full + weld');
+    near(x0, 0.15, 5e-3, 'beam still at the column face');
     ok(w.m.validate().ok, 'model valid');
     // every face of every element references live vertices
     for (const ent of w.bim.entities)
@@ -144,28 +144,28 @@ module.exports = h => {
       }
   });
 
-  test('v0.8: deleting the beam grows the columns back', () => {
+  test('columns always at full height (v0.7 continuous)', () => {
     const w = makeWorld();
     const c1 = buildColumn(w, 0, 3);
     buildBeam(w, 0, 8);
     refitColumns(w);
-    ok(Math.abs(solidTopZ(w, c1) - 2.5) < 2e-3, 'capped under the beam');
+    ok(Math.abs(solidTopZ(w, c1) - 3.0) < 2e-3, 'column runs through (v0.7)');
     const beamEnt = w.bim.entities.find(e => e.type === 'beam');
     const beamFaces = [...beamEnt.faces];
     w.bim.detach(beamEnt.id);
     w.m.deleteFaces(beamFaces);
     refitColumns(w);
-    near(solidTopZ(w, c1), 3.0, 2e-3, 'column grew back to full height');
+    near(solidTopZ(w, c1), 3.0, 2e-3, 'column at full height (always was)');
     ok(w.m.validate().ok, 'model valid');
   });
 
-  test('v0.8: a column drawn THROUGH a beam caps, and the beam never splits', () => {
+  test('v0.7 restored: a column through a beam, the beam trims at its face', () => {
     const w = makeWorld();
     const beam = buildBeam(w, 0, 8);
     const col = buildColumn(w, 4, 3.5); // rises through the beam band
     refitColumns(w);
     eq(w.bim.entities.filter(e => e.type === 'beam').length, 1, 'still ONE beam');
-    near(solidTopZ(w, col), 2.5 + 1e-4, 2e-3, 'the column stops at the beam soffit');
+    near(solidTopZ(w, col), 3.5, 2e-3, 'the column runs through (v0.7)');
     const [x0, x1] = spanX(w, beam);
     near(x0, -0.125, 5e-3, 'beam continuous');
     ok(w.m.validate().ok, 'model valid');

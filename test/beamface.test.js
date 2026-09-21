@@ -144,7 +144,7 @@ module.exports = h => {
     const beams = w.bim.entities.filter(e => e.type === 'beam');
     eq(beams.length, 1, 'still ONE beam');
     const xs = beamXs(w, beams[0]);
-    near(xs[0], -0.125, 5e-3, 'beam runs CONTINUOUS through the joint (v0.8: no column-face trim)');
+    near(xs[0], 0.15, 5e-3, 'end lands on the column face (framing trim)');
     ok(w.m.validate().ok, 'model valid');
   });
 
