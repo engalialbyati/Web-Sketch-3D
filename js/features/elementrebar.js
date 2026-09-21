@@ -382,14 +382,20 @@
         }
       }
     }
-    // skin bars: per side, stacked between the top and bottom rows
-    if (q.skin > 0 && q.skinDia > 0) {
+    // skin bars (ACI 9.7.2.3): AUTO when d > 0.9 m (36 in.) - both
+    // faces over h/2 from the tension face at <= 0.25 m - plus any manual
+    // count the user set
+    const hSecBeam = Math.abs(fr.v1 - fr.v0);
+    const dEffBeam = hSecBeam - q.bot - (q.botDia || 0) / 2;
+    const skinAuto = dEffBeam > 0.9 ? Math.max(2, Math.ceil(Math.min(hSecBeam, 0.9) / 2 / 0.25)) : 0;
+    const skinN = Math.max(Math.round(q.skin || 0), skinAuto);
+    if (skinN > 0 && q.skinDia > 0) {
       const sides = [fr.u0 + q.side + tie + q.skinDia / 2, fr.u1 - q.side + 0 - tie - q.skinDia / 2];
       const gap = q.topDia / 2 + q.skinDia;
       const vHi = Math.max(vTopBar + gap, vBotBar - q.botDia / 2 - q.skinDia / 2);
       const vLo = Math.min(vTopBar + gap, vBotBar - q.botDia / 2 - q.skinDia / 2);
       for (const su of sides)
-        for (const vv of spread(Math.round(q.skin), vLo, vHi)) {
+        for (const vv of spread(skinN, vLo, vHi)) {
           const P0 = fr.map(su, vv);
           add([G.sub(P0, G.mul(fr.n, zA)), G.sub(P0, G.mul(fr.n, zB))], q.skinDia,
             { shape: 'straight', count: 1 });
@@ -431,6 +437,20 @@
     const zTop = fr.map((fr.u0 + fr.u1) / 2, (fr.v0 + fr.v1) / 2).z;
 
     let ties = 0, bars = 0;
+    // ACI Ch.13 footing minimum steel: As >= 0.0018 Ag per direction and
+    // s <= min(3h, 450 mm) - h = the pad thickness
+    {
+      const fT = Math.max(0.02, fr.depth);
+      const sCap = Math.min(3 * fT, 0.45);
+      if (q.xMode === 'spacing') q.xValue = Math.max(0.03, Math.min(q.xValue, sCap));
+      if (q.yMode === 'spacing') q.yValue = Math.max(0.03, Math.min(q.yValue, sCap));
+      const needPerM = 0.0018 * fT;
+      const aBar = d2 => Math.PI * d2 * d2 / 4;
+      if (q.xMode === 'spacing' && aBar(q.xDia) / q.xValue < needPerM)
+        q.xValue = Math.max(0.03, aBar(q.xDia) / needPerM);
+      if (q.yMode === 'spacing' && aBar(q.yDia) / q.yValue < needPerM)
+        q.yValue = Math.max(0.03, aBar(q.yDia) / needPerM);
+    }
     // ---- two-way bottom mesh: lower layer at the cover, upper resting on it
     // (depths measured from the BOTTOM — the frame hangs from the pad top)
     const spanU = fr.u1 - fr.u0, spanV = fr.v1 - fr.v0;
@@ -544,6 +564,25 @@
           bars++;
         }
     };
+    // ACI 7.6.1 / 8.6.1: As >= 0.0018 Ag per direction and
+    // s <= min(3h, 450 mm); thickness from the entity's own geometry
+    let zb = zTop;
+    for (const fid of (ent.faces || [])) {
+      const f2 = m.faces.get(fid);
+      if (!f2) continue;
+      const c2 = m.faceCentroid(f2);
+      if (c2 && c2.z < zb) zb = c2.z;
+    }
+    const slabT = Math.max(0.02, zTop - zb);
+    const sCap = Math.min(3 * slabT, 0.45);
+    q.xSpacing = Math.max(0.03, Math.min(q.xSpacing || 0.2, sCap));
+    q.ySpacing = Math.max(0.03, Math.min(q.ySpacing || 0.2, sCap));
+    const needPerM = 0.0018 * slabT; // steel area per metre of width
+    const aBar = d2 => Math.PI * d2 * d2 / 4;
+    if (aBar(q.yDia) / q.ySpacing < needPerM)
+      q.ySpacing = Math.max(0.03, aBar(q.yDia) / needPerM);
+    if (aBar(q.xDia) / q.xSpacing < needPerM)
+      q.xSpacing = Math.max(0.03, aBar(q.xDia) / needPerM);
     // bottom mesh: Y layer on the cover, X layer resting on it
     alongY(q.yDia, zTop - (q.bottom + q.yDia / 2), q.ySpacing);
     alongX(q.xDia, zTop - (q.bottom + q.yDia + q.xDia / 2), q.xSpacing);

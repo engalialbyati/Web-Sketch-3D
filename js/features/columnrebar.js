@@ -323,9 +323,19 @@
         for (const { pts } of pv.paths.slice(0, 400))
           app.view.previewLoop(pts, window.Rebar.REBAR_COLOR);
         const info = el('cr-info');
-        if (info) info.textContent = pv.error
-          ? pv.error
-          : `${pv.ties} ties + ${pv.bars} main bars (${pv.paths.length} bars total)`;
+        if (info) {
+          // ACI 10.6.1: 0.01 Ag <= rho <= 0.08 Ag - straight mains are the steel
+          const F2 = window.Rebar.faceFrame(app.model, this.fid);
+          const Ag = Math.abs((F2.u1 - F2.u0) * (F2.v1 - F2.v0));
+          let As = 0;
+          for (const q of pv.paths)
+            if (q.pts.length === 2 && q.dia >= 0.01) As += Math.PI * q.dia * q.dia / 4;
+          const rho = Ag > 0 ? As / Ag : 0;
+          const band = rho >= 0.01 - 1e-9 && rho <= 0.08 + 1e-9;
+          info.textContent = pv.error ? pv.error
+            : `${pv.ties} ties + ${pv.bars} main bars (${pv.paths.length} total) — ρ = ${(rho * 100).toFixed(2)}% Ag ${band ? '(ACI 10.6.1 OK)' : '(OUTSIDE 1%–8%!)'}`;
+          info.style.color = pv.error || !band ? 'var(--bad,#c33)' : '';
+        }
       };
       app._onDialogClose = () => {
         app.view.clearPreview(); app.view.setHoverFace(null);
