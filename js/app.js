@@ -1381,7 +1381,10 @@ class BimEntityManager {
       this._wipeEdges(ent.edges);
       m.gc();
       m.reapOrphanEdges(); // corpses poison the next split cascade
+      // LOOSE faces (rebar tubes) own private edges by construction -
+      // repairing them was O(model) per rebuild on caged models
       for (const f2 of m.faces.values()) {
+        if (f2.loose) continue;
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
@@ -1530,7 +1533,10 @@ class BimEntityManager {
       }
       m.gc();
       m.reapOrphanEdges(); // corpses poison the next split cascade
+      // LOOSE faces (rebar tubes) own private edges by construction -
+      // repairing them was O(model) per rebuild on caged models
       for (const f2 of m.faces.values()) {
+        if (f2.loose) continue;
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
@@ -1842,7 +1848,10 @@ class BimEntityManager {
       this._wipeEdges(ent.edges);
       m.gc();
       m.reapOrphanEdges(); // corpses poison the next split cascade
+      // LOOSE faces (rebar tubes) own private edges by construction -
+      // repairing them was O(model) per rebuild on caged models
       for (const f2 of m.faces.values()) {
+        if (f2.loose) continue;
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
@@ -2047,7 +2056,10 @@ class BimEntityManager {
       }
       m.gc();
       m.reapOrphanEdges(); // corpses poison the next split cascade
+      // LOOSE faces (rebar tubes) own private edges by construction -
+      // repairing them was O(model) per rebuild on caged models
       for (const f2 of m.faces.values()) {
+        if (f2.loose) continue;
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
@@ -2448,7 +2460,10 @@ class BimEntityManager {
       m.gc();
       // deleting recorded edges can take edges shared with touching geometry —
       // recreate any ring edge a surviving face still needs
+      // LOOSE faces (rebar tubes) own private edges by construction -
+      // repairing them was O(model) per rebuild on caged models
       for (const f2 of m.faces.values()) {
+        if (f2.loose) continue;
         m.edgesForRing(f2.loop, true);
         for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
       }
@@ -8731,6 +8746,7 @@ class App {
     // vertex pairs with no edge (validate flags "ring pair has no edge" and
     // the hole reads as a torn face). edgesForRing is idempotent.
     for (const f of this.model.faces.values()) {
+      if (f.loose) continue; // rebar: private edges, skip the O(model) repair
       this.model.edgesForRing(f.loop, true);
       for (const h of (f.holes || [])) this.model.edgesForRing(h, true);
     }

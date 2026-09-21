@@ -849,6 +849,13 @@
      *  kernel, so the solid welds into adjacent columns / walls / slabs.
      *  Returns the created face ids. */
     buildBeam(G, model, p, pending) {
+      // SELF-BRACKET: BIM builders sweep element-island semantics whoever
+      // calls them - a scripted app.run WITHOUT bimHold once dropped the
+      // sweep into free-mode intersection with coplanar column tops (an
+      // unbounded degenerate cascade). The tools always bracket; builders too.
+      
+      model.bimHold = true;
+      try {
       const A0 = p.baseline[0], B0 = p.baseline[p.baseline.length - 1];
       const d = G.norm(G.v(B0[0] - A0[0], B0[1] - A0[1], 0));
       if (G.isZero(d)) throw new Error('beam baseline is degenerate');
@@ -897,6 +904,7 @@
       const dist = (G.dot(n, d) >= 0 ? 1 : -1) * L;
       if (!model.pushPull(f, dist)) throw new Error('beam sweep failed');
       return [...model.faces.keys()].filter(id => !before.has(id)).map(id => model.faces.get(id));
+      } finally { model.bimHold = false; }
     }
     /** Role-classify beam faces against the section: caps perpendicular to
      *  the baseline; sides split into flange / web by height. */
@@ -928,6 +936,9 @@
      *  and drop the partitions so the union is one clean closed shell
      *  (Column > Slab precedence: no duplicate volume, no internal faces). */
     buildColumn(G, model, p) {
+      
+      model.bimHold = true;
+      try {
       const fam = root.ColumnFamilies && root.ColumnFamilies.get(p.family);
       if (fam) return this._buildFamilyColumn(G, model, p);
       const b = this.columnBounds(p);
@@ -968,8 +979,8 @@
         if (cap && !created.includes(cap)) created.push(cap);
       }
       return created;
-    }
-    /** Family column (columnFamilies.js): the silhouette is a stack of plan
+      } finally { model.bimHold = false; }
+    }    /** Family column (columnFamilies.js): the silhouette is a stack of plan
      *  rings over z bands. Segments build TOP-DOWN — each is a ring at its
      *  top plane pushed to its floor — so the topmost tier runs the same
      *  slab pass-through / lining cleanup as the plain prism (Column > Slab
