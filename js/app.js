@@ -2295,7 +2295,7 @@ class BimEntityManager {
     try {
       made = window.ColumnFeature
         ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0,
-          { bimEntityId: id, bimType: 'column' }, null, [+p.offsetX || 0, +p.offsetY || 0])
+          { bimEntityId: id, bimType: 'column' }, [+p.offsetX || 0, +p.offsetY || 0])
         : [];
     } catch (e) { m.bimHold = false; return false; }
     if (!made || !made.length) { m.bimHold = false; return false; }
@@ -7435,6 +7435,10 @@ class App {
     if (p.fixed) return [];
     const num = (key, label, step) => (p[key] != null
       ? { key, label, kind: 'number', step, value: +(+p[key]).toFixed(4) } : null);
+    // offset fields ALWAYS render (default 0) - the num() 'exists' gate
+    // hid them on fresh elements, which read as 'offset not working'
+    const num0 = (key, label, step) =>
+      ({ key, label, kind: 'number', step, value: +(+p[key] || 0).toFixed(4) });
     const rot = { key: 'rotation', label: 'Rotation °', kind: 'number', step: 1,
       value: +(((p.rotation || 0) * 180 / Math.PI).toFixed(1)) };
     const loc = (p.locationLine != null
@@ -7458,9 +7462,9 @@ class App {
           value: String(Array.isArray(p.layers) && p.layers.length
             ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
             : '') }]; break;
-      case 'column': list = [num('offsetX', 'Offset X m', 0.005), num('offsetY', 'Offset Y m', 0.005), num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
+      case 'column': list = [num0('offsetX', 'Offset X m', 0.005), num0('offsetY', 'Offset Y m', 0.005), num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
         !constrained ? num('height', 'Height m', 0.05) : null, topSel, rot]; break;
-      case 'beam': list = [num('offsetLateral', 'Offset lateral m', 0.005), num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05),
+      case 'beam': list = [num0('offsetLateral', 'Offset lateral m', 0.005), num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05),
         p.locationLine != null ? { key: 'locationLine', label: 'Location Line', kind: 'select',
           value: p.locationLine || 'center',
           options: [['center', 'Center'], ['left', 'Left Face'], ['right', 'Right Face']] } : null]; break;
@@ -7821,7 +7825,10 @@ class App {
         inp.addEventListener('change', () => {
           const key = inp.dataset.pf;
           const v = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
-          if (inp.type === 'number' && (!isFinite(v) || v < 0 || (key !== 'sillHeight' && v <= 0))) return;
+          // offsets are SIGNED displacements (+/-): only the >= 0 gate is waived
+          const signedKey = /^(offset|offsetLateral)/.test(key);
+          if (inp.type === 'number' && (!isFinite(v) || (v < 0 && !signedKey)
+            || (v <= 0 && !signedKey && key !== 'sillHeight'))) return;
           const ok = this.transaction.run('edit element params', () => {
             if (!this._applyBimParam(ent, key, v)) throw new Error('regeneration failed');
             return true;
