@@ -178,6 +178,59 @@
     return rounded.map(q => fr.map(q.a, q.b));
   }
 
+/** U-shape: three legs inset by covers, open toward the chosen
+ *  orientation (FreeCAD UShapeRebar). Corners rounded on the mandrel. */
+  function ushapePath(fr, p) {
+    const r = p.dia / 2;
+    const L = fr.u0 + p.l + r, R = fr.u1 - p.r - r;
+    const B = fr.v0 + p.b + r, T = fr.v1 - p.t - r;
+    const P2 = {
+      Bottom: [[L, T], [L, B], [R, B], [R, T]],
+      Top: [[L, B], [L, T], [R, T], [R, B]],
+      Left: [[R, T], [L, T], [L, B], [R, B]],
+      Right: [[L, T], [R, T], [R, B], [L, B]],
+    }[p.orientation] || [[L, T], [L, B], [R, B], [R, T]];
+    const rounded = roundedPath(P2.map(([a, b]) => ({ a, b })), (p.rounding || 0) * p.dia);
+    return rounded.map(q => fr.map(q.a, q.b));
+  }
+
+  /** Bent-shape: the classic zigzag - horizontal legs at both ends,
+ *  diagonal ramps across the middle (FreeCAD BentShapeRebar; the ramp
+ *  shift dis = clear * tan(angle - 90)). */
+  function bentPath(fr, p) {
+    const r = p.dia / 2;
+    const L = fr.u0 + p.l + r, R = fr.u1 - p.r - r;
+    const B = fr.v0 + p.b + r, T = fr.v1 - p.t - r;
+    const bl = p.bentLength || 0.1;
+    const ang = (p.bentAngle || 135) * Math.PI / 180;
+    const dis = Math.max(0, (T - B) * Math.tan(ang - Math.PI / 2));
+    const P2 = {
+      Bottom: [[L, T], [L + bl, T], [L + bl + dis, B], [R - bl - dis, B], [R - bl, T], [R, T]],
+      Top: [[L, B], [L + bl, B], [L + bl + dis, T], [R - bl - dis, T], [R - bl, B], [R, B]],
+    }[p.orientation] || [];
+    const rounded = roundedPath(P2.map(([a, b]) => ({ a, b })), (p.rounding || 0) * p.dia);
+    return rounded.map(q => fr.map(q.a, q.b));
+  }
+
+  /** Helical bar: a constant-radius helix down the host axis from the
+ *  picked face (FreeCAD HelicalRebar). */
+  function helicalPath(fr, p) {
+    const r = p.dia / 2;
+    const cu = (fr.u0 + fr.u1) / 2, cv = (fr.v0 + fr.v1) / 2;
+    const Rc = Math.max(0.02, Math.min(fr.u1 - fr.u0, fr.v1 - fr.v0) / 2 - p.side - r);
+    const size = Math.max(0.05, fr.depth - p.t - p.b);
+    const pitch = Math.max(0.01, p.pitch || 0.1);
+    const turns = size / pitch;
+    const n = Math.min(4000, Math.max(48, Math.ceil(turns * 24)));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const a = i / n * turns * 2 * Math.PI;
+      const q = fr.map(cu + Rc * Math.cos(a), cv + Rc * Math.sin(a));
+      pts.push(G.sub(q, G.mul(fr.n, p.t + r + (i / n) * size)));
+    }
+    return pts;
+  }
+
   /** Stirrup (tie): a single continuous CLOSED rectangular loop inset by
    *  the four covers, all four corners rounded on nesting arcs that wrap
    *  the corner longitudinal bars (each bend center lands on the corner
@@ -263,6 +316,9 @@
     if (!fr) return { ids: [], count: 0 };
     const path = shape === 'stirrup' ? stirrupPath(fr, p)
       : shape === 'lshape' ? lshapePath(fr, p)
+        : shape === 'ushape' ? ushapePath(fr, p)
+        : shape === 'bent' ? bentPath(fr, p)
+        : shape === 'helical' ? helicalPath(fr, p)
         : straightPath(fr, p);
     if (!path || path.length < 2) return { ids: [], count: 0 };
     const dist = distribute(fr, p);
@@ -347,6 +403,9 @@
         app.view.clearPreview();
         if (!fr) return;
         const path = shape === 'stirrup' ? stirrupPath(fr, p)
+          : shape === 'ushape' ? ushapePath(fr, p)
+          : shape === 'bent' ? bentPath(fr, p)
+          : shape === 'helical' ? helicalPath(fr, p)
           : shape === 'lshape' ? lshapePath(fr, p) : straightPath(fr, p);
         const dist = distribute(fr, p);
         for (let i = 0; i < Math.min(dist.count, 200); i++) {
@@ -493,9 +552,100 @@
     info(p, d) { return `${d.count} stirrups ⌀${fmt(p.dia)} mm @ ${(d.spacing * 1000).toFixed(0)} mm`; }
   }
 
+  class UShapeRebarTool extends RebarTool {
+    static id = 'rebar-ushape';
+    static shape = 'ushape';
+    static title = 'U-Shape Rebar';
+    fields() {
+      return [['us-l', 'Left Cover', 0.04], ['us-r', 'Right Cover', 0.04],
+        ['us-t', 'Top Cover', 0.04], ['us-b', 'Bottom Cover', 0.04],
+        ['us-front', 'Front Cover', 0.04], ['us-dia', 'Diameter', 0.012]];
+    }
+    customFields() {
+      return `<div class="form-row"><label>Orientation</label>
+          <select id="us-ori" style="width:110px">
+            <option>Bottom</option><option>Top</option><option>Left</option><option>Right</option></select></div>
+        <div class="form-row"><label>Rounding (× dia)</label>
+          <input id="us-rnd" type="number" step="0.5" min="0" value="2" style="width:90px"></div>` +
+        amountSpacingCustom();
+    }
+    wireCustom(update) { el('us-ori').addEventListener('change', update);
+      el('us-rnd').addEventListener('input', update); wireAmountSpacing(update); }
+    readParams() {
+      return { orientation: el('us-ori').value, rounding: num('us-rnd'),
+        l: num('us-l'), r: num('us-r'), t: num('us-t'), b: num('us-b'),
+        front: num('us-front'), dia: num('us-dia'), ...readAmountSpacing() };
+    }
+  }
+
+  class BentShapeRebarTool extends RebarTool {
+    static id = 'rebar-bent';
+    static shape = 'bent';
+    static title = 'Bent-Shape Rebar';
+    fields() {
+      return [['bn-l', 'Left Cover', 0.04], ['bn-r', 'Right Cover', 0.04],
+        ['bn-t', 'Top Cover', 0.04], ['bn-b', 'Bottom Cover', 0.04],
+        ['bn-front', 'Front Cover', 0.04], ['bn-dia', 'Diameter', 0.012]];
+    }
+    customFields() {
+      return `<div class="form-row"><label>Orientation</label>
+          <select id="bn-ori" style="width:110px"><option>Bottom</option><option>Top</option></select></div>
+        <div class="form-row"><label>Bent Length m</label>
+          <input id="bn-bl" type="number" step="0.01" value="0.1" style="width:90px"></div>
+        <div class="form-row"><label>Bent Angle</label>
+          <select id="bn-ang" style="width:80px"><option>135</option><option>120</option><option>150</option></select></div>
+        <div class="form-row"><label>Rounding (× dia)</label>
+          <input id="bn-rnd" type="number" step="0.5" min="0" value="2" style="width:90px"></div>` +
+        amountSpacingCustom();
+    }
+    wireCustom(update) { ['bn-ori', 'bn-ang'].forEach(id2 => el(id2).addEventListener('change', update));
+      ['bn-bl', 'bn-rnd'].forEach(id2 => el(id2).addEventListener('input', update)); wireAmountSpacing(update); }
+    readParams() {
+      return { orientation: el('bn-ori').value, bentLength: num('bn-bl'),
+        bentAngle: parseInt(el('bn-ang').value, 10) || 135, rounding: num('bn-rnd'),
+        l: num('bn-l'), r: num('bn-r'), t: num('bn-t'), b: num('bn-b'),
+        front: num('bn-front'), dia: num('bn-dia'), ...readAmountSpacing() };
+    }
+  }
+
+  class HelicalRebarTool extends RebarTool {
+    static id = 'rebar-helical';
+    static shape = 'helical';
+    static title = 'Helical Rebar';
+    get hint() { return 'Helical Rebar: click the TOP or BOTTOM face of the host — the helix screws into it at the pitch.'; }
+    fields() { return []; }
+    customFields() {
+      return `<div class="form-row"><label>Side Cover</label>
+          <input id="hx-side" type="number" step="0.005" value="0.04" style="width:90px"> m</div>
+        <div class="form-row"><label>Top / Bottom Offset m</label>
+          <input id="hx-t" type="number" step="0.005" value="0.05" style="width:90px">
+          <input id="hx-b" type="number" step="0.005" value="0.05" style="width:90px"></div>
+        <div class="form-row"><label>Diameter m</label>
+          <input id="hx-dia" type="number" step="0.002" value="0.008" style="width:90px"></div>
+        <div class="form-row"><label>Pitch m</label>
+          <input id="hx-p" type="number" step="0.01" value="0.1" style="width:90px"></div>`;
+    }
+    wireCustom(update) { ['hx-side', 'hx-t', 'hx-b', 'hx-dia', 'hx-p'].forEach(id2 => el(id2).addEventListener('input', update)); }
+    readParams() {
+      return { side: num('hx-side'), t: num('hx-t'), b: num('hx-b'),
+        dia: num('hx-dia'), pitch: num('hx-p'), front: 0,
+        mode: 'amount', value: 1 };
+    }
+  }
+
+  // The BBS ribbon button: not a drawing tool - opens the schedule dialog.
+  class BbsTool extends Tool {
+    static id = 'rebar-bbs';
+    activate() {
+      this.app.bbsDialog();
+      this.app.setTool('select');
+    }
+    get hint() { return 'Bar Bending Schedule: every bar in the model with lengths and weights.'; }
+  }
+
   window.Rebar = {
-    StraightRebarTool, LShapeRebarTool, StirrupRebarTool,
-    faceFrame, straightPath, lshapePath, stirrupPath, distribute, buildRebars,
+    StraightRebarTool, LShapeRebarTool, StirrupRebarTool, UShapeRebarTool, BentShapeRebarTool, HelicalRebarTool, BbsTool,
+    faceFrame, straightPath, lshapePath, ushapePath, bentPath, helicalPath, stirrupPath, distribute, buildRebars,
     roundedPath, REBAR_COLOR,
   };
 })();

@@ -106,6 +106,10 @@ const ICONS = {
   'rebar-lshape': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M6 4v11a2 2 0 0 0 2 2h10"/><path d="M6 7.5l1.5.6M6 11l1.5.6M9.5 17l.6-1.5M13 17l.6-1.5" stroke-width="1.1"/></svg>',
   'rebar-stirrup': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M9 4v10a1.5 1.5 0 0 0 1.5 1.5H20"/><path d="M9 4l3.2-1.4M20 15.5l1.4-3.2" stroke-width="1.1"/></svg>',
   'rebar-column': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="3" width="12" height="18" rx="1"/><path d="M8 7h8M8 11h8M8 15h8M8 19h8" stroke-width="1.1"/><path d="M6 3l-2 2M18 3l2 2M6 21l-2-2M18 21l2-2" stroke-width="1.1"/></svg>',
+  'rebar-ushape': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3v13a2 2 0 0 0 2 2h8"/><path d="M17 3v13" opacity=".45"/></svg>',
+  'rebar-bent': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 6h4l8 12h4"/></svg>',
+  'rebar-helical': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 8c0-2 14-2 14 0s-14 4-14 6 14 4 14 6-14 2-14 0"/></svg>',
+  'rebar-bbs': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 8h8M8 12h8M8 16h5" stroke-width="1.2"/></svg>',
   'rebar-element': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="6" cy="4" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="18" cy="4" r="1.4"/><circle cx="6" cy="10" r="1.4"/><circle cx="18" cy="10" r="1.4"/><circle cx="6" cy="16" r="1.4"/><circle cx="12" cy="16" r="1.4"/><circle cx="18" cy="16" r="1.4"/><path d="M6 4v16M18 4v16" opacity=".6"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
   polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
@@ -265,6 +269,10 @@ const TOOL_DEFS = {
     { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
     { id: 'rebar-column', label: 'Column Reinforcement', key: '' },
     { id: 'rebar-element', label: 'Element Reinforcement', key: '' },
+    { id: 'rebar-ushape', label: 'U-Shape Rebar', key: '' },
+    { id: 'rebar-bent', label: 'Bent-Shape Rebar', key: '' },
+    { id: 'rebar-helical', label: 'Helical Rebar', key: '' },
+    { id: 'rebar-bbs', label: 'Bar Bending Schedule', key: '' },
   ],
 };
 
@@ -352,7 +360,8 @@ const RIBBON_TABS = {
   ] },
   detailing: { label: 'Detailing', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Rebar', tools: ['rebar-element', 'rebar-column', 'rebar-straight', 'rebar-lshape', 'rebar-stirrup'] },
+    { title: 'Rebar', tools: ['rebar-element', 'rebar-column', 'rebar-straight', 'rebar-lshape', 'rebar-stirrup', 'rebar-ushape', 'rebar-bent', 'rebar-helical'] },
+        { title: 'Schedule', tools: ['rebar-bbs'] },
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -4798,6 +4807,7 @@ class App {
       ]],
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
+        ['Bar Bending Schedule', 'bbsDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
@@ -5035,6 +5045,7 @@ class App {
       analyticalCsv: () => A.exportAnalyticalCsv(),
       trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
       propDlg: () => A.propertyDialog(),
+      bbsDlg: () => A.bbsDialog(),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
@@ -8010,6 +8021,68 @@ class App {
       return true;
     });
     if (ok2) this.selectElement(id);
+  }
+  // BAR BENDING SCHEDULE: every loose rebar in the model, aggregated by
+  // host + shape + diameter + bar length (the FreeCAD-Reinforcement BBS).
+  // Weight per metre: 0.006165 * d^2 kg/m (rho = 7850, d in mm).
+  bbsRows() {
+    const m = this.model;
+    const rows = new Map();
+    const seenBars = new Set(); // a bar's meta is stamped on EVERY face of its tube - count it once
+    for (const f of m.faces.values()) {
+      const rb = f.userData && f.userData.rebar;
+      if (!rb) continue;
+      const barKey = rb.pid != null ? 'p' + rb.pid : null;
+      if (barKey) { if (seenBars.has(barKey)) continue; seenBars.add(barKey); }
+      const diaMM = Math.round((rb.diameter || 0) * 1000);
+      const len = +(rb.length || 0).toFixed(3);
+      if (!diaMM || len <= 0) continue;
+      const cnt = Math.max(1, rb.count || 1);
+      const k = [rb.host || rb.shape || 'rebar', rb.shape || 'bar', diaMM, len].join('|');
+      const row = rows.get(k) || { host: rb.host || '', shape: rb.shape || 'bar', diaMM, len, bars: 0, sets: 0 };
+      row.bars += cnt; row.sets++;
+      rows.set(k, row);
+    }
+    return [...rows.values()].sort((a, b) => (a.host + a.shape).localeCompare(b.host + b.shape) || b.diaMM - a.diaMM);
+  }
+  bbsDialog() {
+    const rows = this.bbsRows();
+    if (!rows.length) { this.toast('No reinforcement in the model yet'); return; }
+    let totKg = 0, totBars = 0;
+    const trs = rows.map((r, i) => {
+      const kgM = 0.006165 * r.diaMM * r.diaMM;
+      const kg = kgM * r.len * r.bars;
+      totKg += kg; totBars += r.bars;
+      return `<tr><td>${i + 1}</td><td>${r.host}</td><td>${r.shape}</td><td>⌀${r.diaMM}</td>
+        <td>${r.bars}</td><td>${r.len.toFixed(3)}</td><td>${(r.len * r.bars).toFixed(1)}</td>
+        <td>${kgM.toFixed(3)}</td><td>${kg.toFixed(1)}</td></tr>`;
+    }).join('');
+    const csv = () => 'Mark,Host,Shape,Dia_mm,No,Length_m,Total_m,kg_per_m,Total_kg' +
+      rows.map((r, i) => [i + 1, r.host, r.shape, r.diaMM, r.bars, r.len.toFixed(3),
+        (r.len * r.bars).toFixed(1), (0.006165 * r.diaMM * r.diaMM).toFixed(3),
+        (0.006165 * r.diaMM * r.diaMM * r.len * r.bars).toFixed(1)].join(',')).join('\n');
+    this.dialog('Bar Bending Schedule', `
+      <div style="max-height:52vh;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="text-align:left;border-bottom:1px solid var(--line,#ccc)">
+          <th>#</th><th>Host</th><th>Shape</th><th>Dia</th><th>No.</th>
+          <th>Len m</th><th>Total m</th><th>kg/m</th><th>Total kg</th></tr>
+        ${trs}
+        <tr style="border-top:1px solid var(--line,#ccc);font-weight:600">
+          <td colspan="4">TOTAL</td><td>${totBars}</td><td></td><td></td><td></td><td>${totKg.toFixed(1)}</td></tr>
+      </table></div>
+      <p class="dim">Weight 0.006165·d² kg/m (d in mm). Rows aggregate by host + shape + dia + length.</p>`,
+      [['Close', null], ['Download CSV', () => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv()], { type: 'text/csv' }));
+        a.download = 'bar-bending-schedule.csv';
+        a.click();
+        return false;
+      }], ['Copy CSV', async () => {
+        try { await navigator.clipboard.writeText(csv()); this.toast('BBS copied to the clipboard'); }
+        catch (e) { this.toast('Clipboard blocked - use Download CSV', true); }
+        return false;
+      }]]);
   }
   _propRow(label, inner) {
     return `<div class="pp-row" style="display:flex;align-items:center;gap:6px;margin:2px 0">

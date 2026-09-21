@@ -3101,7 +3101,9 @@ class Model {
    *  standalone faces — rebar never welds into the host B-Rep, so editing or
    *  deleting concrete leaves bars untouched. Faces carry userData.rebar
    *  {shape, diameter, length, ...meta} for the future schedules. */
+  static _rebarSeq = 1;
   addRebarPath(pts, diameter, { color = null, ringSegs = 12, meta = null } = {}) {
+    this._rebarPid = (this.constructor._rebarSeq = (this.constructor._rebarSeq || 1) + 1) - 1;
     const P = [];
     for (const q of pts) {
       const c = G.clone(q);
@@ -3141,7 +3143,8 @@ class Model {
     for (const id of out) {
       const f = this.faces.get(id);
       if (!f) continue;
-      f.userData = { ...(f.userData || {}), rebar: { ...(meta || {}), diameter, length: +length.toFixed(6) } };
+      f.userData = { ...(f.userData || {}), rebar: { ...(meta || {}), diameter, length: +length.toFixed(6),
+        pid: this._rebarPid } };
       // edges carry the tag too: bulk selections (Ctrl+A) must not silently
       // grab rebar hidden inside concrete — deleting "the element" would
       // take the invisible cage with it

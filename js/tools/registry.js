@@ -17,6 +17,8 @@ const TOOLS = {
   edgeoffset: EdgeOffset.EdgeOffsetTool,
   'rebar-straight': Rebar.StraightRebarTool, 'rebar-lshape': Rebar.LShapeRebarTool,
   'rebar-stirrup': Rebar.StirrupRebarTool,
+  'rebar-ushape': Rebar.UShapeRebarTool, 'rebar-bent': Rebar.BentShapeRebarTool, 'rebar-helical': Rebar.HelicalRebarTool,
+  'rebar-bbs': Rebar.BbsTool,
   'rebar-column': ColumnRebar.ColumnRebarTool,
   'rebar-element': ElementRebar.ElementRebarTool,
   revolve: FreeTools.RevolveTool, followme: FreeTools.FollowMeTool,
