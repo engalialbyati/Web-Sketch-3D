@@ -38,9 +38,12 @@
     }
     _pt(ev) {
       const anchor = this.engine.stage === 1 ? this.engine.p1 : this.engine.chainStart;
-      const p = this.app.inferPoint(ev, anchor).p;
+      const inf = this.app.inferPoint(ev, anchor);
+      // show WHAT we snapped to (endpoint/midpoint/center) like the line tool
+      this.app.view.showSnapDot(
+        inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       const z = this.app.levelManager.getElevation(this.app.bimOptions.baseLevel);
-      return G.v(p.x, p.y, z);
+      return G.v(inf.p.x, inf.p.y, z);
     }
     _params(A, B) {
       const s = this.state || {};
@@ -54,6 +57,7 @@
         flangeWidth: Math.max(0.02, s.flangeWidth || 0.6),
         flangeThickness: Math.max(0.02, s.flangeThickness || 0.15),
         flangeSide: s.flangeSide === 'Left' ? 'Left' : 'Right',
+        locationLine: s.locationLine || 'center',
         baseline: [[A.x, A.y, A.z], [B.x, B.y, B.z]],
       };
     }
@@ -143,6 +147,7 @@
         { key: 'flangeWidth', type: 'number', label: 'b_f', step: 0.05, default: 0.6 },
         { key: 'flangeThickness', type: 'number', label: 'h_f', step: 0.05, default: 0.15 },
         { key: 'flangeSide', type: 'select', label: 'Flange', choices: [{ value: 'Right', label: 'Right' }, { value: 'Left', label: 'Left' }] },
+        { key: 'locationLine', type: 'select', label: 'Loc Line', choices: [{ value: 'center', label: 'Center' }, { value: 'left', label: 'Left Face' }, { value: 'right', label: 'Right Face' }] },
       ],
       tool: BeamTool,
       state: { profile: 'rectangular', height: 0.5, webWidth: 0.25, flangeWidth: 0.6, flangeThickness: 0.15, flangeSide: 'Right' },

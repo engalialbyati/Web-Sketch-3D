@@ -108,6 +108,9 @@
       this._lastEv = ev;
       view.clearPreview();
       const inf = this.app.inferPoint(ev, null);
+      // show the active snap (endpoint/midpoint/face center) while placing
+      this.app.view.showSnapDot(
+        inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       const pl = this._placementRot(inf, inf.p, ev);
       const p = pl.p;
       const { params, bounds } = this._boundsAt(p, inf.kind);

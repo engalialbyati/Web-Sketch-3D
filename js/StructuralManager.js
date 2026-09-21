@@ -767,7 +767,11 @@
       const n = G.v(-d.y, d.x, 0);
       const b = this.beamBounds(p);
       const loop = BeamProfiles.for(p);
-      return loop.map(q => G.v(at[0] + n.x * q.u, at[1] + n.y * q.u, b.zBottom + q.v));
+      // Location Line: which line the drawn baseline rides on - the section
+      // center (default), or shifted so the left/right face sits on it
+      const wHalf = (BeamProfiles.normalize(p).webWidth || 0.2) / 2;
+      const off = p.locationLine === 'left' ? -wHalf : p.locationLine === 'right' ? wHalf : 0;
+      return loop.map(q => G.v(at[0] + n.x * (q.u + off), at[1] + n.y * (q.u + off), b.zBottom + q.v));
     }
     /** Sweep the parametric profile along the baseline: a section face at the
      *  start (vertical plane) pushed along the baseline through the B-Rep

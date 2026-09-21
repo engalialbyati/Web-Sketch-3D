@@ -6541,6 +6541,18 @@ class App {
       };
       for (const [, p] of model.vertices) addC(p, 'endpoint', 'Endpoint');
       for (const [, m] of model.curves) if (m.center) addC(m.center, 'center', 'Center');
+      // FACE CENTERS: horizontal faces of real elements (column tops,
+      // footings, slabs, wall caps) - the off-grid workflow anchor. Loose
+      // faces (rebar) and slivers stay out: they would blanket concrete
+      // with false centers
+      for (const [, f] of model.faces) {
+        if (f.loose || f.hidden || !f.loop || f.loop.length < 3) continue;
+        const n2 = G.loopNormal(model.pts(f.loop));
+        if (!n2 || Math.abs(n2.z) < 0.9) continue;
+        const a2 = Math.abs(G.loopArea(model.pts(f.loop)));
+        if (a2 < 0.005 || a2 > 400) continue;
+        addC(model.faceCentroid(f), 'center', 'Center');
+      }
       for (const e of model.edges.values()) {
         if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
@@ -7448,7 +7460,10 @@ class App {
             : '') }]; break;
       case 'column': list = [num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
         !constrained ? num('height', 'Height m', 0.05) : null, topSel, rot]; break;
-      case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05)]; break;
+      case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05),
+        p.locationLine != null ? { key: 'locationLine', label: 'Location Line', kind: 'select',
+          value: p.locationLine || 'center',
+          options: [['center', 'Center'], ['left', 'Left Face'], ['right', 'Right Face']] } : null]; break;
       case 'floor': case 'slab': list = [num('thickness', 'Thickness m', 0.01)]; break;
       case 'door': case 'window':
         list = [num('width', 'Width m', 0.05), num('height', 'Height m', 0.05), num('sillHeight', 'Sill m', 0.05)];
