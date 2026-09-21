@@ -2675,14 +2675,8 @@ class App {
     this.activeGroup = null; // gid being edited (double-click to enter)
     this.axesOn = true; this.gridOn = true; this.edgesOn = true;
     this.gridSnap = false; // F9: snap drawing points to the 1 m grid
-    this.shadowsOn = true; this.fogOn = true; this.xrayOn = false; this.pyEngineOn = false;
+    this.shadowsOn = true; this.fogOn = true; this.xrayOn = false;
     try { this.perfHudOn = !!localStorage.getItem('websketch3d.perfhud'); } catch (e) { this.perfHudOn = false; }
-    try {
-      this.pyEngineOn = localStorage.getItem('websketch3d.pyengine') === '1';
-      if (this.pyEngineOn && window.PyEngine) // wrapped at module load; just report
-        PyEngine.probe().then(s => { if (s.online && s.freecad)
-          this.toast('Python engine online - FreeCAD ' + (s.version || '') + ' builds the rebar'); });
-    } catch (e) { }
     if (this.perfHudOn && this.view) this.view.perfHud = true;
     this.faceStyle = 'shaded';
 
@@ -4806,7 +4800,6 @@ class App {
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
-        ['Python Engine (FreeCAD)', 'togglePyEngine', '', 'pyEngineOn'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
@@ -5094,20 +5087,6 @@ class App {
         A.toast('Performance HUD ' + (A.view.perfHud ? 'on — fps, draw calls, triangles' : 'off'));
       },
       toggleFog: () => { A.fogOn = !A.fogOn; A.view.setFog(A.fogOn); },
-      // Phase-1 python bridge: bars through the local FreeCAD engine when
-      // it is online; the JS engine remains the fallback
-      togglePyEngine: async () => {
-        const on = !A.pyEngineOn;
-        A.pyEngineOn = on;
-        if (!window.PyEngine) { A.toast('Python bridge module not loaded', true); return; }
-        PyEngine.setEnabled(on);
-        if (on) {
-          const s = await PyEngine.probe();
-          if (!s.online) A.toast('Python engine not reachable - run python/engine.py (using the JS engine)', true);
-          else if (!s.freecad) A.toast('Python engine online, FreeCAD not importable - see python/README.md (JS engine in use)', true);
-          else A.toast('Python engine online - FreeCAD ' + (s.version || '') + ' builds the rebar');
-        } else A.toast('Python engine off - using the built-in JS engine');
-      },
       toggleXray: () => { A.xrayOn = !A.xrayOn; A.view.setXray(A.xrayOn); },
       styleShaded: () => A.setFaceStyle('shaded'),
       styleMono: () => A.setFaceStyle('monochrome'),

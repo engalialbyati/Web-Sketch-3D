@@ -804,17 +804,12 @@ class Model {
 
   // ---------------------------------------------------------------- deletion
   deleteEdgeIds(ids) {
-    // curve expansion in ONE edge pass (curveEdges() per deleted edge was
-    // O(selected x edges) - bulk-deleting rebar froze the same way)
-    const want = new Set();
+    const full = new Set();
     for (const id of ids) {
       const e = this.edges.get(id); if (!e) continue;
-      want.add(id);
-      if (e.curveId) want.add(e.curveId);
+      if (e.curveId) this.curveEdges(e.curveId).forEach(x => full.add(x.id));
+      else full.add(id);
     }
-    const full = new Set();
-    for (const e of this.edges.values())
-      if (want.has(e.id) || (e.curveId && want.has(e.curveId))) full.add(e.id);
     for (const id of full) {
       const e = this.edges.get(id); if (!e) continue;
       this.dissolveEdge(e); // shares the healing kernel with the Trim tool
@@ -1297,13 +1292,9 @@ class Model {
       }).filter(h => h.length >= 3);
       if (new Set(f.loop).size < 3 || G.loopArea(this.pts(f.loop)) < 1e-10) this.faces.delete(id);
     }
-    // curves with no edges left - ONE census pass: loose rebar faces
-    // carry one chain each, and curveEdges() scans every edge, so the
-    // old per-curve sweep was O(curves x edges) and froze big cages
-    const liveCurves = new Set();
-    for (const e of this.edges.values()) if (e.curveId) liveCurves.add(e.curveId);
+    // curves with no edges left
     for (const cid of [...this.curves.keys()])
-      if (!liveCurves.has(cid)) this.curves.delete(cid);
+      if (!this.curveEdges(cid).length) this.curves.delete(cid);
     this.pruneGroups();
   }
 

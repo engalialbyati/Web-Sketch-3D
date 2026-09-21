@@ -300,14 +300,10 @@
         </div>
         <p class="dim" id="cr-info"></p>
         <p class="dim">Covers are to the bar surface. The cage is independent loose geometry — deleting the column keeps it.</p>`,
-        [['Cancel', null], ['Create', async () => {
+        [['Cancel', null], ['Create', () => {
           const p = this._read();
-          const fid0 = this.fid; // the dialog closes during the await
-          // python bridge: one batched mesh prefetch for the previewed cage
-          if (window.PyEngine && this._lastPaths)
-            await PyEngine.prefetch(this._lastPaths);
           const res = app.run('rebar column', m => {
-            const r = buildColumnCage(m, fid0, p);
+            const r = buildColumnCage(m, this.fid, p);
             if (r && r.ids && r.ids.length) m.createGroup({ faces: new Set(r.ids), edges: new Set() }, 'Rebar · column');
             return r;
           });
@@ -323,7 +319,6 @@
       const update = () => {
         const p = this._read();
         const pv = previewCage(app.model, this.fid, p);
-        this._lastPaths = pv.paths;
         app.view.clearPreview();
         for (const { pts } of pv.paths.slice(0, 400))
           app.view.previewLoop(pts, window.Rebar.REBAR_COLOR);

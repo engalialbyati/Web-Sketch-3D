@@ -745,14 +745,10 @@
         <p class="dim" id="er-info">Detected: ${typeName} <b>${ent.name || ent.id}</b></p>
         ${body}
         <p class="dim" id="er-count"></p>`,
-        [['Cancel', null], ['Create', async () => {
+        [['Cancel', null], ['Create', () => {
           const p = this._read(type);
-          const fid0 = this.fid, type0 = type; // the dialog closes during the await
-          // python bridge: one batched mesh prefetch for the previewed cage
-          if (window.PyEngine && this._lastPaths)
-            await PyEngine.prefetch(this._lastPaths);
           const res = app.run('rebar element', mm => {
-            const r = buildElementRebar(mm, fid0, p, app.bim.entities);
+            const r = buildElementRebar(mm, this.fid, p, app.bim.entities);
             const ids = [];
             if (r && r.ids && r.ids.length) ids.push(...r.ids);
             if (ids.length) mm.createGroup({ faces: new Set(ids), edges: new Set() }, `Rebar · ${typeName}`);
@@ -774,7 +770,6 @@
       const update = () => {
         const p = this._read(type);
         const pv = previewElementRebar(app.model, this.fid, p, app.bim.entities);
-        this._lastPaths = pv.paths;
         app.view.clearPreview();
         for (const { pts } of pv.paths.slice(0, 400))
           app.view.previewLoop(pts, window.Rebar.REBAR_COLOR);
