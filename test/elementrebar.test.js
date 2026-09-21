@@ -490,6 +490,6 @@ module.exports = h => {
     const f2 = box(m2, 0, 1, 0, 1, 0, 1);
     const wall = stamp(m2, f2, 'w1', 'wall', {});
     const r2 = ER.buildElementRebar(m2, f2[0], beamParams(), [wall]);
-    ok(/not reinforced/.test(r2.error), r2.error);
+    ok(/not reinforced|no base\/end/.test(r2.error), r2.error); // walls now have rebar - the error is structural
   });
 };

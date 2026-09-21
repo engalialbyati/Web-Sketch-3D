@@ -4822,7 +4822,8 @@ class App {
       ]],
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
-        ['Bar Bending Schedule', 'bbsDlg'],
+        ['Bar Bending Schedule', 'bbsDlg'],
+        ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
@@ -5060,7 +5061,8 @@ class App {
       analyticalCsv: () => A.exportAnalyticalCsv(),
       trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
       propDlg: () => A.propertyDialog(),
-      bbsDlg: () => A.bbsDialog(),
+      bbsDlg: () => A.bbsDialog(),
+      schedDlg: (t) => A.scheduleDialog(t),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
@@ -8059,6 +8061,115 @@ class App {
       rows.set(k, row);
     }
     return [...rows.values()].sort((a, b) => (a.host + a.shape).localeCompare(b.host + b.shape) || b.diaMM - a.diaMM);
+  }
+  // ELEMENT SCHEDULES (ACI 315-18 4.10, MNL-66): per-type schedule
+  // tables — the format structural drawings use. One row per element with
+  // its reinforcement summarized from the built cages.
+  scheduleRows(type) {
+    const m = this.model;
+    const rows = [];
+    const entRebar = new Map(); // entId -> {shape, dia, count, len}
+    for (const f of m.faces.values()) {
+      const rb = f.userData && f.userData.rebar;
+      if (!rb) continue;
+      const key = rb.host + '|' + rb.shape + '|' + Math.round((rb.diameter || 0) * 1000) + '|' + (rb.length || 0).toFixed(2);
+      if (!entRebar.has(key)) entRebar.set(key, { host: rb.host, shape: rb.shape,
+        diaMM: Math.round((rb.diameter || 0) * 1000), len: +(rb.length || 0).toFixed(2),
+        count: 0, pids: new Set() });
+      const row = entRebar.get(key);
+      row.count += Math.max(1, rb.count || 1);
+      if (rb.pid != null) row.pids.add(rb.pid);
+    }
+    // per-element summary from entity params + rebar aggregation
+    for (const ent of this.bim.entities) {
+      if (type && ent.type !== type) continue;
+      const pr = ent.params || {};
+      const myRebar = [...entRebar.values()].filter(r => {
+        if (!r.pids.size) return false;
+        // match by proximity is fragile; match by host type for now
+        return r.host === ent.type;
+      });
+      const mark = ent.type.toUpperCase().slice(0, 4) + '-' + (ent.id || '').replace(/[^0-9a-z]/gi, '').slice(-3);
+      switch (ent.type) {
+        case 'column': {
+          rows.push({ mark, size: (pr.width || 0.3) + 'x' + (pr.depth || 0.3),
+            vert: myRebar.filter(r => r.shape === 'straight').map(r => r.count + '#⌀' + r.diaMM).join('+') || '—',
+            ties: myRebar.filter(r => r.shape === 'stirrup').map(r => r.count + '#⌀' + r.diaMM).join('+') || '—',
+            notes: pr.height ? pr.height.toFixed(2) + 'm' : '' });
+          break;
+        }
+        case 'beam': {
+          const bl = pr.baseline || [[0],[0]];
+          const len = Math.hypot(bl[1][0] - bl[0][0], bl[1][1] - bl[0][1]);
+          rows.push({ mark, size: (pr.webWidth || 0.25) + 'x' + (pr.height || 0.5),
+            top: myRebar.filter(r => r.shape === 'hooked' || r.shape === 'straight').map(r => r.count + '#⌀' + r.diaMM).join('+').slice(0, 30) || '—',
+            stirrups: myRebar.filter(r => r.shape === 'stirrup').map(r => r.count + '#⌀' + r.diaMM).join('+') || '—',
+            notes: len.toFixed(2) + 'm span' });
+          break;
+        }
+        case 'wall': {
+          rows.push({ mark, size: 't=' + (pr.thickness || 0.2),
+            vert: myRebar.filter(r => r.dir === 'v').map(r => r.count + '#⌀' + r.diaMM + '@' + r.len.toFixed(1)).join('+').slice(0, 30) || '—',
+            horiz: myRebar.filter(r => r.dir === 'h').map(r => r.count + '#⌀' + r.diaMM + '@' + r.len.toFixed(1)).join('+').slice(0, 30) || '—',
+            notes: (pr.height || 3) + 'm high' });
+          break;
+        }
+        case 'foundation': {
+          rows.push({ mark, size: (pr.width || 1) + 'x' + (pr.depth || 1) + 'x' + (pr.thickness || 0.5),
+            mesh: myRebar.filter(r => r.shape === 'straight').map(r => r.count + '#⌀' + r.diaMM).join('+').slice(0, 40) || '—',
+            starters: myRebar.filter(r => r.shape === 'lshape').map(r => r.count + '#⌀' + r.diaMM).join('+') || '—',
+            notes: 'pad footing' });
+          break;
+        }
+        case 'floor': case 'slab': {
+          rows.push({ mark, size: 't=' + (pr.thickness || 0.2),
+            mesh: myRebar.filter(r => r.shape === 'straight').map(r => r.count + '#⌀' + r.diaMM).join('+').slice(0, 40) || '—',
+            notes: 'two-way' });
+          break;
+        }
+      }
+    }
+    return rows;
+  }
+  scheduleDialog(type) {
+    const types = type ? [type] : ['column', 'beam', 'wall', 'foundation', 'floor'];
+    let html = '';
+    for (const t2 of types) {
+      const rows = this.scheduleRows(t2);
+      if (!rows.length) continue;
+      const cols = Object.keys(rows[0]);
+      html += `<h4 style="margin:8px 0 4px;text-transform:capitalize">${t2} schedule</h4>` +
+        `<table style="width:100%;border-collapse:collapse;font-size:11px">` +
+        `<tr style="border-bottom:1px solid var(--line,#ccc)">${cols.map(c => '<th style="text-align:left;padding:2px 6px">' + c + '</th>').join('')}</tr>` +
+        rows.map(r => '<tr>' + cols.map(c => '<td style="padding:2px 6px;border-bottom:1px solid #eee">' + r[c] + '</td>').join('') + '</tr>').join('') +
+        '</table>';
+    }
+    if (!html) { this.toast('No scheduled elements yet'); return; }
+    const csv = () => {
+      let out = '';
+      for (const t2 of types) {
+        const rows = this.scheduleRows(t2);
+        if (!rows.length) continue;
+        const cols = Object.keys(rows[0]);
+        out += t2 + ' schedule\n' + cols.join(',') + '\n' +
+          rows.map(r => cols.map(c => '"' + r[c] + '"').join(',')).join('\n') + '\n\n';
+      }
+      return out;
+    };
+    this.dialog('Element Schedules (ACI 315)', html +
+      '<p class="dim">Per ACI 315-18 §4.10: schedules replace individual details. ' +
+      'Mark → size → reinforcement → notes.</p>',
+      [['Close', null], ['Download CSV', () => {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv()], { type: 'text/csv' }));
+        a.download = 'element-schedules.csv';
+        a.click();
+        return false;
+      }], ['Copy CSV', async () => {
+        try { await navigator.clipboard.writeText(csv()); this.toast('Schedules copied'); }
+        catch (e) { this.toast('Clipboard blocked - use Download', true); }
+        return false;
+      }]]);
   }
   bbsDialog() {
     const rows = this.bbsRows();

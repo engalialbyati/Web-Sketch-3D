@@ -594,8 +594,70 @@
     return { bars };
   }
 
+  // ------------------------------------------------------------- WALL
+  /** Wall reinforcement (ACI 318-19 Ch.11, MNL-66 walls): vertical bars
+   *  at rho >= 0.0012 Ag, horizontal at >= 0.0020 Ag, spacing capped at
+   *  min(3*thickness, 450 mm), one or two curtains (each wall face). */
+  function buildWallRebar(m, ent, p, add) {
+    const wp = ent.params || {};
+    if (!wp.base || !wp.end) return { error: 'wall has no base/end run' };
+    const q = p.wall;
+    const t = Math.max(0.05, wp.thickness || 0.2);
+    const cover = q.cover != null ? q.cover : 0.04;
+    const wallHeight = Math.min(wp.height || 3, 30);
+    const zBot = wp.base[2];
+    const zTop = zBot + wallHeight - (q.vOff || 0.05);
+
+    const ax = wp.base[0], ay = wp.base[1], bx = wp.end[0], by = wp.end[1];
+    const L = Math.hypot(bx - ax, by - ay);
+    if (L < 0.05) return { error: 'wall run is degenerate' };
+    const ux = (bx - ax) / L, uy = (by - ay) / L;
+    const nx = -uy, ny = ux;
+
+    // ACI 11.6 caps + minimum ratios
+    const sCap = Math.min(3 * t, 0.45);
+    const aBar = d2 => Math.PI * d2 * d2 / 4;
+    const needV = 0.0012 * t;
+    const needH = 0.0020 * t;
+    let sv = Math.min(q.vSpacing || 0.2, sCap);
+    if (aBar(q.vDia) / sv < needV) sv = Math.max(0.03, aBar(q.vDia) / needV);
+    let sh = Math.min(q.hSpacing || 0.2, sCap);
+    if (aBar(q.hDia) / sh < needH) sh = Math.max(0.03, aBar(q.hDia) / needH);
+
+    const off1 = cover + q.vDia / 2;
+    const off2 = t - cover - q.vDia / 2;
+    const curtains = q.twoCurtains ? [off1, off2] : [off1];
+
+    let bars = 0;
+    // vertical bars along the run
+    const nV = Math.max(2, Math.ceil(L / sv) + 1);
+    const sV = L / (nV - 1);
+    const z0 = zBot + (q.vOff || 0.05);
+    for (const off of curtains)
+      for (let i = 0; i < nV; i++) {
+        const s = i * sV;
+        const px = ax + ux * s + nx * off, py = ay + uy * s + ny * off;
+        add([G.v(px, py, z0), G.v(px, py, zTop)], q.vDia,
+          { shape: 'straight', dir: 'v', count: nV });
+        bars++;
+      }
+    // horizontal bars at height levels
+    const nH = Math.max(2, Math.ceil((zTop - z0) / sh) + 1);
+    const sH = (zTop - z0) / (nH - 1);
+    for (const off of curtains)
+      for (let j = 0; j < nH; j++) {
+        const z = z0 + j * sH;
+        add([G.v(ax + nx * off, ay + ny * off, z), G.v(bx + nx * off, by + ny * off, z)],
+          q.hDia, { shape: 'straight', dir: 'h', count: nH });
+        bars++;
+      }
+    return { bars, sv: +sV.toFixed(4), sh: +sH.toFixed(4),
+      rhoV: +(aBar(q.vDia) / sV / t).toFixed(5),
+      rhoH: +(aBar(q.hDia) / sH / t).toFixed(5) };
+  }
+
   // ------------------------------------------------------------- facade
-  const TYPE_OF = { beam: 'beam', column: 'column', foundation: 'foundation', footing: 'foundation', floor: 'slab', slab: 'slab' };
+  const TYPE_OF = { beam: 'beam', column: 'column', foundation: 'foundation', footing: 'foundation', floor: 'slab', slab: 'slab', wall: 'wall' };
 
   /** Build the whole-element cage. `entities` = the app's entity list (the
    *  footing generator looks for the column above). */
@@ -616,7 +678,8 @@
     const res = type === 'beam' ? buildBeamRebar(m, ent, p, add)
       : type === 'column' ? buildColumnRebar(m, ent, p, sink)
         : type === 'foundation' ? buildFootingRebar(m, ent, p, add, entities)
-          : buildSlabRebar(m, ent, p, add);
+          : type === 'wall' ? buildWallRebar(m, ent, p, add)
+            : buildSlabRebar(m, ent, p, add);
     if (res && res.error) return res;
     return { ...res, ids: res.ids ? [...res.ids, ...ids] : ids };
   }
@@ -739,7 +802,20 @@
           ${F('ec-b', 'Main Bottom Offset', 0.05)}
           <p class="dim">Circular sections automatically get the helix cage. Need Two-Ties / Multiple / custom hooks? Use the dedicated Column Reinforcement tool.</p>
         </div>`;
-      if (type === 'foundation') body = `
+      if (type === 'wall') body = `
+      <div id="er-wall">
+        ${F('ew-cov', 'Cover m', 0.04)}
+        ${D('ew-vd', 'Vertical Bar Dia m', 0.012)}
+        ${F('ew-vs', 'Vertical Spacing m', 0.2)}
+        ${D('ew-hd', 'Horizontal Bar Dia m', 0.012)}
+        ${F('ew-hs', 'Horizontal Spacing m', 0.2)}
+        <div class="form-row"><label>Two Curtains</label>
+          <label class="chk"><input type="checkbox" id="ew-2c" checked> bars at each face</label></div>
+        ${F('ew-off', 'Bar Offset (top/bot) m', 0.05)}
+        <p class="dim">ACI 11.6: \u03c1v \u2265 0.0012, \u03c1h \u2265 0.0020, s \u2264 min(3t, 450mm) \u2014 spacings auto-tighten.</p>
+      </div>`;
+
+    if (type === 'foundation') body = `
         <div id="er-fnd">
           ${F('ef-b', 'Bottom Cover', 0.04)}
           ${F('ef-side', 'Side Cover', 0.05)}
@@ -862,7 +938,14 @@
         stubX: v('ef-nx'), stubY: v('ef-ny'), stubDia: v('ef-sd'),
         lap: v('ef-lap'), leg: v('ef-leg'), colW: v('ef-cw'), colL: v('ef-cl'),
       } };
-      return { type: 'slab', slab: {
+      if (type === 'wall') return { type: 'wall', wall: {
+      cover: v('ew-cov'), vDia: v('ew-vd'), vSpacing: v('ew-vs'),
+      hDia: v('ew-hd'), hSpacing: v('ew-hs'),
+      twoCurtains: !!(document.getElementById('ew-2c') || {}).checked,
+      vOff: v('ew-off'),
+    } };
+
+    return { type: 'slab', slab: {
         bottom: v('es-b'), top: v('es-t'), side: v('es-side'),
         xDia: v('es-xd'), xSpacing: v('es-xs'), yDia: v('es-yd'), ySpacing: v('es-ys'),
         topMesh: !!(document.getElementById('es-top') || {}).checked, topDia: v('es-td'),
@@ -870,5 +953,5 @@
     }
   }
 
-  window.ElementRebar = { ElementRebarTool, buildElementRebar, previewElementRebar, seismicTiePositions, TYPE_OF };
+  window.ElementRebar = { ElementRebarTool, buildElementRebar, previewElementRebar, buildWallRebar, seismicTiePositions, TYPE_OF };
 })();
