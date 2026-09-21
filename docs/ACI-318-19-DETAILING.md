@@ -14,7 +14,7 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
 
 ## 1. Beams (Ch. 9 flexure, Ch. 25 detailing, Ch. 18 seismic)
 
-![Beam cage — full ACI detailing](images/beam-aci-detailing.png)
+![Beam cage — full ACI detailing](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/beam-aci-detailing.png)
 
 **Longitudinal bars**
 - Minimum 2 continuous bars top and bottom — **[implemented]** (top/bottom rows default 2/3).
@@ -34,13 +34,13 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
   the 4 in. hoop limit and d/4) — **[implemented]**.
 - First stirrup **50 mm** from the support face — **[implemented]**.
 
-![Seismic zones — dense ends, open middle](images/beam-seismic-zones.png)
+![Seismic zones — dense ends, open middle](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/beam-seismic-zones.png)
 
 **Multi-leg rule (wide beams)**
 - Clear spacing between legs of shear reinforcement ≤ **300 mm** (12 in.),
   inner hoops around intermediate bars — **[implemented]**.
 
-![Multi-leg hoops at 300 mm](images/beam-multileg.png)
+![Multi-leg hoops at 300 mm](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/beam-multileg.png)
 
 **Standard hooks (Table 25.3.1)**
 - 90° hook: inside bend **6 db** (bars ≤ No. 8 / 25 mm), extension **12 db**
@@ -58,7 +58,7 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
 
 ## 2. Columns (Ch. 10, §25.7 ties, Ch. 18 seismic)
 
-![Column cage — ties + 4 corner bars](images/column-cage.png)
+![Column cage — ties + 4 corner bars](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/column-cage.png)
 
 **Longitudinal bars (§10.6.1)**
 - Reinforcement ratio **0.01 Ag ≤ ρ ≤ 0.08 Ag** — **[new]**: the cage
@@ -84,13 +84,13 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
 - 135° seismic lap alternating top corners, tails inside the cover —
   **[implemented]**.
 
-![Closed tie loop — the finished geometry](images/tie-closed-loop.png)
+![Closed tie loop — the finished geometry](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/tie-closed-loop.png)
 
 ---
 
 ## 3. Slabs / Floors (Ch. 7 one-way, Ch. 8 two-way)
 
-![Slab mesh clipped to the outline](images/slab-mesh.png)
+![Slab mesh clipped to the outline](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/slab-mesh.png)
 
 **Minimum reinforcement (§7.6.1 / §8.6.1)**
 - As ≥ **0.0018 Ag** (Grade 60) each direction — **[new]**: the slab
@@ -107,7 +107,7 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
 
 ## 4. Foundations / Footings (Ch. 13)
 
-![Footing mesh + column starters](images/foundation.png)
+![Footing mesh + column starters](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/foundation.png)
 
 **Minimum reinforcement**
 - As ≥ **0.0018 Ag** each way (shrinkage/temperature, Grade 60) — **[new]**:
@@ -124,7 +124,7 @@ Sources: [ACI CODE-318-19](https://www.concrete.org), [UpCodes §25.2](https://u
 
 ## 5. All elements together
 
-![Every cage in one scene](images/element-all.png)
+![Every cage in one scene](https://raw.githubusercontent.com/engalialbyati/Web-Sketch-3D/main/docs/images/element-all.png)
 
 The Element Reinforcement tool picks any face of a beam, column,
 foundation or floor and builds the whole cage from the rules above; the
