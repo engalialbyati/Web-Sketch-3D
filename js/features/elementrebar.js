@@ -166,6 +166,12 @@
     ];
   }
 
+  // --------------------------------------------- ACI hook geometry
+  // ACI 318-19 Table 25.3.1: hook EXTENSION = 12db for every size (used at the
+  // E site below). The BM-208 6/8/10 values are BEND DIAMETER multiples by bar
+  // size group (#3-8 -> 6db, #9-11 -> 8db, #14-18 -> 10db), consumed at the R
+  // (bend radius) site — never as an extension.
+
   // --------------------------------------------------------------- BEAM
   function buildBeamRebar(m, ent, p, add) {
     const bp = ent.params || {};
@@ -591,6 +597,135 @@
       alongY(td, zTop - (q.top + td / 2), q.ySpacing);
       alongX(td, zTop - (q.top + td + td / 2), q.xSpacing);
     }
+    // ---- SLAB-200/201: CORNER REINFORCEMENT (ACI 8.6.1.2) ----
+    // Top & bottom bars extending L long/5 from each exterior corner,
+    // in both X and Y directions (MNL-66 Option 2 - easier placement)
+    if (q.cornerSteel !== false) {
+      // L long = the longer clear span of the slab
+      const lLong = Math.max(x1 - x0, y1 - y0);
+      const cornerExt = lLong / 5;
+      const cDia = q.cornerDia || q.xDia;
+      const cr2 = cDia / 2;
+      // detect convex corners from the region bounding box
+      const corners = [
+        { x: x0 + q.side, y: y0 + q.side, dx: 1, dy: 1 },
+        { x: x1 - q.side, y: y0 + q.side, dx: -1, dy: 1 },
+        { x: x0 + q.side, y: y1 - q.side, dx: 1, dy: -1 },
+        { x: x1 - q.side, y: y1 - q.side, dx: -1, dy: -1 },
+      ];
+      for (const cn of corners) {
+        // only add if the corner is in the actual region (not clipped away)
+        if (!clipScanline(regions, cn.y, 0.01).some(iv => cn.x >= iv[0] && cn.x <= iv[1])) continue;
+        // top layer + bottom layer
+        for (const zLayer of [zTop - (q.bottom + q.yDia + q.xDia + cr2), zTop - (q.top + cr2)]) {
+          // X-direction corner bars
+          const nCX = Math.max(2, Math.floor(cornerExt / (q.xSpacing || 0.2)));
+          for (let i2 = 0; i2 < nCX; i2++) {
+            const yy = cn.y + cn.dy * i2 * (q.xSpacing || 0.2);
+            const xa = cn.x, xb = cn.x + cn.dx * cornerExt;
+            // clip to region
+            const iv = clipScanline(regions, yy, 0.01);
+            const seg = iv.find(iv2 => Math.min(xa, xb) >= iv2[0] - 0.01 && Math.max(xa, xb) <= iv2[1] + 0.01);
+            if (seg) {
+              if (Math.abs(xb - xa) >= 0.25) {
+              add([G.v(Math.min(xa, xb), yy, zLayer),
+                G.v(Math.max(xa, xb), yy, zLayer)], cDia,
+                { shape: 'straight', role: 'corner', layer: 'top+bottom' });
+            }
+              bars++;
+            }
+          }
+          // Y-direction corner bars
+          const nCY = Math.max(2, Math.floor(cornerExt / (q.ySpacing || 0.2)));
+          for (let j2 = 0; j2 < nCY; j2++) {
+            const xx = cn.x + cn.dx * j2 * (q.ySpacing || 0.2);
+            const ya = cn.y, yb = cn.y + cn.dy * cornerExt;
+            // clip to transposed region
+            const ivT = clipScanline(regions.map(rg2 => ({
+              outer: rg2.outer.map(v2 => ({ x: v2.y, y: v2.x })),
+              holes: (rg2.holes || []).map(h2 => h2.map(v2 => ({ x: v2.y, y: v2.x })))
+            })), xx, 0.01);
+            const seg = ivT.find(iv2 => Math.min(ya, yb) >= iv2[0] - 0.01 && Math.max(ya, yb) <= iv2[1] + 0.01);
+            if (seg) {
+              if (Math.abs(yb - ya) >= 0.25) {
+              add([G.v(xx, Math.min(ya, yb), zLayer),
+                G.v(xx, Math.max(ya, yb), zLayer)], cDia,
+                { shape: 'straight', role: 'corner', layer: 'top+bottom' });
+            }
+              bars++;
+            }
+          }
+        }
+      }
+    }
+
+    // ---- SLAB-202/203: OPENING TRIM BARS ----
+    // Displaced bars moved to each edge of openings, 2 min per side @ 3in O.C.
+    // Top bars with standard hooks at opening edges
+    if (q.trimSteel !== false) {
+      const tDia = q.trimDia || q.xDia;
+      const tR = tDia / 2;
+      for (const rg of regions) {
+        for (const hole of (rg.holes || [])) {
+          if (hole.length < 3) continue;
+          // bounding box of the hole
+          let hx0 = 1e9, hy0 = 1e9, hx1 = -1e9, hy1 = -1e9;
+          for (const v2 of hole) {
+            hx0 = Math.min(hx0, v2.x); hx1 = Math.max(hx1, v2.x);
+            hy0 = Math.min(hy0, v2.y); hy1 = Math.max(hy1, v2.y);
+          }
+          const hW = hx1 - hx0, hH = hy1 - hy0;
+          if (hW < 0.05 && hH < 0.05) continue;
+          // trim bars parallel to X (top and bottom of the opening)
+          const nTX = Math.max(2, Math.ceil((hW) / 0.075)); // 3in = 0.075m
+          const yPositions = [hy0 - q.side - tR, hy1 + q.side + tR];
+          for (const yy of yPositions) {
+            for (let k2 = 0; k2 < Math.min(nTX, 8); k2++) {
+              const xx = hx0 + (k2 + 0.5) * hW / Math.min(nTX, 8);
+              // trim bar: same length as the opening width + development each side
+              const ext = Math.max(0.3, q.yDia * 20); // development length each side
+              const xa = hx0 - ext, xb = hx1 + ext;
+              // clip to outer region
+              const iv = clipScanline(regions, yy, 0.01);
+              const seg = iv.find(iv2 => xa >= iv2[0] && xb <= iv2[1]);
+              if (seg) {
+                if (xb - xa >= 0.25) {
+                add([G.v(xa, yy, zTop - (q.bottom + q.yDia + q.xDia + tR)),
+                  G.v(xb, yy, zTop - (q.bottom + q.yDia + q.xDia + tR))], tDia,
+                  { shape: 'straight', role: 'trim', dir: 'x' });
+              }
+                bars++;
+              }
+            }
+          }
+          // trim bars parallel to Y (left and right of the opening)
+          const nTY = Math.max(2, Math.ceil(hH / 0.075));
+          const xPositions = [hx0 - q.side - tR, hx1 + q.side + tR];
+          const tr2 = regions.map(rg2 => ({
+            outer: rg2.outer.map(v2 => ({ x: v2.y, y: v2.x })),
+            holes: (rg2.holes || []).map(h2 => h2.map(v2 => ({ x: v2.y, y: v2.x })))
+          }));
+          for (const xx of xPositions) {
+            for (let k2 = 0; k2 < Math.min(nTY, 8); k2++) {
+              const yy = hy0 + (k2 + 0.5) * hH / Math.min(nTY, 8);
+              const ext = Math.max(0.15, 0.3);
+              const ya = hy0 - ext, yb = hy1 + ext;
+              const iv = clipScanline(tr2, xx, 0.01);
+              const seg = iv.find(iv2 => ya >= iv2[0] && yb <= iv2[1]);
+              if (seg) {
+                if (yb - ya >= 0.25) {
+                add([G.v(xx, ya, zTop - (q.bottom + q.yDia + q.xDia + tR)),
+                  G.v(xx, yb, zTop - (q.bottom + q.yDia + q.xDia + tR))], tDia,
+                  { shape: 'straight', role: 'trim', dir: 'y' });
+              }
+                bars++;
+              }
+            }
+          }
+        }
+      }
+    }
+
     return { bars };
   }
 
@@ -851,6 +986,10 @@
           ${F('es-xs', 'X Spacing', 0.15)}
           ${D('es-yd', 'Y Bar Diameter', 0.012)}
           ${F('es-ys', 'Y Spacing', 0.15)}
+          <div class="form-row"><label>Corner Steel (SLAB-200)</label>
+            <label class="chk"><input type="checkbox" id="es-corner" checked> auto at corners, Ln/5</label></div>
+          <div class="form-row"><label>Opening Trim Bars (SLAB-202)</label>
+            <label class="chk"><input type="checkbox" id="es-trim" checked> auto at openings</label></div>
           <div class="form-row"><label>Top Mesh</label>
             <label class="chk"><input type="checkbox" id="es-top"> include</label>
             ${D('es-td', 'Top Diameter', 0.012)}</div>
@@ -949,6 +1088,10 @@
         bottom: v('es-b'), top: v('es-t'), side: v('es-side'),
         xDia: v('es-xd'), xSpacing: v('es-xs'), yDia: v('es-yd'), ySpacing: v('es-ys'),
         topMesh: !!(document.getElementById('es-top') || {}).checked, topDia: v('es-td'),
+        cornerSteel: !!((document.getElementById('es-corner') || {}).checked !== undefined
+          ? (document.getElementById('es-corner') || {}).checked : true),
+        trimSteel: !!((document.getElementById('es-trim') || {}).checked !== undefined
+          ? (document.getElementById('es-trim') || {}).checked : true),
       } };
     }
   }
