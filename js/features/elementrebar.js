@@ -1112,6 +1112,8 @@
           ${D('ec-mdia', 'Main Bar Diameter', 0.016)}
           ${F('ec-t', 'Main Top Offset', 0.05)}
           ${F('ec-b', 'Main Bottom Offset', 0.05)}
+          <div class="form-row"><label>Splice (COL-200)</label>
+            <select id="ec-splice" style="width:130px"><option value="none">None</option><option value="lap" selected>Class B Lap</option><option value="mechanical">Mechanical</option><option value="end-bearing">End-Bearing</option></select></div>
           <p class="dim">Circular sections automatically get the helix cage. Need Two-Ties / Multiple / custom hooks? Use the dedicated Column Reinforcement tool.</p>
         </div>`;
       if (type === 'wall') body = `
@@ -1249,7 +1251,8 @@
           front: v('ec-front'), dia: v('ec-tdia'), bentAngle: 135, bentFactor: 6, rounding: 0,
           mode: (document.querySelector('input[name="er-ctie"]:checked') || {}).value || 'spacing',
           value: v('ec-tval') },
-        main: { dia: v('ec-mdia'), tOffset: v('ec-t'), bOffset: v('ec-b'), type: 'straight' },
+        main: { dia: v('ec-mdia'), tOffset: v('ec-t'), bOffset: v('ec-b'), type: 'straight',
+          splice: { mode: (document.getElementById('ec-splice') || {}).value || 'none' } },
       } };
       if (type === 'foundation') return { type, foundation: {
         bottom: v('ef-b'), side: v('ef-side'), topLayer: (document.getElementById('ef-top') || {}).value || 'X',

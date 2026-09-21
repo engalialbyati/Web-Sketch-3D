@@ -56,6 +56,38 @@
       add(pts, dia, { shape: 'lshape' });
       return;
     }
+    // ---- MNL-66(20) COL-200/202: splices. Lap mode splits the bar into
+    // two overlapping pieces just above the floor (COL-200: "splice at
+    // slabs, beams") with a Class B tension lap; alternate bars stagger by
+    // half a lap so no more than half the section splices at one height.
+    // Mechanical / end-bearing keep one square-cut piece with a sleeve at
+    // the splice plane (COL-202).
+    const sp = opts && opts.splice;
+    // zA is ALWAYS the world-BOTTOM end (endsOf ordering) but the depths
+    // run picked-face-relative: work along the zA -> zB direction
+    const dir = Math.sign(zB - zA) || 1, span = Math.abs(zB - zA);
+    if (sp && sp.mode && sp.mode !== 'none' && span > 0.4) {
+      const psiS = dia <= 0.0195 ? 0.8 : 1; // ACI 25.4.2.3 size factor
+      const lap = Math.max(0.3, 1.3 * 47.5 * psiS * dia); // Class B, Gr60/4ksi
+      const stag = sp.mode === 'lap' && sp.stagger !== false ? lap / 2 : 0;
+      const z0 = zA + dir * ((sp.gap != null ? +sp.gap : 0.05)
+        + ((opts._i || 0) % 2 ? stag : 0));
+      const fit = dir * (zB - z0); // room from the splice start to the far end
+      if (sp.mode === 'lap' && fit > lap + 0.02) {
+        add([at(a, b, zA), at(a, b, z0 + dir * lap)], dia,
+          { shape: 'straight', role: 'splice-lower', lap: +lap.toFixed(3) });
+        add([at(a, b, z0), at(a, b, zB)], dia,
+          { shape: 'straight', role: 'splice-upper', lap: +lap.toFixed(3) });
+        return;
+      }
+      if (sp.mode === 'mechanical' || sp.mode === 'end-bearing') {
+        add([at(a, b, zA), at(a, b, zB)], dia, { shape: 'straight' });
+        const s1 = z0 - dir * 0.075, s2 = z0 + dir * 0.075;
+        add([at(a, b, Math.min(s1, s2)), at(a, b, Math.max(s1, s2))],
+          dia + 0.012, { shape: 'straight', role: 'coupler', mode: sp.mode });
+        return;
+      }
+    }
     add([at(a, b, zA), at(a, b, zB)], dia, { shape: 'straight' });
   }
 
@@ -109,7 +141,8 @@
         const ang = (i / n) * Math.PI * 2;
         const a = ca + rm * Math.cos(ang), b = cb + rm * Math.sin(ang);
         const [bA, bB] = endsOf(p.main.bOffset, p.main.tOffset, p.main.dia / 2);
-        add([at(a, b, bA), at(a, b, bB)], p.main.dia, { shape: 'straight', count: n });
+        verticalBar(add, fr, at, a, b, bA, bB, p.main.dia,
+          { ...p.main, type: 'straight', _i: i });
         bars++;
       }
       return { ids, ties, bars };
@@ -139,6 +172,17 @@
           p.tie.dia, { shape: 'stirrup', count: tieDist.count, spacing: tieDist.spacing });
         ties++;
       }
+    // COL-200/COL-101: two extra ties through the splice zone (splices sit
+    // just above the slab - the ties straddle the lap start)
+    if (p.main.splice && p.main.splice.mode && p.main.splice.mode !== 'none') {
+      const gap = p.main.splice.gap != null ? +p.main.splice.gap : 0.05;
+      const dOf = hgt => (topPicked ? H - hgt : hgt);
+      for (const hgt of [gap + 0.12, gap + 0.32])
+        for (const path of tiePaths)
+          add(path.map(q => G.sub(q, G.mul(fr.n, dOf(hgt)))), p.tie.dia,
+            { shape: 'stirrup', role: 'splice-tie' });
+      ties += 2 * tiePaths.length;
+    }
 
     // ----------------------------------------------------------- main bars
     // corner bars are never lighter than the inner bars: their size is the
@@ -155,10 +199,10 @@
     const corners = [[uL, vB], [uR, vB], [uR, vT], [uL, vT]];
     const rows = p.type === 'twoties'
       ? [...corners, [(uL + uR) / 2, vB], [(uL + uR) / 2, vT]] : corners;
-    for (const [a, b] of rows) {
-      verticalBar(add, fr, at, a, b, zA, zB, cornerDia, p.main);
+    rows.forEach(([a, b], i) => {
+      verticalBar(add, fr, at, a, b, zA, zB, cornerDia, { ...p.main, _i: i });
       bars++;
-    }
+    });
 
     // -------------------------------------------------- multiple: x/y sets
     if (p.type === 'multiple') {
@@ -172,6 +216,7 @@
         const s = span / (N + 1);
         if (s < 0) return { error: `too many ${axis}-dir bars for the section` };
         const rowsAt = axis === 'u' ? [[null, vB], [null, vT]] : [[uL, null], [uR, null]];
+        let barIdx = 0;
         for (const [rowA, rowB] of rowsAt) {
           let cursor = lo + cornerDia / 2; // surface of the corner bar line
           for (const [n, d] of sets) {
@@ -181,7 +226,7 @@
               const b = axis === 'u' ? rowB : cursor;
               const [sA, sB] = endsOf(p.main.bOffset, p.main.tOffset, d / 2);
               verticalBar(add, fr, at, a, b, sA, sB, d,
-                { type: p.main.type === 'lshape' ? 'lshape' : 'straight', ...p.main });
+                { type: p.main.type === 'lshape' ? 'lshape' : 'straight', ...p.main, _i: barIdx++ });
               bars++;
               cursor += d / 2;
             }
@@ -268,6 +313,8 @@
           ${F('cm-b', 'Main Bottom Offset', 0.05)}
           <div class="form-row"><label>Main Bar Type</label>
             <select id="cm-type" style="width:130px"><option>Straight</option><option>L-Shape</option></select></div>
+          <div class="form-row"><label>Splice (COL-200)</label>
+            <select id="cm-splice" style="width:130px"><option value="none">None</option><option value="lap">Class B Lap</option><option value="mechanical">Mechanical</option><option value="end-bearing">End-Bearing</option></select></div>
           <div id="cr-hook" style="display:none">
             <div class="form-row"><label>Hook</label>
               <select id="ch-at" style="width:130px">
@@ -343,7 +390,7 @@
       };
       const wire = id => { const x = el(id); if (x) x.addEventListener(x.tagName === 'SELECT' || x.type === 'radio' ? 'change' : 'input', update); };
       for (const id of ['cr-type', 'ct-l', 'ct-r', 'ct-t', 'ct-b', 'ct-front', 'ct-dia', 'ct-bent', 'ct-bf', 'ct-val',
-        'cm-dia', 'cm-t', 'cm-b', 'cm-type', 'ch-at', 'ch-along', 'ch-ext', 'ch-rnd',
+        'cm-dia', 'cm-t', 'cm-b', 'cm-type', 'cm-splice', 'ch-at', 'ch-along', 'ch-ext', 'ch-rnd',
         'cx-sets', 'cy-sets', 'cc-cover', 'cc-hdia', 'cc-pitch', 'cc-ht', 'cc-hb', 'cc-val'])
         wire(id);
       document.querySelectorAll('input[name="cr-tie-mode"],input[name="cr-circ-mode"]').forEach(r => r.addEventListener('change', update));
@@ -377,6 +424,7 @@
         },
         main: {
           dia: num('cm-dia'), tOffset: num('cm-t'), bOffset: num('cm-b'),
+          splice: { mode: (el('cm-splice') || {}).value || 'none' },
           type: el('cm-type').value === 'L-Shape' ? 'lshape' : 'straight',
           hookAt: el('ch-at').value, along: el('ch-along').value === 'X axis' ? 'u' : 'v',
           extension: num('ch-ext'), rounding: num('ch-rnd') > 0 ? num('ch-rnd') : 1,

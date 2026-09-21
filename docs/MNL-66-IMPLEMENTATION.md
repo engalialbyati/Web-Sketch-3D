@@ -154,9 +154,17 @@ to app features with implementation status.
   - WALL-208: 48 in diagonal bar per corner per curtain at 45 deg,
     clamped to the wall where tight (24 in minimum, else dropped)
 
-### Phase 6 — Column splices
+### Phase 6 — Column splices (DONE)
 - COL-200: **Lap splice** locations and lengths
+  - splices sit just above the floor (at slabs/beams per COL-200),
+    Class B tension lap = 1.3 x 47.5 x psi_s x db (Grade 60, 4 ksi,
+    psi_s = 0.8 for #6/smaller), min 300 mm
+  - alternate bars stagger by half a lap (<= half the section at one
+    height); 2 extra ties through the splice zone; short columns keep
+    whole bars
 - COL-202: **End-bearing / mechanical / welded** splice types
+  - one square-cut piece with a 150 mm sleeve at the splice plane;
+    splice select in both the dedicated and whole-element dialogs
 
 ### Phase 7 — Advanced foundations
 - FND-150: Drilled pier

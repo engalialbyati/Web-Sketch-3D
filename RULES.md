@@ -86,3 +86,12 @@ where ACI is silent.
 - WALL-208: one 48 in diagonal bar per corner per curtain crossing the
   corner at 45 deg; where the wall is tight the bar clamps to fit (24 in
   minimum, below that nothing -- MNL-208 alternates hooked bars).
+
+## Column splices (MNL-66(20) COL-200/202)
+- **Lap (COL-200)**: two overlapping pieces per bar just above the floor;
+  Class B lap = 1.3 x ld with ld = 47.5 x psi_s x db (Grade 60, 4 ksi; 0.8
+  psi_s for bars <= 19 mm), min 300 mm. Alternate bars stagger half a lap.
+  Two extra ties through the splice zone. Bars stay whole when the column
+  cannot host the lap.
+- **Mechanical / end-bearing (COL-202)**: one square-cut bar with a 150 mm
+  sleeve at the splice plane (all bars at one height, no stagger needed).
