@@ -72,3 +72,17 @@ where ACI is silent.
 - Every bar carries a unique pid; the Bar Bending Schedule counts **bars**,
   never tube faces. Weight **0.006165·d² kg/m** (d in mm), rows aggregated
   by host + shape + dia + length.
+
+## Walls
+
+### Openings (MNL-66(20) WALL-206/207/208)
+- Hosted door/window/opening entities on the wall (hostWallId + station)
+  drive the reinforcement; the regular mesh SPLITS around each hole
+  (verticals resume above/below, horizontals run left/right; slivers
+  under 150 mm / 250 mm drop).
+- WALL-206: 2 horizontal bars at the head and sill + 2 vertical bars each
+  jamb, each running 24 in min past the opening. A floor-level opening
+  gets no sill steel.
+- WALL-208: one 48 in diagonal bar per corner per curtain crossing the
+  corner at 45 deg; where the wall is tight the bar clamps to fit (24 in
+  minimum, below that nothing -- MNL-208 alternates hooked bars).

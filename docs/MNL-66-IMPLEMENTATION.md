@@ -145,8 +145,14 @@ to app features with implementation status.
   - ACI 9.8.1.2: min 2+2 continuous top/bottom bars (default on)
   - ACI 9.8.1.4: standard hooks at discontinuous ends
 
-### Phase 5 — Wall openings
+### Phase 5 — Wall openings (DONE)
 - WALL-206-208: **Trim bars** around door/window openings
+  - hosted door/window/opening cuts (HostedCut entities) drive it
+  - the wall mesh SPLITS around each hole (150 mm / 250 mm sliver rules)
+  - WALL-206: 2 horizontal bars at head + sill, 2 vertical bars each jamb,
+    24 in development past the opening (no sill steel at floor level)
+  - WALL-208: 48 in diagonal bar per corner per curtain at 45 deg,
+    clamped to the wall where tight (24 in minimum, else dropped)
 
 ### Phase 6 — Column splices
 - COL-200: **Lap splice** locations and lengths

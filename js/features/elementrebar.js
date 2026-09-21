@@ -819,7 +819,7 @@
   /** Wall reinforcement (ACI 318-19 Ch.11, MNL-66 walls): vertical bars
    *  at rho >= 0.0012 Ag, horizontal at >= 0.0020 Ag, spacing capped at
    *  min(3*thickness, 450 mm), one or two curtains (each wall face). */
-  function buildWallRebar(m, ent, p, add) {
+  function buildWallRebar(m, ent, p, add, entities) {
     const wp = ent.params || {};
     if (!wp.base || !wp.end) return { error: 'wall has no base/end run' };
     const q = p.wall;
@@ -849,8 +849,27 @@
     const off2 = t - cover - q.vDia / 2;
     const curtains = q.twoCurtains ? [off1, off2] : [off1];
 
+    // ---- MNL-66(20) WALL-206/207/208: hosted door/window/opening cuts on
+    // this wall piece (stations along the run, heights from the base)
+    const openings = (Array.isArray(entities) ? entities : [])
+      .filter(e => e && e.params && e.params.hostWallId === ent.id
+        && (e.type === 'door' || e.type === 'window' || e.type === 'opening'))
+      .map(e => {
+        const w = Math.max(0.1, +e.params.width || 0.9);
+        const tc = Math.max(w / 2, Math.min(L - w / 2, +e.params.distanceFromStart || L / 2));
+        const zo0 = zBot + Math.max(0, +e.params.sillHeight || 0);
+        const zo1 = Math.min(zTop, zo0 + Math.max(0.1, +e.params.height || 1.5));
+        return { s0: tc - w / 2, s1: tc + w / 2, z0: zo0, z1: zo1 };
+      })
+      .filter(o => o.s1 - o.s0 > 0.05 && o.z1 - o.z0 > 0.05 && o.s0 < L - 0.02 && o.s1 > 0.02);
+    const inOpening = {
+      s: s => openings.find(o => s > o.s0 + 1e-6 && s < o.s1 - 1e-6) || null,
+      z: z => openings.find(o => z > o.z0 + 1e-6 && z < o.z1 - 1e-6) || null,
+    };
+
     let bars = 0;
-    // vertical bars along the run
+    // vertical bars along the run — a bar inside an opening splits into the
+    // below and above segments (drop anything shorter than 150 mm)
     const nV = Math.max(2, Math.ceil(L / sv) + 1);
     const sV = L / (nV - 1);
     const z0 = zBot + (q.vOff || 0.05);
@@ -858,21 +877,91 @@
       for (let i = 0; i < nV; i++) {
         const s = i * sV;
         const px = ax + ux * s + nx * off, py = ay + uy * s + ny * off;
-        add([G.v(px, py, z0), G.v(px, py, zTop)], q.vDia,
-          { shape: 'straight', dir: 'v', count: nV });
-        bars++;
+        const segs = [];
+        const o = inOpening.s(s);
+        if (!o) segs.push([z0, zTop]);
+        else segs.push([z0, o.z0], [o.z1, zTop]);
+        for (const [za, zb] of segs) {
+          if (zb - za < 0.15) continue;
+          add([G.v(px, py, za), G.v(px, py, zb)], q.vDia,
+            { shape: 'straight', dir: 'v', count: nV });
+          bars++;
+        }
       }
-    // horizontal bars at height levels
+    // horizontal bars at height levels — a level inside an opening splits
+    // into the left and right runs (250 mm sliver rule like the slab)
     const nH = Math.max(2, Math.ceil((zTop - z0) / sh) + 1);
     const sH = (zTop - z0) / (nH - 1);
     for (const off of curtains)
       for (let j = 0; j < nH; j++) {
         const z = z0 + j * sH;
-        add([G.v(ax + nx * off, ay + ny * off, z), G.v(bx + nx * off, by + ny * off, z)],
-          q.hDia, { shape: 'straight', dir: 'h', count: nH });
-        bars++;
+        const segs = [];
+        const o = inOpening.z(z);
+        if (!o) segs.push([0, L]);
+        else segs.push([0, o.s0], [o.s1, L]);
+        for (const [sa, sb] of segs) {
+          if (sb - sa < 0.25) continue;
+          add([G.v(ax + ux * sa + nx * off, ay + uy * sa + ny * off, z),
+            G.v(ax + ux * sb + nx * off, ay + uy * sb + ny * off, z)],
+            q.hDia, { shape: 'straight', dir: 'h', count: nH });
+          bars++;
+        }
       }
-    return { bars, sv: +sV.toFixed(4), sh: +sH.toFixed(4),
+    // ---- WALL-206: 2 horizontal bars at the head and sill, 2 vertical
+    // bars each jamb, all running 24 in min past the opening
+    const DEV = Math.max(0.61, q.vDia * 40); // 2'-0" min each side
+    const clear = 0.025;
+    for (const o of openings) {
+      for (const off of curtains) {
+        const atS = s => [ax + ux * s + nx * off, ay + uy * s + ny * off];
+        const hs = Math.max(0, o.s0 - DEV), he = Math.min(L, o.s1 + DEV);
+        for (let k = 0; k < 2; k++) {
+          const dh = cover + q.hDia / 2 + k * (q.hDia + clear);
+          const zHead = o.z1 - dh, zSill = o.z0 + dh;
+          if (zHead - (o.z0 + 0.05) > 0 && zHead < zTop - 1e-6) {
+            add([G.v(...atS(hs), zHead), G.v(...atS(he), zHead)], q.hDia,
+              { shape: 'straight', dir: 'h', role: 'trim-h', count: 2 });
+            bars++;
+          }
+          if (o.z0 - zBot > 0.15 && zSill > z0 + 1e-6 && zSill < o.z1 - 0.05) {
+            add([G.v(...atS(hs), zSill), G.v(...atS(he), zSill)], q.hDia,
+              { shape: 'straight', dir: 'h', role: 'trim-h', count: 2 });
+            bars++;
+          }
+        }
+        const vs0 = Math.max(0, o.s0 - cover - q.vDia / 2), vs1 = Math.min(L, o.s1 + cover + q.vDia / 2);
+        const zv0 = Math.max(z0, o.z0 - DEV), zv1 = Math.min(zTop, o.z1 + DEV);
+        for (let k = 0; k < 2; k++) {
+          const dv = cover + q.vDia / 2 + k * (q.vDia + clear);
+          for (const sv2 of [vs0 - dv, vs1 + dv])
+            if (sv2 > 0.01 && sv2 < L - 0.01) {
+              add([G.v(...atS(sv2), zv0), G.v(...atS(sv2), zv1)], q.vDia,
+                { shape: 'straight', dir: 'v', role: 'trim-v', count: 2 });
+              bars++;
+            }
+        }
+        // ---- WALL-208: one 48 in diagonal bar per corner per curtain,
+        // crossing the corner at 45 degrees. Where the wall is too tight
+        // for the full 48 in the bar shortens to fit (MNL-208 alternates
+        // hooked bars when 24 in is all that fits); under 24 in: nothing
+        const dHalf = 1.219 / 2 / Math.SQRT2; // 48 in bar, 45 deg
+        const zc = (o.z0 + o.z1) / 2, sc = (o.s0 + o.s1) / 2;
+        for (const [sCorner, zCorner] of [[o.s0, o.z0], [o.s0, o.z1], [o.s1, o.z0], [o.s1, o.z1]]) {
+          const dxs = Math.sign(sCorner - sc) || 1, dzs = Math.sign(zCorner - zc) || 1;
+          let aS = sCorner - dxs * dHalf, aZ = zCorner - dzs * dHalf;
+          let bS = sCorner + dxs * dHalf, bZ = zCorner + dzs * dHalf;
+          aS = Math.max(0.02, Math.min(L - 0.02, aS));
+          bS = Math.max(0.02, Math.min(L - 0.02, bS));
+          aZ = Math.max(z0, Math.min(zTop, aZ));
+          bZ = Math.max(z0, Math.min(zTop, bZ));
+          if (Math.hypot(bS - aS, bZ - aZ) < 0.61) continue; // under 24 in: skip
+          add([G.v(...atS(aS), aZ), G.v(...atS(bS), bZ)], q.vDia,
+            { shape: 'straight', dir: 'd', role: 'diag', count: 4 });
+          bars++;
+        }
+      }
+    }
+    return { bars, openings: openings.length, sv: +sV.toFixed(4), sh: +sH.toFixed(4),
       rhoV: +(aBar(q.vDia) / sV / t).toFixed(5),
       rhoH: +(aBar(q.hDia) / sH / t).toFixed(5) };
   }
@@ -899,7 +988,7 @@
     const res = type === 'beam' ? buildBeamRebar(m, ent, p, add, entities)
       : type === 'column' ? buildColumnRebar(m, ent, p, sink)
         : type === 'foundation' ? buildFootingRebar(m, ent, p, add, entities)
-          : type === 'wall' ? buildWallRebar(m, ent, p, add)
+          : type === 'wall' ? buildWallRebar(m, ent, p, add, entities)
             : buildSlabRebar(m, ent, p, add);
     if (res && res.error) return res;
     return { ...res, ids: res.ids ? [...res.ids, ...ids] : ids };
@@ -1118,7 +1207,8 @@
         const c = document.getElementById('er-count');
         if (c) c.textContent = pv.error ? pv.error
           : `${pv.paths.length} bars in the cage` + (pv.supports
-            ? ` \u00b7 ends: ${pv.supports.start} / ${pv.supports.end}` : '');
+            ? ` \u00b7 ends: ${pv.supports.start} / ${pv.supports.end}` : '')
+            + (pv.openings ? ` \u00b7 ${pv.openings} opening${pv.openings > 1 ? 's' : ''} trimmed (WALL-206/208)` : '');
       };
       app._onDialogClose = () => {
         app.view.clearPreview(); app.view.setHoverFace(null);
