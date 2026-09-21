@@ -157,7 +157,7 @@ class Model {
     return null;
   }
   vp(id) { return this.vertices.get(id); }
-  pts(ids) { return ids.map(id => this.vp(id)); }
+  pts(ids) { return (ids || []).map(id => this.vp(id)); }
   rings(f) { return [f.loop, ...(f.holes || [])]; }
 
   // ------------------------------------------------------------ vertices/edges
@@ -1290,11 +1290,13 @@ class Model {
       // (validate fails, later edits guard-rollback). edgesForRing chains
       // through any surviving on-segment vertices, exactly like a fresh ring.
       if (L.length !== f.loop.length) { f.loop = L; this.edgesForRing(f.loop, true); }
-      f.holes = (f.holes || []).map(h => {
-        const H = h.filter(v => this.vertices.has(v));
-        if (H.length !== h.length) this.edgesForRing(H, true);
-        return H;
-      }).filter(h => h.length >= 3);
+      f.holes = (f.holes || []).filter(h => Array.isArray(h) && h.length >= 3
+        && h.every(v => this.vertices.has(v))   // drop rings whose vertices died
+        && new Set(h).size === h.length)         // and rings that repeat a vertex
+        .map(h => {
+          this.edgesForRing(h, true);
+          return h;
+        });
       if (new Set(f.loop).size < 3 || G.loopArea(this.pts(f.loop)) < 1e-10) this.faces.delete(id);
     }
     // curves with no edges left - ONE census pass: loose rebar faces

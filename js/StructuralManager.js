@@ -633,7 +633,27 @@
     // void at every column-beam joint.) Returns the z the column's solid
     // should reach.
     columnBearingTop(p, pool = null) {
-      return this.columnBounds(p).zEnd;
+      // v0.8 CONTINUOUS BEAMS (user rule): the column gives way at a
+      // joint - any beam crossing the column's head caps the column at
+      // the beam's soffit + EPS (0.1 mm into the beam, no coplanar
+      // faces). The beam itself runs its full span, never trimmed.
+      // Deleting the beam grows the column back (the sync refits to
+      // the unconstrained zEnd).
+      const b = this.columnBounds(p);
+      // the NOMINAL (drawn) top survives beam caps: syncColumnBearing stores
+      // it in heightNominal before overwriting height, so deleting the beam
+      // grows the column back to what was drawn
+      let top = p.heightNominal != null ? b.zStart + p.heightNominal : b.zEnd;
+      const cx = (p.base || p.center || [0, 0])[0], cy = (p.base || p.center || [0, 0])[1];
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.id === p.id || ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+        const bb = this.beamBounds(ent.params);
+        if (bb.zBottom >= top - 1e-3) continue;        // beam soffit at/above the nominal top: no cap
+        if (bb.zBottom <= b.zStart + 0.1) continue;    // beam sits below the column: unrelated
+        if (!this._beamCrossesPoint(ent.params, cx, cy)) continue;
+        top = Math.min(top, bb.zBottom + 1e-4);        // EPS into the beam's soffit
+      }
+      return top;
     }
     /** A beam top directly under this column's base (within a tolerance):
      *  the column then starts EPS INTO that beam (no coplanar faces). */
@@ -800,29 +820,16 @@
       // into an empty corner. Either way the PARAMS keep the analytical
       // centerline-to-centerline baseline, so regenerating after the column
       // is deleted restores the full-length beam (it meets its neighbor).
+      // v0.8 CONTINUOUS BEAMS (user rule): the beam is the continuous
+      // element at a joint - it runs its full drawn span (extended by
+      // half the web at each end to weld corners solidly) and is NEVER
+      // trimmed or split by columns. The COLUMN gives way instead: its
+      // head is capped at the beam's soffit (columnBearingTop) and grows
+      // back when the beam is deleted. Params keep the analytical
+      // centerline-to-centerline baseline.
       const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
-      const colReach = (px, py) => {
-        let best = 0;
-        const pool = model.bimEntities ? [...model.bimEntities] : [];
-        if (pending && pending.length) for (const x of pending)
-          if (x.type === 'column') pool.push({ type: 'column', params: x.params });
-        for (const e of pool) {
-          if (e.type !== 'column' || !e.params || !e.params.base) continue;
-          const c = e.params.base;
-          if (Math.hypot(c[0] - px, c[1] - py) > 0.75) continue;
-          const hw = (e.params.width || 0.3) / 2, hd = (e.params.depth || 0.3) / 2;
-          // box half-extent along the run direction (support function)
-          const reach = Math.abs(d.x) * hw + Math.abs(d.y) * hd;
-          if (reach > best) best = reach;
-        }
-        return best;
-      };
-      const reachA = colReach(A0[0], A0[1]);
-      const reachB = colReach(B0[0], B0[1]);
-      const A = reachA > 0 ? [A0[0] + d.x * reachA, A0[1] + d.y * reachA, A0[2]]
-        : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
-      const B = reachB > 0 ? [B0[0] - d.x * reachB, B0[1] - d.y * reachB, B0[2]]
-        : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
+      const A = [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
+      const B = [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
       // The sweep sits ELEMENT_EPS below the reference plane (v0.6: the
       // standard element overlap): a slab at the same level then buries the

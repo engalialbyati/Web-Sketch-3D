@@ -8,7 +8,7 @@ const harness = require('./harness');
 
 // explicit suite manifest — no dynamic require over directory listings
 const SUITE = [
-  'assets', 'beamface', 'beamoverwall', 'bridge', 'building5', 'buildingr5',
+  'assets', 'beamface', 'beamcontinuous', 'beamoverwall', 'bridge', 'building5', 'buildingr5',
   'centerline', 'columnfamilies', 'columnrot', 'columntool', 'db',
   'draw', 'engine', 'flooropen', 'geometry', 'gridcells', 'gridwall',
   'edgeoffset', 'rebar', 'columnrebar', 'elementrebar', 'multiface', 'faceorient', 'lineheal', 'looseface', 'edgesel', 'nestface', 'thicken', 'hostedcuts', 'ifcexport', 'annotate', 'room', 'deletebatch', 'independence', 'layers', 'linestyle', 'mirrorarray',

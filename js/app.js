@@ -7484,6 +7484,7 @@ class App {
   _applyBimParam(ent, key, v) {
     const p = ent.params;
     if (key === 'topConstraint') return this._setTopConstraint(ent, v);
+    if (key === 'height' && ent.type === 'column') p.heightNominal = null; // explicit edit wins
     if (key === 'rotation') p.rotation = v * Math.PI / 180; // field is degrees
     else p[key] = v;
     switch (ent.type) {
@@ -8438,6 +8439,7 @@ class App {
         // storm the user read as 'the app freezes when I draw a wall')
         if (Math.abs(h - (ent.params.height || 0)) < 5e-4) continue;
         const changed = this.transaction.run('column bearing', () => {
+          if (ent.params.heightNominal == null) ent.params.heightNominal = ent.params.height;
           ent.params.height = h;
           if (!this.bim.rebuildColumnEntity(ent.id)) throw new Error('column rebuild failed');
           return true;
