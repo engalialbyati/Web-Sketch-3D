@@ -127,12 +127,12 @@ to app features with implementation status.
 
 ## EXECUTION PLAN (updated from the book)
 
-### Phase 3 — Slab details (next)
+### Phase 3 — Slab details (DONE c220f80)
 - SLAB-200/201: Two-way slab **corner reinforcement** (per ACI 8.6.1.2)
 - SLAB-202/203: Opening **trim bars** (additional steel around holes)
 - SLAB-208: Slab thickness change / step in bottom
 
-### Phase 4 — Beam connections
+### Phase 4 — Beam connections (next)
 - BM-202/203: Beam reinforcing **development length** at column (ldh, ld)
 - BM-204/205: **Beam-to-girder** connection details
 - BM-2/3: **Integrity reinforcement** (continuous perimeter beams)
