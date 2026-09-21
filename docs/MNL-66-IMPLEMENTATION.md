@@ -166,12 +166,17 @@ to app features with implementation status.
   - one square-cut piece with a 150 mm sleeve at the splice plane;
     splice select in both the dedicated and whole-element dialogs
 
-### Phase 7 — Advanced foundations
-- FND-150: Drilled pier
-- FND-161-166: Pile caps
-- FND-109: Mat foundation
-- FND-111+: Grade beams
-
+### Phase 7 — Advanced foundations (DONE)
+- FND-150: Drilled pier — a CIRCULAR pad auto-detects (loop > 6 pts) and gets
+  the shaft cage: a ring of verticals at <=200 mm + circular ties carried
+  through the cap depth; the mesh clips to chords through the disc
+- FND-161-166: Pile caps — kind 'pilecap': piles on a centered grid
+  (count x spacing x diameter); per pile 4-6 ring dowels lapped down into
+  the shaft + shaft ties continued through the cap depth
+- FND-109: Mat foundation — kind 'mat': the two-way mesh runs at BOTH
+  faces (top mesh under the top cover)
+- FND-111+: Grade beams use the Beam tool (continuous top/bottom + ties
+  already per the beam generator)
 ### Phase 8 — Slab-on-ground (long tail)
 - SOG-100+: All joint types and thickened edges
 

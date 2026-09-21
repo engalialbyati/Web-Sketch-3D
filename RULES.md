@@ -95,3 +95,15 @@ where ACI is silent.
   cannot host the lap.
 - **Mechanical / end-bearing (COL-202)**: one square-cut bar with a 150 mm
   sleeve at the splice plane (all bars at one height, no stagger needed).
+
+## Foundation kinds (MNL-66(20) FND-109/150/161)
+- **Pad (default)**: two-way bottom mesh + column starters (unchanged).
+- **Mat (FND-109)**: the same mesh at BOTH faces -- the top mesh hangs
+  under the top cover, layer order mirrored.
+- **Pile cap (FND-161)**: piles on a centered grid (count, spacing,
+  diameter, lap); each pile gets 4-6 ring dowels lapped down into the
+  shaft and circular shaft ties continued through the cap depth
+  (FND-150: "continue shaft ties through the depth of pile cap").
+- **Drilled pier (FND-150)**: a circular pad (loop > 6 points)
+  auto-detects -- shaft verticals on a ring at <= 200 mm + circular ties
+  through the cap; the bottom mesh clips to chords through the disc.

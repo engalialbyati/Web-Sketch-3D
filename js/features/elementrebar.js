@@ -545,35 +545,72 @@
     }
     // ---- two-way bottom mesh: lower layer at the cover, upper resting on it
     // (depths measured from the BOTTOM — the frame hangs from the pad top)
+    // A CIRCULAR pad (drilled-pier cap, FND-150) clips every bar to its
+    // chord through the disc instead of the bounding box
+    const padLoop = m.pts(pad.loop);
+    const isCirc = padLoop.length > 6;
+    let pc = null;
+    if (isCirc) {
+      const cxL = padLoop.reduce((s, q2) => s + q2.x, 0) / padLoop.length;
+      const cyL = padLoop.reduce((s, q2) => s + q2.y, 0) / padLoop.length;
+      pc = { x: cxL, y: cyL,
+        R: padLoop.reduce((s, q2) => s + Math.hypot(q2.x - cxL, q2.y - cyL), 0) / padLoop.length };
+    }
+    const chordU = v => { // [u0, u1] extent of the bar line at v
+      if (!pc) return [fr.u0 + q.side, fr.u1 - q.side];
+      const dv = v - pc.y, R2 = pc.R - q.side;
+      if (Math.abs(dv) >= R2) return null;
+      const half = Math.sqrt(R2 * R2 - dv * dv);
+      return [pc.x - half, pc.x + half];
+    };
+    const chordV = u => {
+      if (!pc) return [fr.v0 + q.side, fr.v1 - q.side];
+      const du = u - pc.x, R2 = pc.R - q.side;
+      if (Math.abs(du) >= R2) return null;
+      const half = Math.sqrt(R2 * R2 - du * du);
+      return [pc.y - half, pc.y + half];
+    };
     const spanU = fr.u1 - fr.u0, spanV = fr.v1 - fr.v0;
     const layers = q.topLayer === 'Y'
       ? [{ dir: 'u', dia: q.xDia }, { dir: 'v', dia: q.yDia }]
       : [{ dir: 'v', dia: q.yDia }, { dir: 'u', dia: q.xDia }];
     const zAt = i => fr.depth - q.bottom
       - (i === 0 ? layers[0].dia / 2 : layers[0].dia + layers[1].dia / 2);
-    for (let li = 0; li < layers.length; li++) {
+    // meshPass at a depth from the TOP face; the MAT (FND-109) runs the
+    // same passes under the TOP cover for its second face
+    const meshPass = (li, zDepth) => {
       const { dir, dia } = layers[li];
       const r = dia / 2;
       if (dir === 'u') {
         const n = meshCount(spanV, dia, q.xMode, q.xValue);
         for (const v of spread(n, fr.v0 + q.side + r, fr.v1 - q.side - r)) {
-          const a = fr.map(fr.u0 + q.side + r, v), b = fr.map(fr.u1 - q.side - r, v);
-          const dz = G.mul(fr.n, zAt(li));
+          const [a0, a1] = chordU(v) || [];
+          if (a0 == null || a1 - a0 < 0.1) continue;
+          const a = fr.map(a0 + r, v), b = fr.map(a1 - r, v);
+          const dz = G.mul(fr.n, zDepth);
           add([G.sub(a, dz), G.sub(b, dz)], dia, { shape: 'straight', count: n, layer: li });
           bars++;
         }
       } else {
         const n = meshCount(spanU, dia, q.yMode, q.yValue);
         for (const u of spread(n, fr.u0 + q.side + r, fr.u1 - q.side - r)) {
-          const a = fr.map(u, fr.v0 + q.side + r), b = fr.map(u, fr.v1 - q.side - r);
-          const dz = G.mul(fr.n, zAt(li));
+          const [b0, b1] = chordV(u) || [];
+          if (b0 == null || b1 - b0 < 0.1) continue;
+          const a = fr.map(u, b0 + r), b = fr.map(u, b1 - r);
+          const dz = G.mul(fr.n, zDepth);
           add([G.sub(a, dz), G.sub(b, dz)], dia, { shape: 'straight', count: n, layer: li });
           bars++;
         }
       }
-    }
-
-    // ---- column starter stubs: section from the column above when present
+    };
+    meshPass(0, zAt(0));
+    meshPass(1, zAt(1));
+    // FND-109 MAT FOUNDATION: reinforcement at BOTH faces — a top mesh at
+    // the top cover mirrors the bottom one
+    if (q.kind === 'mat')
+      for (let li = 0; li < 2; li++)
+        meshPass(li, q.bottom + (li === 0 ? layers[0].dia / 2 : layers[0].dia + layers[1].dia / 2));
+        // ---- column starter stubs: section from the column above when present
     const ped = fp.pedestal && fp.pedestal.height >= 0.05 ? +fp.pedestal.height : 0;
     const topZ = zTop + ped;
     const base = fp.base || fp.center || [0, 0, 0];
@@ -612,7 +649,72 @@
       add(pts.map(t => map(t.b, t.a)), q.stubDia, { shape: 'lshape', count: seen.size });
       ties++; // starters counted with the verticals
     }
-    return { ties, bars, column: !!col };
+    // ---- FND-150 DRILLED PIER: a circular pad gets the shaft cage — a
+    // ring of verticals plus circular ties carried through the cap depth
+    let pierTies = 0;
+    if (isCirc && q.kind !== 'pilecap') {
+      const shaftR = Math.max(0.05, pc.R - q.side - q.stubDia / 2 - 0.012);
+      const nv = Math.max(6, Math.round((2 * Math.PI * shaftR) / 0.2));
+      const zBotCap = zTop - fr.depth;
+      for (let k = 0; k < nv; k++) {
+        const ang = (k / nv) * Math.PI * 2;
+        const bx = pc.x + shaftR * Math.cos(ang), by = pc.y + shaftR * Math.sin(ang);
+        add([G.v(bx, by, zBotCap + 0.04), G.v(bx, by, zTop - 0.05)], q.stubDia,
+          { shape: 'straight', role: 'pier-vertical', count: nv });
+        bars++;
+      }
+      const rr = shaftR - q.stubDia / 2 - 0.008;
+      for (let z = zBotCap + 0.06; z <= zTop - 0.06; z += 0.2) {
+        const ring = [];
+        for (let k = 0; k <= 24; k++) {
+          const ang = (k / 24) * Math.PI * 2;
+          ring.push(G.v(pc.x + rr * Math.cos(ang), pc.y + rr * Math.sin(ang), z));
+        }
+        add(ring, 0.008, { shape: 'stirrup', role: 'pier-tie' });
+        pierTies++;
+      }
+    }
+    // ---- FND-161 PILE CAP: piles on a grid under the pad — each gets
+    // dowels lapped down into the shaft and shaft ties continued through
+    // the depth of the cap (FND-150: continue shaft ties through the cap)
+    let pileBars = 0;
+    if (q.kind === 'pilecap') {
+      const nP = Math.max(1, Math.round(q.piles || 4));
+      const cols = Math.ceil(Math.sqrt(nP)), rows = Math.ceil(nP / cols);
+      const s = Math.max(0.3, +q.pileS || 0.9);
+      const pd = Math.max(0.15, +q.pileDia || 0.3);
+      const zBotCap2 = zTop - fr.depth;
+      const lapDown = Math.max(0.4, q.pileLap || 0.6);
+      let placed = 0;
+      for (let r2 = 0; r2 < rows && placed < nP; r2++)
+        for (let c2 = 0; c2 < cols && placed < nP; c2++) {
+          placed++;
+          const px = base[0] + (c2 - (cols - 1) / 2) * s;
+          const py = base[1] + (r2 - (rows - 1) / 2) * s;
+          const ringR = pd / 2 - 0.05 - q.stubDia / 2;
+          // 4-6 dowels on the shaft ring, lapped into the pile below
+          const nv = pd >= 0.45 ? 6 : 4;
+          for (let k = 0; k < nv; k++) {
+            const ang = (k / nv) * Math.PI * 2 + Math.PI / nv;
+            const bx = px + ringR * Math.cos(ang), by = py + ringR * Math.sin(ang);
+            add([G.v(bx, by, zBotCap2 - lapDown), G.v(bx, by, zTop - 0.06)], q.stubDia,
+              { shape: 'straight', role: 'pile-dowel', count: nv });
+            pileBars++;
+          }
+          // shaft ties continued through the cap depth
+          const rr = pd / 2 - 0.05 - 0.008;
+          for (let z = zBotCap2 + 0.05; z <= zTop - 0.06; z += 0.2) {
+            const ring = [];
+            for (let k = 0; k <= 20; k++) {
+              const ang = (k / 20) * Math.PI * 2;
+              ring.push(G.v(px + rr * Math.cos(ang), py + rr * Math.sin(ang), z));
+            }
+            add(ring, 0.008, { shape: 'stirrup', role: 'pile-tie' });
+            pierTies++;
+          }
+        }
+    }
+    return { ties, bars: bars + pileBars, pierTies, column: !!col };
   }
 
   // --------------------------------------------------------------- SLAB
@@ -1131,6 +1233,8 @@
 
     if (type === 'foundation') body = `
         <div id="er-fnd">
+          <div class="form-row"><label>Kind (FND)</label>
+            <select id="ef-kind" style="width:120px"><option value="pad">Pad / Spread</option><option value="mat">Mat (FND-109)</option><option value="pilecap">Pile Cap (FND-161)</option></select></div>
           ${F('ef-b', 'Bottom Cover', 0.04)}
           ${F('ef-side', 'Side Cover', 0.05)}
           <div class="form-row"><label>Top Mesh Layer</label>
@@ -1154,6 +1258,11 @@
           <div class="form-row"><label>Starter Column W×L</label>
             <input id="ef-cw" type="number" step="0.005" value="0.4" style="width:60px">
             <input id="ef-cl" type="number" step="0.005" value="0.4" style="width:60px"> m</div>
+          <div class="form-row" id="ef-pilerow" style="display:none"><label>Piles</label>
+            <input id="ef-pn" type="number" step="1" min="1" value="4" style="width:44px"> × spacing
+            <input id="ef-ps" type="number" step="0.05" value="0.9" style="width:56px"> m, ⌀
+            <input id="ef-pd" type="number" step="0.05" value="0.3" style="width:56px"> m, lap
+            <input id="ef-pl" type="number" step="0.05" value="0.6" style="width:56px"> m</div>
           <p class="dim">A column standing on the footing overrides the starter section automatically.</p>
         </div>`;
       if (type === 'slab') body = `
@@ -1216,6 +1325,11 @@
         app.view.clearPreview(); app.view.setHoverFace(null);
         this.fid = null; this.status();
       };
+      const pk = document.getElementById('ef-kind');
+      if (pk) pk.addEventListener('change', () => {
+        const row = document.getElementById('ef-pilerow');
+        if (row) row.style.display = pk.value === 'pilecap' ? '' : 'none';
+      });
       for (const x of document.querySelectorAll('#dialog input,#dialog select'))
         x.addEventListener(x.tagName === 'SELECT' || x.type === 'radio' || x.type === 'checkbox' ? 'change' : 'input', update);
       update();
@@ -1258,6 +1372,8 @@
         bottom: v('ef-b'), side: v('ef-side'), topLayer: (document.getElementById('ef-top') || {}).value || 'X',
         xDia: v('ef-xd'), xMode: (document.querySelector('input[name="er-fx"]:checked') || {}).value || 'spacing', xValue: v('ef-xv'),
         yDia: v('ef-yd'), yMode: (document.querySelector('input[name="er-fy"]:checked') || {}).value || 'spacing', yValue: v('ef-yv'),
+        kind: (document.getElementById('ef-kind') || {}).value || 'pad',
+        piles: v('ef-pn'), pileS: v('ef-ps'), pileDia: v('ef-pd'), pileLap: v('ef-pl'),
         stubX: v('ef-nx'), stubY: v('ef-ny'), stubDia: v('ef-sd'),
         lap: v('ef-lap'), leg: v('ef-leg'), colW: v('ef-cw'), colL: v('ef-cl'),
       } };
