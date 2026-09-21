@@ -19,7 +19,26 @@ where ACI is silent.
 - Inside bend diameter **6 db** (bars ≤ 25 mm); centerline bend radius 3.5 db.
 - The tie never leaves its outline — nothing enters the cover zone.
 
-## Beams — shear (ACI 318 special seismic)
+## Beams
+
+### Beam connections (MNL-66(20) BM-202/203/204 + ACI 9.8)
+- **End support detection**: a column whose center lies within 0.75 m of a
+  beam end face (and whose box the beam line actually enters) is the
+  support; a perpendicular beam crossing within 0.6 m is a girder.
+- **Far-side development (BM-202/204)**: at a supported end, top AND bottom
+  bars run to the far side of the column/girder ties --
+  `tip = center + planReach - 40 mm cover - 12 mm tie` -- and take the
+  standard 90-degree hook (12db tail) there. The framing trim keeps the
+  solid at the near face, so the bar extension is exactly the joint width
+  less covers.
+- **Tie cap (BM-203/204)**: through each supported 0.6 m connection zone,
+  tie spacing steps down to max 8 in (203 mm) -- non-seismic layouts only
+  (seismic zone rules already govern).
+- **Integrity reinforcement (ACI 9.8.1.2/9.8.1.4)**: at least 2 continuous
+  top + 2 continuous bottom bars on every beam (default on, dialog
+  toggle); at a DISCONTINUOUS end both rows anchor with standard 90-degree
+  hooks at the face.
+ — shear (ACI 318 special seismic)
 - First stirrup **50 mm (2 in)** from the support face (to the tie surface).
 - Confinement zones **2h** at both ends at **sc ≤ min(d/4, 125 mm)**.
 - Mid-span at **sm ≤ d/2**, d = h − (cover + tie + r).

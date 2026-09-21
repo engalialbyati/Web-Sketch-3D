@@ -173,7 +173,7 @@
   // (bend radius) site — never as an extension.
 
   // --------------------------------------------------------------- BEAM
-  function buildBeamRebar(m, ent, p, add) {
+  function buildBeamRebar(m, ent, p, add, entities) {
     const bp = ent.params || {};
     const bl = bp.baseline;
     if (!Array.isArray(bl) || bl.length < 2) return { error: 'beam has no baseline' };
@@ -216,6 +216,53 @@
     const vBotBar = vBot === fr.v1
       ? fr.v1 - (q.bot + tie + q.botDia / 2) : fr.v0 + q.bot + tie + q.botDia / 2;
 
+    // ---- MNL-66(20) BM-202 / BM-204 END SUPPORTS. The framing trim ends
+    // the solid at the column face but keeps the centerline baseline, so
+    // the entity pool tells us what receives each end: a COLUMN (beam bars
+    // run on to the FAR SIDE of its ties and take the standard hook there)
+    // or a perpendicular GIRDER (same rule into its far side). Neither =
+    // a discontinuous end -> ACI 9.8.1.4 integrity hooks.
+    const colPlanReach = (cp, ux, uy) => {
+      const rot = +((cp || {}).rotation) || 0;
+      const hw = (+cp.width || 0.3) / 2, hd = (+cp.depth || 0.3) / 2;
+      const lx = [Math.cos(rot), Math.sin(rot)], ly = [-Math.sin(rot), Math.cos(rot)];
+      return Math.abs(ux * lx[0] + uy * lx[1]) * hw + Math.abs(ux * ly[0] + uy * ly[1]) * hd;
+    };
+    const halfWebB = ((+bp.webWidth || 0) || 0.2) / 2;
+    const endSupport = (P, outN) => {
+      if (!Array.isArray(entities)) return null;
+      let best = null;
+      for (const e of entities) {
+        if (!e || !e.params || e.id === ent.id) continue;
+        if (e.type === 'column' && e.params.base) {
+          const c = e.params.base;
+          if (Math.hypot(c[0] - P.x, c[1] - P.y) > 0.75) continue;
+          // the beam line must actually run INTO the box, not past its side
+          const lat = Math.abs((c[0] - P.x) * -outN.y + (c[1] - P.y) * outN.x);
+          if (lat > colPlanReach(e.params, -outN.y, outN.x) + halfWebB + 0.02) continue;
+          const s = (c[0] - P.x) * outN.x + (c[1] - P.y) * outN.y;
+          // far side of the column ties: center + reach - cover - tie dia
+          const ext = s + colPlanReach(e.params, outN.x, outN.y) - 0.04 - 0.012;
+          if (!best || ext > best.ext) best = { kind: 'column', ext: Math.max(ext, 0.05) };
+        } else if (e.type === 'beam' && Array.isArray(e.params.baseline)) {
+          const gb = e.params.baseline, gA = gb[0], gB2 = gb[gb.length - 1];
+          const gx = gB2[0] - gA[0], gy = gB2[1] - gA[1], gL = Math.hypot(gx, gy) || 1;
+          if (Math.abs((gx / gL) * outN.x + (gy / gL) * outN.y) > 0.5) continue; // parallel, not crossing
+          const t = Math.max(0, Math.min(1, ((P.x - gA[0]) * gx + (P.y - gA[1]) * gy) / (gL * gL)));
+          const Qx = gA[0] + gx * t, Qy = gA[1] + gy * t;
+          if (Math.hypot(Qx - P.x, Qy - P.y) > 0.6) continue;
+          const s = (Qx - P.x) * outN.x + (Qy - P.y) * outN.y;
+          const ext = s + ((+e.params.webWidth || 0) || 0.2) / 2 - 0.04 - 0.012;
+          if (!best || ext > best.ext) best = { kind: 'girder', ext: Math.max(ext, 0.05) };
+        }
+      }
+      return best;
+    };
+    const P0 = fr.map((fr.u0 + fr.u1) / 2, (fr.v0 + fr.v1) / 2);
+    const P1 = G.sub(P0, G.mul(fr.n, fr.depth));
+    const supS = endSupport(P0, fr.n);            // +fr.n points out of the start face
+    const supE = endSupport(P1, G.mul(fr.n, -1)); // -fr.n out of the far face
+
     let ties = 0, bars = 0;
     // ties along the span (stirrupPath on the section frame, copies -n)
     const rounding = (tie / 2 + mainDia / 2) / tie;
@@ -230,12 +277,24 @@
     // the support, mid-span at d/2), else uniform spacing/amount
     const hSec = Math.abs(fr.v1 - fr.v0);
     const dEff = hSec - (q.bot + tie + q.botDia / 2); // to the tension row
-    const positions = q.seismic
+    let positions = q.seismic
       ? seismicTiePositions(fr.depth, hSec, dEff, (q.first || 0.05) + tie / 2) // cover to the tie SURFACE
       : (() => {
         const d = window.Rebar.distribute(fr, { mode: q.mode, value: q.value, front: q.end, dia: tie });
         return Array.from({ length: d.count }, (_, i) => d.off + i * d.step);
       })();
+    // BM-203 / BM-204: through the connection zone where the developed
+    // bars cross the support, tie spacing steps down to 8 in maximum
+    if (!q.seismic && (supS || supE)) {
+      const firstT = positions.length ? Math.min(...positions) : 0.05;
+      const lastT = positions.length ? Math.max(...positions) : fr.depth - 0.05;
+      const set = new Set(positions.map(t => +t.toFixed(6)));
+      if (supS) for (let t = firstT + 0.203; t <= Math.min(0.6, lastT - 0.05); t += 0.203)
+        set.add(+t.toFixed(6));
+      if (supE) for (let t = Math.max(fr.depth - 0.6, firstT); t < lastT - 0.05; t += 0.203)
+        set.add(+t.toFixed(6));
+      positions = [...set].sort((a, b) => a - b);
+    }
     // seismic laps ALTERNATE along the top corners (congestion relief
     // at one corner): every other tie mirrors the section frame
     const pathAlt = window.Rebar.stirrupPath({
@@ -304,22 +363,31 @@
       return (t, z) => G.add(G.sub(base, G.mul(fr.n, t)), G.v(0, 0, z));
     };
     const Rb = 3.5; // every bend: centerline radius 3.5 db (6 db inside dia)
-    const addBar = (u, vRow, dia, kind, t0, t1, toward, ret) => {
+    // kind1 (optional) overrides the hook at the t1 end, so a bar can run
+    // e.g. a BM-202 far-side 90-degree hook into a column while its free
+    // end keeps the user's choice
+    const addBar = (u, vRow, dia, kind, t0, t1, toward, ret, kind1) => {
+      const kEnd = kind1 || kind;
       if (t1 - t0 < 2 * Rb * dia) return; // no room to bend
       const R = Rb * dia, E = 12 * dia, map = bendMap(u, vRow);
-      const hS = t0 <= zA + 1e-9, hE = t1 >= zB - 1e-9; // hooked ends
+      const hS = kind !== 'none' && t0 <= zA + 1e-9; // hooked ends
+      const hE = kEnd !== 'none' && t1 >= zB - 1e-9;
       let pts2;
-      if (kind === '90') pts2 = [
-        ...(hS ? [{ a: R, b: toward * (E + R) }, { a: R, b: 0 }] : [{ a: t0, b: 0 }]),
-        ...(hE ? [{ a: t1 - R, b: 0 }, { a: t1 - R, b: toward * (E + R) }] : [{ a: t1, b: 0 }]),
-      ];
-      else if (kind === '180') pts2 = [
+      if (kind === '90' || kEnd === '90') {
+        // 90-degree: the vertical 12 db tail rises AT the bar tip (the tip
+        // may sit past the solid face inside the support - BM-202 far-side
+        // development); roundedPath bends the run into the leg
+        pts2 = [
+          ...(kind === '90' && hS ? [{ a: t0, b: toward * (E + R) }, { a: t0, b: 0 }] : [{ a: t0, b: 0 }]),
+          ...(kEnd === '90' && hE ? [{ a: t1, b: 0 }, { a: t1, b: toward * (E + R) }] : [{ a: t1, b: 0 }]),
+        ];
+      } else if (kind === '180') pts2 = [
         ...(hS ? [{ a: ret, b: toward * 2 * R }, { a: 0, b: toward * 2 * R }, { a: 0, b: 0 }] : [{ a: t0, b: 0 }]),
         ...(hE ? [{ a: t1, b: 0 }, { a: t1, b: toward * 2 * R }, { a: t1 - ret, b: toward * 2 * R }] : [{ a: t1, b: 0 }]),
       ];
       else pts2 = [{ a: t0, b: 0 }, { a: t1, b: 0 }];
       const pts = window.Rebar.roundedPath(pts2, R).map(w => map(w.a, w.b));
-      add(pts, dia, { shape: kind === 'none' ? 'straight' : 'hooked', count: 1 });
+      add(pts, dia, { shape: kind === 'none' && kEnd === 'none' ? 'straight' : 'hooked', count: 1 });
       bars++;
     };
     const topLo = web ? fr.u0 + q.side + q.topDia / 2 : uLo;
@@ -341,28 +409,46 @@
       return { primary: spread(nCont, lo, hi), sameLayerExtra: [], second: spread(nExtra, lo, hi) };
     };
     const secondLayerV = (vRow, dia, toward) => vRow - toward * (dia + 0.025); // 25 mm clear
+    // ---- ACI 9.8.1.2 integrity reinforcement: at least two continuous
+    // bars top AND bottom; at a DISCONTINUOUS end they anchor with
+    // standard hooks (9.8.1.4). At a supported end the continuous rows
+    // develop to the FAR SIDE of the column/girder ties (BM-202/BM-204)
+    // with the standard 90-degree hook there - the extension beyond the
+    // solid face is exactly what the framing trim left to the far ties.
+    const integ = q.integrity !== false;
+    const nTopC = integ ? Math.max(2, Math.round(q.topCount || 2)) : Math.max(1, Math.round(q.topCount || 2));
+    const nBotC = integ ? Math.max(2, Math.round(q.botCount || 2)) : Math.max(1, Math.round(q.botCount || 2));
+    const t0C = supS ? -supS.ext : zA;
+    const t1C = supE ? fr.depth + supE.ext : zB;
+    const freeHook = (userHook) => integ ? '90' : (userHook || 'none');
+    const topHkS = supS ? '90' : freeHook(q.topHook);
+    const topHkE = supE ? '90' : freeHook(q.topHook);
+    const botHkS = supS ? '90' : freeHook(q.botHook);
+    const botHkE = supE ? '90' : freeHook(q.botHook);
     // TOP: continuous full span (hooked ends) + extra curtailed Ln*ratio
     // from each support face, outer end hooked like the row
     const tCut = Ln * (q.topCut != null ? q.topCut : 0.25);
-    const topPlan = layerPlan(q.topCount, q.topExtra || 0, q.topDia, topLo, topHi);
+    const topPlan = layerPlan(nTopC, q.topExtra || 0, q.topDia, topLo, topHi);
     for (const u of topPlan.primary)
-      addBar(u, vTopBar, q.topDia, q.topHook || 'none', zA, zB, tTop, q.hookRet || 0.4);
+      addBar(u, vTopBar, q.topDia, topHkS, t0C, t1C, tTop, q.hookRet || 0.4, topHkE);
     if (topPlan.second.length) {
       const v2 = secondLayerV(vTopBar, q.topDia, tTop);
       for (const u of topPlan.second)
         addBar(u, v2, q.topDia, 'none', zA + tCut, zB - tCut, tTop, 0);
     } else {
       for (const u of topPlan.sameLayerExtra) {
-        addBar(u, vTopBar, q.topDia, q.topHook || '90', zA, zA + tCut, tTop, q.hookRet || 0.4);
-        addBar(u, vTopBar, q.topDia, 'none', zB - tCut, zB, tTop, 0); // mirror segment
+        addBar(u, vTopBar, q.topDia, supS ? '90' : (q.topHook || '90'),
+          supS ? -supS.ext : zA, zA + tCut, tTop, q.hookRet || 0.4);
+        addBar(u, vTopBar, q.topDia, 'none', zB - tCut,
+          supE ? fr.depth + supE.ext : zB, tTop, 0, supE ? '90' : 'none'); // mirror segment
       }
     }
     // BOTTOM: continuous (hooked ends) + extra stopped Ln*ratio short of
     // both supports (positive-moment mid-span bars, square-cut ends)
     const bCut = Ln * (q.botCut != null ? q.botCut : 0.125);
-    const botPlan = layerPlan(q.botCount, q.botExtra || 0, q.botDia, uLo, uHi);
+    const botPlan = layerPlan(nBotC, q.botExtra || 0, q.botDia, uLo, uHi);
     for (const u of botPlan.primary)
-      addBar(u, vBotBar, q.botDia, q.botHook || 'none', zA, zB, tBot, q.hookRet || 0.4);
+      addBar(u, vBotBar, q.botDia, botHkS, t0C, t1C, tBot, q.hookRet || 0.4, botHkE);
     const bv2 = secondLayerV(vBotBar, q.botDia, tBot);
     for (const u of botPlan.second)
       addBar(u, bv2, q.botDia, 'none', zA + bCut, zB - bCut, tBot, 0);
@@ -408,7 +494,7 @@
           bars++;
         }
     }
-    return { ties, bars };
+    return { ties, bars, supports: { start: supS ? supS.kind : 'free', end: supE ? supE.kind : 'free' } };
   }
 
   // ------------------------------------------------------------- COLUMN
@@ -810,7 +896,7 @@
       ids.push(...made);
       return made;
     };
-    const res = type === 'beam' ? buildBeamRebar(m, ent, p, add)
+    const res = type === 'beam' ? buildBeamRebar(m, ent, p, add, entities)
       : type === 'column' ? buildColumnRebar(m, ent, p, sink)
         : type === 'foundation' ? buildFootingRebar(m, ent, p, add, entities)
           : type === 'wall' ? buildWallRebar(m, ent, p, add)
@@ -904,6 +990,8 @@
           <div class="form-row"><label>End Hooks T/B</label>
             <select id="eb-th" style="width:76px"><option value="none">None</option><option value="90" selected>90\u00b0</option><option value="180">180\u00b0</option></select>
             <select id="eb-bh" style="width:76px"><option value="none">None</option><option value="90" selected>90\u00b0</option><option value="180">180\u00b0</option></select></div>
+          <div class="form-row"><label>Integrity 9.8</label>
+            <label class="chk"><input type="checkbox" id="eb-integ" checked> 2+2 continuous bars, hooked at free ends; at columns/girders bars develop to the far side of the ties (BM-202/204)</label></div>
           <div class="form-row"><label>180\u00b0 Return m</label>
             <input id="eb-hret" type="number" step="0.05" value="0.4" style="width:70px"></div>
           <div class="form-row"><label>Extra Top (cut)</label>
@@ -1028,7 +1116,9 @@
         for (const { pts } of pv.paths.slice(0, 400))
           app.view.previewLoop(pts, window.Rebar.REBAR_COLOR);
         const c = document.getElementById('er-count');
-        if (c) c.textContent = pv.error ? pv.error : `${pv.paths.length} bars in the cage`;
+        if (c) c.textContent = pv.error ? pv.error
+          : `${pv.paths.length} bars in the cage` + (pv.supports
+            ? ` \u00b7 ends: ${pv.supports.start} / ${pv.supports.end}` : '');
       };
       app._onDialogClose = () => {
         app.view.clearPreview(); app.view.setHoverFace(null);
@@ -1047,6 +1137,7 @@
         mode: (document.querySelector('input[name="er-tie"]:checked') || {}).value || 'spacing',
         value: v('eb-tval'),
         seismic: !!(document.getElementById('eb-seis') || {}).checked,
+        integrity: (document.getElementById('eb-integ') || {}).checked !== false,
         first: 0.05,
         topCount: Math.max(1, Math.round(v('eb-topn'))), topDia: v('eb-topd'),
         botCount: Math.max(1, Math.round(v('eb-botn'))), botDia: v('eb-botd'),

@@ -58,7 +58,7 @@ module.exports = h => {
     side: 0.03, end: 0.05, tieDia: 0.008, bentAngle: 135, bentFactor: 6,
     mode: 'amount', value: 5,
     topCount: 2, topDia: 0.014, botCount: 3, botDia: 0.016,
-    top: 0.03, bot: 0.03, skin: 0, skinDia: 0.012,
+    top: 0.03, bot: 0.03, skin: 0, skinDia: 0.012, integrity: false,
   } });
   function beamWorld() {
     const m = new Model();

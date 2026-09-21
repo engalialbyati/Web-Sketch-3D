@@ -132,10 +132,18 @@ to app features with implementation status.
 - SLAB-202/203: Opening **trim bars** (additional steel around holes)
 - SLAB-208: Slab thickness change / step in bottom
 
-### Phase 4 — Beam connections (next)
+### Phase 4 — Beam connections (DONE)
 - BM-202/203: Beam reinforcing **development length** at column (ldh, ld)
+  - end-support detection (column / girder / free) from the entity pool
+  - bars run to the FAR SIDE of the column/girder ties (center + plan
+    reach - 40 mm cover - tie dia) with the standard 90-degree hook
+  - BM-203/204 tie cap: max 8 in o.c. through the 0.6 m connection zones
 - BM-204/205: **Beam-to-girder** connection details
+  - perpendicular crossing beam detected at the end, same far-side rule
+    into the girder (webWidth half-extent)
 - BM-2/3: **Integrity reinforcement** (continuous perimeter beams)
+  - ACI 9.8.1.2: min 2+2 continuous top/bottom bars (default on)
+  - ACI 9.8.1.4: standard hooks at discontinuous ends
 
 ### Phase 5 — Wall openings
 - WALL-206-208: **Trim bars** around door/window openings
