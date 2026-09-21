@@ -16,8 +16,13 @@ module.exports = h => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'js/app.js'), 'utf8');
     const i = src.indexOf('createFaceFromSelectedEdges() {');
     const sigLen = 'createFaceFromSelectedEdges() {'.length;
-    const j = src.indexOf('\n  }\n', i) >= 0 ? src.indexOf('\n  }\n', i) + 4 : src.indexOf('\r\n  }\r\n', i) + 6;
-    const body = src.slice(i + sigLen, j - 6 >= i + sigLen ? j - 6 : j); // strip the trailing "}\r\n"
+    // brace-matched method end (sentinel searches broke on line-ending mixes)
+    let depth = 0, j = -1;
+    for (let k = src.indexOf('{', i); k < src.length; k++) {
+      if (src[k] === '{') depth++;
+      else if (src[k] === '}') { depth--; if (depth === 0) { j = k; break; } }
+    }
+    const body = src.slice(i + sigLen, j); // up to the method's closing brace
     // the method body, minus the signature — wrapped so `this` = self
     const factorySrc = 'return function make(app, G, Model) {\n' +
       '  const toasts = [];\n' +

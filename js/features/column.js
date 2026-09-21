@@ -22,10 +22,12 @@
   // pure geometry — unit-testable, no app dependency. Legacy direct builder
   // (extrudes UP from the picked plane); the level-driven path is
   // StructuralManager.buildColumn, used by the tool below.
-  function placeColumn(G, m, p, w, d, h, rot = 0, stamp = null) {
+  function placeColumn(G, m, p, w, d, h, rot = 0, stamp = null, offs = null) {
     // plan rotation about the column center — aligned columns cut walls square
     const cs = Math.cos(rot), sn = Math.sin(rot);
-    const pc = (lx, ly) => G.v(p.x + lx * cs - ly * sn, p.y + lx * sn + ly * cs, p.z);
+    // insertion offsets (global plan): the analytical point p is unchanged
+    const ox = offs ? (+offs[0] || 0) : 0, oy = offs ? (+offs[1] || 0) : 0;
+    const pc = (lx, ly) => G.v(p.x + ox + lx * cs - ly * sn, p.y + oy + lx * sn + ly * cs, p.z);
     const f = m.addFaceFromRings([pc(-w / 2, -d / 2), pc(w / 2, -d / 2), pc(w / 2, d / 2), pc(-w / 2, d / 2)]);
     if (!f) return null;
     // stamp BEFORE the sweep: pushPull children inherit it, so indepSkip
@@ -33,10 +35,10 @@
     // at corner junctions (the load-grid-model-then-draw-a-wall freeze)
     if (stamp) f.userData = { ...stamp };
     if (!m.pushPull(f, h)) return null;
-    const R = Math.hypot(w, d); // circumscribed half-extent (rotation-proof filter)
+    const R = Math.hypot(w, d) + Math.hypot(ox, oy); // rotation- and offset-proof filter
     return [...m.faces.values()].filter(g => {
       const c = m.faceCentroid(g);
-      return c.x > p.x - R && c.x < p.x + R && c.y > p.y - R && c.y < p.y + R
+      return c.x > p.x + ox - R && c.x < p.x + ox + R && c.y > p.y + oy - R && c.y < p.y + oy + R
         && c.z >= p.z - 1e-6 && c.z <= p.z + h + 1e-6;
     });
   }

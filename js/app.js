@@ -2295,7 +2295,7 @@ class BimEntityManager {
     try {
       made = window.ColumnFeature
         ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, p.height, +p.rotation || 0,
-          { bimEntityId: id, bimType: 'column' })
+          { bimEntityId: id, bimType: 'column' }, null, [+p.offsetX || 0, +p.offsetY || 0])
         : [];
     } catch (e) { m.bimHold = false; return false; }
     if (!made || !made.length) { m.bimHold = false; return false; }
@@ -7458,9 +7458,9 @@ class App {
           value: String(Array.isArray(p.layers) && p.layers.length
             ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
             : '') }]; break;
-      case 'column': list = [num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
+      case 'column': list = [num('offsetX', 'Offset X m', 0.005), num('offsetY', 'Offset Y m', 0.005), num('width', 'Width m', 0.05), num('depth', 'Depth m', 0.05),
         !constrained ? num('height', 'Height m', 0.05) : null, topSel, rot]; break;
-      case 'beam': list = [num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05),
+      case 'beam': list = [num('offsetLateral', 'Offset lateral m', 0.005), num('webWidth', 'Web Width m', 0.05), num('height', 'Height m', 0.05),
         p.locationLine != null ? { key: 'locationLine', label: 'Location Line', kind: 'select',
           value: p.locationLine || 'center',
           options: [['center', 'Center'], ['left', 'Left Face'], ['right', 'Right Face']] } : null]; break;
@@ -7801,6 +7801,19 @@ class App {
         <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
         <button class="mini-btn" id="gi-del">Delete</button>
         <div class="dim" style="margin-top:4px">Hold <b>Ctrl</b> (or <b>Tab</b>) to query individual faces (m²) and edges (m)</div>`;
+      // insertion-offset quick actions (framing justification)
+      if (ent.type === 'beam' || ent.type === 'column') {
+        const flushBtns = ent.type === 'beam'
+          ? '<button class="mini-btn" data-flush="left">&#9668; Flush</button> <button class="mini-btn" data-flush="right">Flush &#9658;</button>'
+          : '<button class="mini-btn" data-flush="-x">&#9668;X</button> <button class="mini-btn" data-flush="x">X&#9658;</button> <button class="mini-btn" data-flush="-y">&#9668;Y</button> <button class="mini-btn" data-flush="y">Y&#9658;</button>';
+        const box2 = document.createElement('div');
+        box2.className = 'gi-params';
+        box2.style.marginTop = '4px';
+        box2.innerHTML = flushBtns + '<div class="dim" style="margin-top:2px">Flush this face with the crossing element (auto ' + '\u0394' + ')</div>';
+        el.appendChild(box2);
+        box2.querySelectorAll('[data-flush]').forEach(b2 =>
+          b2.addEventListener('click', () => this.flushAlign(ent.id, b2.dataset.flush)));
+      }
       const bndBtn = el.querySelector('#gi-boundary');
       if (bndBtn) bndBtn.addEventListener('click', () => this.bim.editBoundary(ent.id));
       const pfBox = el.querySelector('#gi-pfld');
@@ -7954,6 +7967,42 @@ class App {
       if (tb) tb.addEventListener('click', () => this.thickenDialog());
       return;
     }
+  }
+  // FLUSH ALIGN (insertion offsets): shift the selected element so its face
+  // lands on the host's face plane. Beams shift along their LATERAL axis
+  // (angle-proof); columns along global X/Y. delta = (host - target) / 2.
+  flushAlign(id, dir) {
+    const ent = this.bim.getEntityById(id);
+    if (!ent || !this.structural) return;
+    const S = this.structural;
+    const others = this.bim.entities.filter(e => e.id !== id);
+    const ok2 = this.run('flush align', m => {
+      if (ent.type === 'beam') {
+        const bl = ent.params.baseline, A = bl[0], B = bl[bl.length - 1];
+        const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
+        const ux = -dy / L, uy = dx / L; // lateral (+ = left of the run)
+        const host = S.columnAtBeamEnd(ent.params, others);
+        if (!host) throw new Error('no column near this beam end to align with');
+        const delta = S.flushDelta(ent, host, ux, uy) * (dir === 'left' ? 1 : -1);
+        const wHalf = (ent.params.webWidth || 0.2) / 2;
+        const loc = ent.params.locationLine === 'left' ? -wHalf : ent.params.locationLine === 'right' ? wHalf : 0;
+        ent.params.offsetLateral = +(delta - loc).toFixed(6);
+        if (!this.bim.rebuildBeamEntity(id)) throw new Error('beam rebuild failed');
+        this.toast('Flush: beam shifted ' + (Math.abs(delta - loc) * 1000).toFixed(0) + ' mm laterally');
+      } else if (ent.type === 'column') {
+        const axis = dir === 'x' || dir === '-x' ? [1, 0] : [0, 1];
+        const sign = dir.startsWith('-') ? -1 : 1;
+        const host = S.beamCrossingColumn(ent.params, axis[0], axis[1], others);
+        if (!host) throw new Error('no beam crosses this column along ' + (axis[0] ? 'X' : 'Y'));
+        const delta = S.flushDelta(ent, host, axis[0], axis[1]) * sign;
+        if (axis[0]) ent.params.offsetX = +(((+ent.params.offsetX) || 0) + delta).toFixed(6);
+        else ent.params.offsetY = +(((+ent.params.offsetY) || 0) + delta).toFixed(6);
+        if (!this.bim.rebuildColumnEntity(id)) throw new Error('column rebuild failed');
+        this.toast('Flush: column shifted ' + (Math.abs(delta) * 1000).toFixed(0) + ' mm along ' + (axis[0] ? 'X' : 'Y'));
+      } else return;
+      return true;
+    });
+    if (ok2) this.selectElement(id);
   }
   _propRow(label, inner) {
     return `<div class="pp-row" style="display:flex;align-items:center;gap:6px;margin:2px 0">

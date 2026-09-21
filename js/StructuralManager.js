@@ -777,6 +777,56 @@
       return Math.hypot(x - px, y - py) <= half;
     }
 
+    // ------------------------------------------------ insertion offsets
+    /** Width of a column's plan box along a unit plan direction (the
+     *  support function of the rotated rectangle). */
+    columnPlanReach(p, ux, uy) {
+      const rot = +((p || {}).rotation) || 0;
+      const hw = (+p.width || 0.3) / 2, hd = (+p.depth || 0.3) / 2;
+      const lx = [Math.cos(rot), Math.sin(rot)], ly = [-Math.sin(rot), Math.cos(rot)];
+      return Math.abs(ux * lx[0] + uy * lx[1]) * hw + Math.abs(ux * ly[0] + uy * ly[1]) * hd;
+    }
+    /** The flush shift for TARGET against HOST along +u (unit plan vec):
+     *  delta = (hostReach - targetReach) / 2 - the centers move so the
+     *  outer faces land on one line. Returns the signed shift to ADD along +u. */
+    flushDelta(target, host, ux, uy) {
+      const reach = (e2) => e2.type === 'column'
+        ? this.columnPlanReach(e2.params, ux, uy)
+        : Math.abs(((e2.params || {}).webWidth || 0.2)) / 2;
+      return (reach(host) - reach(target)) / 2;
+    }
+    /** Nearest column within 0.75 m of either beam endpoint (the flush host). */
+    columnAtBeamEnd(beamParams, pool) {
+      const bl = (beamParams || {}).baseline;
+      if (!bl || bl.length < 2) return null;
+      let best = null, bestD = 0.75;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.type !== 'column' || !ent.params || !ent.params.base) continue;
+        for (const end of [bl[0], bl[bl.length - 1]]) {
+          const dd = Math.hypot(ent.params.base[0] - end[0], ent.params.base[1] - end[1]);
+          if (dd < bestD) { bestD = dd; best = ent; }
+        }
+      }
+      return best;
+    }
+    /** A beam crossing this column, roughly perpendicular to u (the flush
+     *  host for a column shifting along u). */
+    beamCrossingColumn(colParams, ux, uy, pool) {
+      const c = (colParams || {}).base || [];
+      let best = null, bestD = 1e9;
+      for (const ent of pool || this.entities) {
+        if (!ent || ent.type !== 'beam' || !ent.params || !ent.params.baseline) continue;
+        const bl = ent.params.baseline, A = bl[0], B = bl[bl.length - 1];
+        const dx = B[0] - A[0], dy = B[1] - A[1], L = Math.hypot(dx, dy) || 1;
+        if (Math.abs((dx / L) * ux + (dy / L) * uy) > 0.5) continue; // runs ALONG u
+        const t = ((c[0] - A[0]) * dx + (c[1] - A[1]) * dy) / (L * L);
+        if (t < -0.05 || t > 1.05) continue;
+        const px = A[0] + dx * Math.max(0, Math.min(1, t)), py = A[1] + dy * Math.max(0, Math.min(1, t));
+        const dd = Math.hypot(c[0] - px, c[1] - py);
+        if (dd < bestD && dd < 0.6) { bestD = dd; best = ent; }
+      }
+      return best;
+    }
     // ---------------------------------------------------------- B-Rep builds
     /** Map a profile (u, v) loop to world points on the vertical section
      *  plane through `at`, for a baseline A -> B (used for caps, preview,
@@ -790,7 +840,8 @@
       // Location Line: which line the drawn baseline rides on - the section
       // center (default), or shifted so the left/right face sits on it
       const wHalf = (BeamProfiles.normalize(p).webWidth || 0.2) / 2;
-      const off = p.locationLine === 'left' ? -wHalf : p.locationLine === 'right' ? wHalf : 0;
+      const off = (p.locationLine === 'left' ? -wHalf : p.locationLine === 'right' ? wHalf : 0)
+        + (+p.offsetLateral || 0); // manual insertion offset (analytical line intact)
       return loop.map(q => G.v(at[0] + n.x * (q.u + off), at[1] + n.y * (q.u + off), b.zBottom + q.v));
     }
     /** Sweep the parametric profile along the baseline: a section face at the
@@ -882,13 +933,16 @@
       const b = this.columnBounds(p);
       if (b.height < 0.02) throw new Error('column height below minimum');
       const c = p.base || p.center;
+      // insertion offset: the ANALYTICAL base (grid position) stays; the solid
+      // shifts by (offsetX, offsetY) in GLOBAL plan axes
+      const offX = +p.offsetX || 0, offY = +p.offsetY || 0;
       const w = Math.max(0.02, +p.width || 0.3) / 2, d = Math.max(0.02, +p.depth || 0.3) / 2;
       // ROTATION about the column center (plan, radians): a column aligned
       // with its host wall cuts the wall square — no wedge slivers at the
       // junction of an axis-fixed box and an angled run
       const rot = +p.rotation || 0;
       const rcs = Math.cos(rot), rsn = Math.sin(rot);
-      const pc = (lx, ly, z) => G.v(c[0] + lx * rcs - ly * rsn, c[1] + lx * rsn + ly * rcs, z);
+      const pc = (lx, ly, z) => G.v(c[0] + offX + lx * rcs - ly * rsn, c[1] + offY + lx * rsn + ly * rcs, z);
       const ring = [pc(-w, -d, b.zEnd), pc(w, -d, b.zEnd), pc(w, d, b.zEnd), pc(-w, d, b.zEnd)];
       const before = new Set(model.faces.keys());
       const f = model.addFaceFromRings(ring.map(q => G.clone(q)));
