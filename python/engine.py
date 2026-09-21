@@ -33,6 +33,54 @@ except Exception as e:  # ImportError, DLL mismatch, licence dialog, anything
     FREECAD_ERR = str(e)
 
 
+def round_corners(points, radius, seg=4):
+    """Replace each interior corner with a tessellated arc (the ACI mandrel
+    bend) - makePipeShell around SHARP corners explodes its tessellation
+    non-monotonically, and real bars are bent, not mitered."""
+    if len(points) < 3 or radius <= 0:
+        return points
+    def sub(a, b): return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+    def norm(a):
+        n = math.sqrt(a[0] ** 2 + a[1] ** 2 + a[2] ** 2)
+        return (a[0] / n, a[1] / n, a[2] / n) if n else a
+    def add(a, b, s): return (a[0] + s * b[0], a[1] + s * b[1], a[2] + s * b[2])
+    out = [points[0]]
+    for i in range(1, len(points) - 1):
+        p, prev, nxt = points[i], points[i - 1], points[i + 1]
+        d1, d2 = norm(sub(p, prev)), norm(sub(nxt, p))
+        dot = max(-1.0, min(1.0, d1[0] * d2[0] + d1[1] * d2[1] + d1[2] * d2[2]))
+        ang = math.acos(dot)
+        if ang < 0.05:
+            out.append(p)
+            continue
+        t = radius * math.tan(ang / 2.0)
+        t = min(t, 0.45 * math.sqrt(sum(c * c for c in sub(p, prev))),
+                   0.45 * math.sqrt(sum(c * c for c in sub(nxt, p))))
+        a, b = add(p, d1, -t), add(p, d2, t)
+        # arc center: offset from the corner along the angle bisector
+        bis = norm(add(d1, d2, 1))
+        import math as _m
+        # center lies at distance radius / sin(ang/2) from the corner
+        ctr = add(p, bis, -radius / _m.sin(ang / 2.0))
+        v0 = sub(a, ctr)
+        axis = (d1[1] * d2[2] - d1[2] * d2[1], d1[2] * d2[0] - d1[0] * d2[2], d1[0] * d2[1] - d1[1] * d2[0])
+        axis = norm(axis)
+        for k in range(1, seg + 1):
+            f = k / float(seg)
+            # rotate v0 toward v1 = sub(b, ctr) by f*ang around axis (Rodrigues)
+            w = v0
+            for _ in range(0):  # placeholder
+                pass
+            c, s = math.cos(f * ang), math.sin(f * ang)
+            rot = (w[0] * c + (axis[1] * w[2] - axis[2] * w[1]) * s + axis[0] * (axis[0] * w[0] + axis[1] * w[1] + axis[2] * w[2]) * (1 - c),
+                   w[1] * c + (axis[2] * w[0] - axis[0] * w[2]) * s + axis[1] * (axis[0] * w[0] + axis[1] * w[1] + axis[2] * w[2]) * (1 - c),
+                   w[2] * c + (axis[0] * w[1] - axis[1] * w[0]) * s + axis[2] * (axis[0] * w[0] + axis[1] * w[1] + axis[2] * w[2]) * (1 - c))
+            out.append(add(ctr, rot, 1.0))
+        out.append(b)
+    out.append(points[-1])
+    return out
+
+
 def build_pipe_freecad(points, diameter, tolerance):
     """Exact rebar: circular profile swept along the centerline wire
     (the FreeCAD-Reinforcement construction). Returns (vertices, facets)."""
@@ -40,7 +88,19 @@ def build_pipe_freecad(points, diameter, tolerance):
     wire = Part.Wire(Part.makePolygon(verts3))
     r = diameter / 2.0
     t0 = verts3[1] - verts3[0]
-    profile = Part.Wire(Part.makeCircle(r, verts3[0], t0))
+    # a regular 16-gon profile: visually round at bar scale, and its ruled
+    # patches let tessellate actually follow the tolerance (the exact
+    # circle's BSpline pipe ignored it and returned 3k+ facets per bar)
+    import math as _m
+    ring = []
+    for k in range(16):
+        a = 2 * _m.pi * k / 16.0
+        # basis perpendicular to t0
+        up = FreeCAD.Vector(0, 0, 1) if abs(t0.z) < 0.9 else FreeCAD.Vector(1, 0, 0)
+        b1 = t0.cross(up).normalize()
+        b2 = t0.cross(b1).normalize()
+        ring.append(verts3[0] + b1 * (r * _m.cos(a)) + b2 * (r * _m.sin(a)))
+    profile = Part.Wire(Part.makePolygon(ring + [ring[0]]))
     shape = wire.makePipeShell([profile], True, True)
     verts, facets = shape.tessellate(tolerance)
     return ([list(v) for v in verts], [list(f) for f in facets])
@@ -165,7 +225,11 @@ class Handler(BaseHTTPRequestHandler):
                                 'error': 'FreeCAD is not importable - install FreeCAD or run '
                                          'engine.py with FreeCAD/bin/python.exe (see README)'})
                 else:
-                    verts, facets = build_pipe_freecad(pts, dia, tol)
+                    r_pts = round_corners(pts, 3.5 * dia)
+                    verts, facets = build_pipe_freecad(r_pts, dia, tol)
+                    while len(facets) > 4000 and tol < 0.05:  # density safety net
+                        tol *= 2
+                        verts, facets = build_pipe_freecad(r_pts, dia, tol)
                     out.append({'ok': True, 'engine': 'freecad',
                                 'vertices': verts, 'facets': facets})
             except Exception as e:
