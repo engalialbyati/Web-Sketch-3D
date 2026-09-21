@@ -8809,6 +8809,12 @@ class App {
     this._asWorker.postMessage(snap);
   }
   async _restoreAutosave() {
+    // FRESH START: ?fresh (or #fresh) in the URL skips the autosaved model
+    // entirely - the escape hatch when a saved model is too heavy to open
+    try { if (/(^|[?&#])fresh/.test(location.search + location.hash)) {
+      this.toast('Fresh start - the saved model was skipped');
+      return;
+    } } catch (e) { }
     try {
       let s = null, sv = 0;
       try {
@@ -8823,6 +8829,13 @@ class App {
       } catch (e) { }
       if (!s) return;
       const data = JSON.parse(s);
+      // SAFETY CAP: snapshots this size took seconds-to-minutes to open
+      // (bridge-era cages froze tabs outright) - start empty instead
+      if ((data.f || []).length > 25000) {
+        this.toast('Saved model is very heavy (' + data.f.length + ' faces) - not restored. '
+          + 'Anything you build now replaces the save.', true);
+        return;
+      }
       // a project with only datums (grids/levels, no geometry yet) still
       // restores — the vertex-count guard used to throw those saves away
       const hasContent = data && ((data.v && data.v.length) || (data.f && data.f.length)
