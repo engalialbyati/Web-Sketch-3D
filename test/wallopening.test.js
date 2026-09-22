@@ -122,6 +122,34 @@ module.exports = h => {
     eq(jamb.length, 4, `one jamb pair on the far side (${jamb.length})`);
   });
 
+  test('WALL-100A: a wall over a slab gets starter dowels into it', () => {
+    const w = wallWorld(0.2, 3, 4);
+    // host slab: top at z=0 under the wall base 0
+    const host = { id: 's1', type: 'floor', faces: [],
+      params: { thickness: 0.15, regions: [{ outer: [[0, -1, 0], [5, -1, 0], [5, 1, 0], [0, 1, 0]], holes: [] }] } };
+    const res = ER.buildElementRebar(w.m, w.ent.faces[0], wp(), [w.ent, host]);
+    ok(!res.error, res.error || 'no error');
+    const rb = [...new Map([...w.m.faces.values()]
+      .filter(f => f.userData && f.userData.rebar)
+      .map(f => [f.userData.rebar.pid, f.userData.rebar])).values()];
+    const dowels = rb.filter(r => r.role === 'wall-dowel');
+    // sv stays at the requested 0.2 (rho satisfied) -> 21 stations x 2 curtains
+    ok(dowels.length === 42, `${dowels.length} dowels (21 stations x 2 curtains)`);
+    // geometry: L-bars cross the joint - leg inside the slab, lap above
+    const dPaths = [...w.m.faces.values()].filter(f => f.userData
+      && f.userData.rebar && f.userData.rebar.role === 'wall-dowel');
+    const zs = dPaths.flatMap(f => w.m.pts(f.loop).map(q => q.z));
+    const lap = Math.max(0.3, 1.3 * 47.5 * 0.8 * 0.012);
+    near(Math.max(...zs), lap, 0.02, 'dowels rise the Class B lap above the slab');
+    ok(Math.min(...zs) < -0.02, 'dowel legs reach into the slab');
+    // no host -> no dowels (regression)
+    const w2 = wallWorld(0.2, 3, 4);
+    ER.buildElementRebar(w2.m, w2.ent.faces[0], wp(), [w2.ent]);
+    const none = [...w2.m.faces.values()].filter(f => f.userData
+      && f.userData.rebar && f.userData.rebar.role === 'wall-dowel');
+    ok(none.length === 0, 'no host below: no dowels');
+  });
+
   test('a wall without openings reports none (regression)', () => {
     const w = wallWorld(0.2, 3, 4);
     const pv = ER.previewElementRebar(w.m, w.ent.faces[0], wp(), [w.ent]);

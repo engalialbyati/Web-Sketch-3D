@@ -681,10 +681,17 @@
       const shaftR = Math.max(0.05, pc.R - q.side - q.stubDia / 2 - 0.012);
       const nv = Math.max(6, Math.round((2 * Math.PI * shaftR) / 0.2));
       const zBotCap = zTop - fr.depth;
+      // FND-150 + COL-200: with a column standing on the pier, the shaft
+      // steel rises the Class B lap ABOVE the cap top so the column bars
+      // lap it - otherwise the joint plane has no steel crossing it
+      const psiP = q.stubDia <= 0.0195 ? 0.8 : 1;
+      const zShaftTop = col
+        ? zTop - 0.05 + Math.max(0.3, 1.3 * 47.5 * psiP * q.stubDia)
+        : zTop - 0.05;
       for (let k = 0; k < nv; k++) {
         const ang = (k / nv) * Math.PI * 2;
         const bx = pc.x + shaftR * Math.cos(ang), by = pc.y + shaftR * Math.sin(ang);
-        add([G.v(bx, by, zBotCap + 0.04), G.v(bx, by, zTop - 0.05)], q.stubDia,
+        add([G.v(bx, by, zBotCap + 0.04), G.v(bx, by, zShaftTop)], q.stubDia,
           { shape: 'straight', role: 'pier-vertical', count: nv });
         bars++;
       }
@@ -1052,6 +1059,42 @@
     };
 
     let bars = 0;
+    // ---- WALL-100A: the wall's verticals must LAP dowels cast into the
+    // supporting slab/footing below. Detect a host whose top sits at the
+    // wall base and add one L-dowel per vertical station per curtain:
+    // horizontal leg inside the host, rising the Class B lap into the wall.
+    const num0 = v => { const n = +v; return Number.isFinite(n) ? n : null; };
+    const hostTopZ = e => {
+      if (!e || !e.params) return null;
+      if (e.type === 'foundation' && Array.isArray(e.params.base)) return num0(e.params.base[2]);
+      if ((e.type === 'floor' || e.type === 'slab') && Array.isArray(e.params.regions)
+        && e.params.regions[0] && Array.isArray(e.params.regions[0].outer)
+        && e.params.regions[0].outer[0]) return num0(e.params.regions[0].outer[0][2]);
+      return null;
+    };
+    const dowelHost = (Array.isArray(entities) ? entities : []).find(e =>
+      e && e !== ent && e.params && !e.params._noStarters && hostTopZ(e) != null
+      && Math.abs(hostTopZ(e) - zBot) < 0.02);
+    if (dowelHost) {
+      const psiS = q.vDia <= 0.0195 ? 0.8 : 1;
+      const lapD = Math.max(0.3, 1.3 * 47.5 * psiS * q.vDia);
+      const legD = Math.max(0.1, 8 * q.vDia);
+      const zLeg = zBot - Math.min(0.15, (dowelHost.params.thickness || 0.15) / 3);
+      const nVD = Math.max(2, Math.ceil(L / sv) + 1);
+      const sVD = L / (nVD - 1);
+      for (let i = 0; i < nVD; i++) {
+        const s = i * sVD;
+        for (const off of curtains) {
+          const px = ax + ux * s + nx * off, py = ay + uy * s + ny * off;
+          const pts = window.Rebar.roundedPath(
+            [{ a: zLeg, b: -legD }, { a: zLeg, b: 0 }, { a: zBot + lapD, b: 0 }],
+            1.5 * q.vDia).map(t => G.v(px + ux * t.b, py + uy * t.b, t.a));
+          add(pts, q.vDia, { shape: 'lshape', role: 'wall-dowel', count: nVD });
+          bars++;
+        }
+      }
+    }
+
     // vertical bars along the run — a bar inside an opening splits into the
     // below and above segments (drop anything shorter than 150 mm)
     const nV = Math.max(2, Math.ceil(L / sv) + 1);

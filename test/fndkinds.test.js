@@ -147,6 +147,20 @@ module.exports = h => {
     eq(pieces.length, 8, 'no foundation: the bars split into lapped pairs');
   });
 
+  test('FND-150: a column on the pier makes the shaft steel rise the lap', () => {
+    const w = fnd(null, true);
+    const colEnt = { id: 'c1', type: 'column', faces: [],
+      params: { base: [0.5, 0.5, 0.6], width: 0.3, depth: 0.3, height: 3 } };
+    const res = ER.buildElementRebar(w.m, topFaceOf(w), baseF(), [w.ent, colEnt]);
+    ok(!res.error, res.error || 'no error');
+    const dPaths = [...w.m.faces.values()].filter(f => f.userData
+      && f.userData.rebar && f.userData.rebar.role === 'pier-vertical');
+    ok(dPaths.length > 0, 'shaft verticals present');
+    const zs = dPaths.flatMap(f => w.m.pts(f.loop).map(q => q.z));
+    near(Math.max(...zs), 0.6 - 0.05 + Math.max(0.3, 1.3 * 47.5 * 0.8 * 0.014), 0.02,
+      'shaft steel rises the Class B lap above the cap top');
+  });
+
   test('pad default: unchanged behaviour (regression)', () => {
     const w = fnd();
     const pv = ER.previewElementRebar(w.m, topFaceOf(w), baseF(), [w.ent]);
