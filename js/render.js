@@ -251,6 +251,14 @@ class Viewport {
     this.faceMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.faceMat);
     this.faceMesh.castShadow = true;
     this.scene.add(this.faceMesh);
+    // reinforcement gets its OWN pass: full-opacity bars over the ghosted
+    // solids in X-ray. Sharing the 55% ghost material buried every cage
+    // inside concrete (depth-written front faces rejected the interior).
+    this.rebarMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.faceMat.clone());
+    this.rebarMesh.material.uniforms.uAlphaMul.value = 1.0;
+    this.rebarMesh.material.depthWrite = false;
+    this.rebarMesh.renderOrder = 2;
+    this.scene.add(this.rebarMesh);
     this.triangleFace = [];
 
     // BIM elements render as unified per-element Groups (BimElement.js) —
@@ -489,6 +497,7 @@ class Viewport {
     const appLayers = (this.app.layers || []);
     const hiddenLayers = new Set(appLayers.filter(l => l.visible === false).map(l => l.id));
     const layerTints = new Map(appLayers.filter(l => l.color).map(l => [l.id, l.color]));
+    const rpos = [], rnor = [], rcol = [], rpick = [];
     for (const f of model.faces.values()) {
       if (f.hidden || (ff && !ff(f)) || elementFaceIds.has(f.id)) continue;
       if (hiddenLayers.has(f.layerId || '0')) continue;
@@ -533,15 +542,17 @@ class Viewport {
         cache.set(f.id, entry);
         geoChanged = true; // this face's triangles changed
       }
+      const isRebar = !!(f.userData && f.userData.rebar);
+      const P = isRebar ? rpos : pos, N2 = isRebar ? rnor : nor, C = isRebar ? rcol : col, K = isRebar ? rpick : pickArr;
       for (let k = 0; k < entry.pos.length; k += 3) {
-        pos.push(entry.pos[k], entry.pos[k + 1], entry.pos[k + 2]);
-        nor.push(entry.n.x, entry.n.y, entry.n.z);
-        col.push(entry.r, entry.g, entry.b, entry.a);
+        P.push(entry.pos[k], entry.pos[k + 1], entry.pos[k + 2]);
+        N2.push(entry.n.x, entry.n.y, entry.n.z);
+        C.push(entry.r, entry.g, entry.b, entry.a);
       }
       const ntri = entry.pos.length / 9;
       for (let k = 0; k < ntri; k++) {
         this.triangleFace.push(f.id);
-        pickArr.push(pickId, pickId, pickId); // per-vertex constant: the face's id
+        K.push(pickId, pickId, pickId); // per-vertex constant: the face's id
       }
       this._pickRegistry[pickId++] = { face: f.id };
       this._mergedFaces.push({ id: f.id, aabb: entry.aabb });
@@ -563,6 +574,14 @@ class Viewport {
       fg.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
     this.faceMesh.geometry.dispose();
     this.faceMesh.geometry = fg;
+    const rg = new THREE.BufferGeometry();
+    rg.setAttribute('position', new THREE.Float32BufferAttribute(rpos, 3));
+    rg.setAttribute('normal', new THREE.Float32BufferAttribute(rnor, 3));
+    rg.setAttribute('color', new THREE.Float32BufferAttribute(rcol, 4));
+    if (rpick.length) rg.setAttribute('pickId', new THREE.Float32BufferAttribute(rpick, 1));
+    this.rebarMesh.layers.enable(1); // layer 1 = GPU pick pass (bars stay selectable)
+    this.rebarMesh.geometry.dispose();
+    this.rebarMesh.geometry = rg;
 
     // edges (element edges included — shared/welded edges belong to the
     // whole scene graph; hidden edges are skipped like hidden faces).
@@ -662,7 +681,15 @@ class Viewport {
     if (this.elementsRoot) this.elementsRoot.visible = style !== 'wireframe';
     this.faceUniforms.uMono.value = style === 'monochrome' ? 1.0 : 0.0;
   }
-  setXray(on) { this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0; this.xray = on; this.invalidate(); }
+  setXray(on) {
+    this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0;
+    // X-ray must REVEAL interiors: with depth-write on, the ghosted front
+    // faces depth-reject everything behind them (reinforcement cages
+    // inside concrete vanished). Drop the depth write while x-ray is on -
+    // later-drawn interior faces blend over the ghosts instead.
+    if (this.faceMat) this.faceMat.depthWrite = !on;
+    this.xray = on; this.invalidate();
+  }
   // Sketch Mode: ghost the model so sketch lines dominate (edges stay crisp)
   setGhost(on) {
     this.invalidate();

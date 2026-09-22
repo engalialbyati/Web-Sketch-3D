@@ -4796,6 +4796,7 @@ class App {
         ['Remove Imported IFC', 'removeIfc', ''],
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
+        ['Load MNL-66 Reinforcement Demo', 'demomnl66', ''],
         '-', ['Sections & Views…', 'viewsDlg', ''],
         '-', ['Analytical Model', 'analytical', ''], ['Export Analytical CSV…', 'analyticalCsv', ''],
         ['Truss Generator…', 'trussDlg', ''], ['Property Lines…', 'propDlg', ''],
@@ -4945,6 +4946,39 @@ class App {
     else go();
   }
 
+  // File ▸ Load MNL-66 Reinforcement Demo: the one-story RC frame
+  // with every MNL-66(20) detailing phase live (pile caps, mat, drilled
+  // pier, lapped column splices, far-side beam development, punched
+  // slab, wall openings with trim steel, SOG apron). X-Ray comes on so
+  // the cages read through the concrete.
+  loadMnl66Demo() {
+    const go = () => {
+      const ModelCls = Model;
+      this.bindModel(new ModelCls());
+      this.undoStack = []; this.redoStack = [];
+      this.exitGroup(); this.clearSelection();
+      if (!window.DemoMNL66) { this.toast('demo-mnl66 feature not loaded', true); return; }
+      let counts;
+      try { counts = window.DemoMNL66.build(this); }
+      catch (e) { this.toast('MNL-66 demo failed: ' + (e.message || e), true); return; }
+      this.onLevelsChanged();
+      if (this.bim && this.bim._hostsDirty) this.bim._hostsDirty.clear();
+      this.view.rebuild();
+      this.updateInfo(); this.refreshGroups();
+      if (this.elements && this.elements.refresh) this.elements.refresh();
+      this.view.zoomExtents();
+      if (!this.xrayOn) this.action('toggleXray');
+      this.toast('MNL-66 reinforcement demo loaded — '
+        + Object.entries(counts || {}).filter(([k]) => k !== 'rebarFaces')
+          .map(([k, n]) => n + ' ' + k + 's').join(', ')
+        + ', ' + (counts.rebarFaces || 0) + ' rebar faces');
+      this._saveAutosave();
+    };
+    const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
+    if (hasWork) this.confirmDialog('Load the MNL-66 demo? Unsaved changes will be lost.', go);
+    else go();
+  }
+
   // File ▸ Load Revit Test Building: the Element-Browser pathway test —
   // grid lines (columns grid-attached), manager-created levels, footings,
   // columns, beams, punched slabs, roof, six rooms per floor
@@ -5007,6 +5041,7 @@ class App {
       },
       demo5: () => A.loadDemo5Building(),
       demor5: () => A.loadRevitTestBuilding(),
+      demomnl66: () => A.loadMnl66Demo(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       save: () => A.saveFile(),
       // hand the authoring spec to an AI: copy to clipboard, save the .md
