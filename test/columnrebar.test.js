@@ -132,7 +132,8 @@ module.exports = h => {
     const height = 3 - 2 * (0.05 + 0.004);
     const turns = height / 0.1;
     // true helix arc length includes the pitch's vertical contribution
-    near(helix.userData.rebar.length, turns * Math.hypot(2 * Math.PI * R, 0.1), 0.15, 'helix centerline length');
+    near(helix.userData.rebar.length, turns * Math.hypot(2 * Math.PI * R, 0.1), 0.3,
+      'helix centerline length (12 chords/turn run ~1.1% short of the arc)');
     eq(faces.filter(f => f.userData.rebar.shape === 'straight').length > 0, true, 'main bars exist');
     const rMain = 0.15 - 0.04 - 0.008 - 0.008;
     const pv = CR.previewCage(m, topFace(m), p);

@@ -621,6 +621,18 @@ class Viewport {
           rs.push(-1, 1, -1, 1);
         }
       }
+      // record-only bars (model.rebarPipes === false scenes)
+      if (model._rebarRecords) {
+        for (const rec of model._rebarRecords.values()) {
+          const L2 = rec.line;
+          for (let k = 1; k < L2.length; k++) {
+            const a = L2[k - 1], b2 = L2[k];
+            rp.push(a[0], a[1], a[2], a[0], a[1], a[2]);
+            ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
+            rs.push(-1, 1, -1, 1);
+          }
+        }
+      }
       const rbg = new THREE.BufferGeometry();
       rbg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
       rbg.setAttribute('other', new THREE.Float32BufferAttribute(ro, 3));

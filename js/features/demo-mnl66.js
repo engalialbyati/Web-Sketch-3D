@@ -1,43 +1,49 @@
 'use strict';
 // ---------------------------------------------------------------------------
-// Feature: DemoMNL66 — the MNL-66(20) REINFORCEMENT SHOWCASE, loadable in
-// the app. File > Load MNL-66 Reinforcement Demo: a one-story RC frame
-// where every reinforcement phase of the detailing manual is live:
+// Feature: DemoMNL66 — the MNL-66(20) reinforcement showcase: a FIVE-STORY
+// RC building where every floor's reinforcement connects to the next.
+// File > Load MNL-66 Reinforcement Demo.
 //
-//   FND-161 pile caps (4 piles, dowels + shaft ties through the cap)
-//   FND-109 mat under the middle grid line (mesh at both faces)
-//   FND-150 drilled pier (circular cap: shaft ring cage, chord mesh)
-//   COL-200 column splices (Class B laps, staggered, splice-zone ties)
-//   BM-202 beam connections (bars develop to the FAR SIDE of the column
-//          ties) + ACI 9.8 integrity steel + 8in connection-zone ties
-//   SLAB-206 slab opening trim bars + SLAB-200 corner reinforcement
-//   WALL-206/208 wall opening trim pairs + 48in corner diagonals
-//   SOG-102/105 slab-on-ground apron: continuous edge bars, unbroken mesh
+//   Foundations: RAFT under the tower (FND-109, mesh both faces), a
+//     COMBINED footing under the two annex columns (FND-103), a STRIP
+//     footing under the annex wall (FND-102 wall dowels), the drilled
+//     PIER (FND-150) and the SOG apron (SOG-102/105)
+//   Superstructure x5 stories: columns with COL-200 splices above every
+//     slab, T-beams (interior), L-beams (edge), rect beams, slabs punched
+//     at columns + stair + elevator hoistway + a circular penetration
+//     (SLAB-206 trims, corner steel), the ELEVATOR shaft (ETABS-style
+//     shear walls + door + lintel per floor), facade walls with door +
+//     window + circular pipe opening (WALL-201), wall starter dowels into
+//     every slab (WALL-100A), shear-wall boundary elements (WALL-110)
 //
-// Geometry follows the v0.7 framing rules: columns run grid-to-grid, the
-// beams' solids are framing-trimmed at the column faces, and the rebar
-// completes the joints exactly the way MNL-66 draws them.
+// Rebar displays in LIGHT mode (centerline ribbons) - the cage is
+// ~300k faces; View > Rebar toggles pipe solids.
 // ---------------------------------------------------------------------------
 (function () {
 
-  const XS = [0, 6, 12];              // grids A..C
-  const YS = [0, 6];                  // grids 1..2
-  const COL = 0.3, BEAM_W = 0.25, BEAM_H = 0.5, SLAB_T = 0.15;
-  const PIER = { x: 15.5, y: 3, R: 0.6 };   // freestanding drilled pier
+  const STORIES = 5, H = 3;
+  const XS = [0, 6, 12], YS = [0, 6];   // 6 columns per story
+  const COL = 0.3;
+  const ELEV = { x: 2.6, y: 3.2, w: 2.2, d: 2.0, wall: 0.2 };
+  const STAIR = { x: 9.2, y: 3.0, w: 1.4, d: 1.4 };
+  const ANNEX = { cx: 15.4, c1: [14.4, 0], c2: [16.4, 0], wall: { a: [14.2, 3], b: [14.2, 5.6] } };
 
-  function build(app) {
+  async function buildAsync(app, onProgress) {
     const m = app.model, bim = app.bim, G = window.G, S = app.structural;
-    const BT = window.BimTools, ER = window.ElementRebar;
-    if (!S || !BT || !ER) throw new Error('structural/bimtools/rebar features missing');
+    const BT = window.BimTools, ER = window.ElementRebar, EF = window.ElevatorFeature;
+    if (!S || !BT || !ER || !EF) throw new Error('structural/bimtools/rebar/elevator features missing');
 
-    m.levels = [
-      { id: 'l0', name: 'Foundation', elevation: 0 },
-      { id: 'l1', name: 'Floor 1', elevation: 3 },
-    ];
+    m.levels = [{ id: 'l0', name: 'Foundation', elevation: 0 }];
+    for (let s = 1; s <= STORIES + 1; s++)
+      m.levels.push({ id: 'l' + s, name: 'Floor ' + s, elevation: s * H });
 
     const heldOp = bim._holdOpDone;
     bim._holdOpDone = true;
     m.beginEdgeSweep();
+    const stages = [];
+    const stage = (label, fn) => stages.push({ label, fn });
+    let rebarFaces = 0;
+
     try {
       const reg = (type, params, buildGeom) => {
         const before = new Set(m.faces.keys());
@@ -55,200 +61,245 @@
         return bim.create(type, JSON.parse(JSON.stringify(params)), roles, [...new Set(edges)]);
       };
 
-      // ------------------------------------------------------- foundations
-      // 4 corner columns on 1.6 m pile caps (2x2 piles each);
-      // both middle columns share one mat along grid B
-      for (const x of XS) for (const y of YS) {
-        if (x === 6) continue;                       // the mat owns grid B
-        const p = { base: [x, y, 0], width: 1.6, depth: 1.6, thickness: 0.6, baseLevel: 'l0', kind: 'pilecap' };
-        reg('foundation', p, () => S.buildFooting(G, m, p));
-      }
-      {
-        const p = { base: [6, 3, 0], width: 1.8, depth: 7.4, thickness: 0.6, baseLevel: 'l0', kind: 'mat' };
-        reg('foundation', p, () => S.buildFooting(G, m, p));
-      }
-      // freestanding drilled pier: a 16-gon cap — the rebar tool reads the
-      // circular loop and swaps in the FND-150 shaft cage by itself
-      reg('foundation', { base: [PIER.x, PIER.y, 0], radius: PIER.R, thickness: 0.7, baseLevel: 'l0',
-        _noStarters: true }, // its column splices onto the shaft steel instead
-        () => {
-          const ring = [];
-          for (let k = 0; k < 16; k++) {
-            const a = (k / 16) * Math.PI * 2;
-            ring.push(G.v(PIER.x + PIER.R * Math.cos(a), PIER.y + PIER.R * Math.sin(a), 0));
-          }
-          const f = m.addFaceFromRings(ring);
-          if (!f) throw new Error('pier ring degenerate');
-          m.pushPull(f, -0.7);
-        });
-
-      // ---------------------------------------------------------- columns
-      for (const x of XS) for (const y of YS) {
-        const p = { base: [x, y, 0], width: COL, depth: COL, height: 3,
-          baseLevelId: 'l0', topLevelId: 'l1' };
-        reg('column', p, () => S.buildColumn(G, m, p));
-      }
-      reg('column', { base: [PIER.x, PIER.y, 0], width: COL, depth: COL, height: 3,
-        baseLevelId: 'l0', topLevelId: 'l1' },
-        () => S.buildColumn(G, m, { base: [PIER.x, PIER.y, 0], width: COL, depth: COL, height: 3 }));
-
-      // ------------------------------------------------------------ beams
-      // centerline baselines AT the column centers: buildBeam's framing
-      // trim cuts every solid back to the column faces (v0.7 rule)
-      const baselines = [];
-      for (const y of YS) for (let i = 0; i < XS.length - 1; i++)
-        baselines.push([[XS[i], y, 3], [XS[i + 1], y, 3]]);
-      for (const x of XS) for (let j = 0; j < YS.length - 1; j++)
-        baselines.push([[x, YS[j], 3], [x, YS[j + 1], 3]]);
-      for (const bl of baselines) {
-        const p = { baseline: bl, profile: 'rectangular', webWidth: BEAM_W, height: BEAM_H,
-          referenceLevelId: 'l1', zJustification: 'Top' };
-        reg('beam', p, () => S.buildBeam(G, m, p));
-      }
-
-      // --------------------------------------------- slab + stair opening
-      // slab sits ON the beam tops (3.0 .. 3.15); the 1.4 m stair hole
-      // punches the geometry — SLAB-206 reads it and trims the bars
-      {
-        // demo5's construction-joint recipe: punch at every column with a
-        // 3 mm oversize reveal so the holed TOP face stays alive (the
-        // missing-top-face bug) and the columns run through the slab
-        const outer = [[-0.15, -0.15, 3.15], [12.15, -0.15, 3.15], [12.15, 6.15, 3.15], [-0.15, 6.15, 3.15]];
-        const punches = S.columnHolesForSlab(m,
-          { baseLevel: 'l1', thickness: SLAB_T, _planeZ: 3.15 }, { outer: outer.map(q => q.slice()), holes: [] });
-        const stair = [[8.2, 2.3, 3.15], [9.6, 2.3, 3.15], [9.6, 3.7, 3.15], [8.2, 3.7, 3.15]];
-        const holes = [stair, ...punches.map(p2 => {
-          const r = p2.ring;
-          const cx = r.reduce((a, q) => a + q.x, 0) / r.length;
-          const cy = r.reduce((a, q) => a + q.y, 0) / r.length;
-          return r.map(q => {
-            const dx = q.x - cx, dy = q.y - cy, l = Math.hypot(dx, dy) || 1;
-            return [+(q.x + dx / l * 0.003).toFixed(6), +(q.y + dy / l * 0.003).toFixed(6), 3.15];
-          });
-        })];
-        reg('floor', { thickness: SLAB_T, baseLevel: 'l1', regions: [{ outer, holes }] },
+      // ================================================== FOUNDATIONS
+      stage('raft + combined + strip footings', () => {
+        // RAFT under the tower: 12.6 x 6.6 x 0.6, mesh at both faces
+        reg('foundation', { base: [6, 3, 0], width: 12.6, depth: 6.6, thickness: 0.6,
+          baseLevel: 'l0', kind: 'mat' },
+          () => S.buildFooting(G, m, { base: [6, 3, 0], width: 12.6, depth: 6.6, thickness: 0.6 }));
+        // COMBINED footing: one strap pad under both annex columns
+        reg('foundation', { base: [ANNEX.cx, 0, 0], width: 2.8, depth: 1.6, thickness: 0.6,
+          baseLevel: 'l0', kind: 'combined' },
+          () => S.buildFooting(G, m, { base: [ANNEX.cx, 0, 0], width: 2.8, depth: 1.6, thickness: 0.6 }));
+        // STRIP footing under the annex wall (wall dowels line it)
+        reg('foundation', { base: [ANNEX.wall.a[0], (ANNEX.wall.a[1] + ANNEX.wall.b[1]) / 2, 0],
+          width: 1.0, depth: 3.2, thickness: 0.5, baseLevel: 'l0', kind: 'strip' },
+          () => S.buildFooting(G, m, {
+            base: [ANNEX.wall.a[0], (ANNEX.wall.a[1] + ANNEX.wall.b[1]) / 2, 0],
+            width: 1.0, depth: 3.2, thickness: 0.5 }));
+        // the drilled pier (its column splices onto the shaft steel)
+        reg('foundation', { base: [15.5, 3, 0], radius: 0.6, thickness: 0.7, baseLevel: 'l0',
+          _noStarters: true },
           () => {
-            const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
-              holes.map(hg => hg.map(q => G.v(...q))));
-            if (!f) throw new Error('slab ring degenerate');
-            if (!m.pushPull(f, -SLAB_T)) throw new Error('slab sweep failed');
+            const ring = [];
+            for (let k = 0; k < 16; k++) {
+              const a = (k / 16) * Math.PI * 2;
+              ring.push(G.v(15.5 + 0.6 * Math.cos(a), 3 + 0.6 * Math.sin(a), 0));
+            }
+            const f = m.addFaceFromRings(ring);
+            if (!f) throw new Error('pier ring degenerate');
+            m.pushPull(f, -0.7);
           });
+        // the annex SHEAR WALL on the strip footing (full height - its
+ // dowels line the strip footing and its ends carry boundary steel)
+        reg('wall', { base: [ANNEX.wall.a[0], ANNEX.wall.a[1], 0.0002],
+          end: [ANNEX.wall.b[0], ANNEX.wall.b[1], 0.0002], height: H * STORIES - 0.0004,
+          thickness: 0.2, baseLevel: 'l0', locationLine: 'centerline',
+          primitive: 'line', closed: false, joins: { start: 0, end: 0 } },
+          () => {
+            const ring = bim.wallRing({ base: [ANNEX.wall.a[0], ANNEX.wall.a[1], 0.0002],
+              end: [ANNEX.wall.b[0], ANNEX.wall.b[1], 0.0002], height: H * STORIES, thickness: 0.2 });
+            const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+            if (!f) throw new Error('annex wall ring degenerate');
+            m.pushPull(f, H * STORIES);
+          });
+
+        // SOG apron
+        reg('floor', { thickness: 0.12, baseLevel: 'l0', regions: [{ outer: [
+          [13, -3.2, 0.12], [17, -3.2, 0.12], [17, -0.8, 0.12], [13, -0.8, 0.12]], holes: [] }] },
+          () => {
+            const f = m.addFaceFromRings([
+              G.v(13, -3.2, 0.12), G.v(17, -3.2, 0.12),
+              G.v(17, -0.8, 0.12), G.v(13, -0.8, 0.12)]);
+            if (!f) throw new Error('apron ring degenerate');
+            m.pushPull(f, -0.12);
+          });
+      });
+
+      // ================================================== STORIES
+      for (let s = 0; s < STORIES; s++) {
+        const z = s * H, lvl = 'l' + (s + 1), lvlUp = 'l' + (s + 2);
+        const slabZ = z + H + 0.15; // slab sits on the beam tops
+
+        stage('columns + beams — F' + (s + 1), () => {
+          for (const x of XS) for (const y of YS) {
+            const p = { base: [x, y, z], width: COL, depth: COL, height: H,
+              baseLevelId: lvl, topLevelId: lvlUp };
+            reg('column', p, () => S.buildColumn(G, m, p));
+          }
+          // annex: 2 columns run full height on the combined footing
+          for (const [ax, ay] of [ANNEX.c1, ANNEX.c2]) {
+            const p = { base: [ax, ay, z], width: COL, depth: COL, height: H * STORIES,
+              baseLevelId: 'l0', topLevelId: 'l' + STORIES };
+            reg('column', p, () => S.buildColumn(G, m, p));
+          }
+          // pier column, one story at a time (splices on the shaft steel)
+          reg('column', { base: [15.5, 3, z], width: COL, depth: COL, height: H,
+            baseLevelId: lvl, topLevelId: lvlUp },
+            () => S.buildColumn(G, m, { base: [15.5, 3, z], width: COL, depth: COL, height: H }));
+
+          // beams: T interior (flange both sides), L edges (flange inside)
+          const bdir = (a, b2, profile) => {
+            const p = { baseline: [a, b2], profile, webWidth: 0.25, height: 0.5,
+              referenceLevelId: lvlUp, zJustification: 'Top' };
+            reg('beam', p, () => S.buildBeam(G, m, p));
+          };
+          for (const x of XS) bdir([x, 0, z + H], [x, 6, z + H], x === 6 ? 't' : 'l');
+          for (const y of YS) {
+            bdir([0, y, z + H], [6, y, z + H], 'rectangular');
+            bdir([6, y, z + H], [12, y, z + H], 'rectangular');
+          }
+        });
+
+        stage('elevator shaft — F' + (s + 1), () => {
+          EF.buildOne(app, { x: ELEV.x, y: ELEV.y, w: ELEV.w, d: ELEV.d, wall: ELEV.wall,
+            z0: z + 0.0002, h: H - 0.0002, doorW: 1.1, doorH: 2.1, doorSide: '-y',
+            lintelH: 0.4, baseLevel: lvl });
+        });
+
+        if (s < STORIES - 1) stage('facade wall — F' + (s + 1), () => {
+          // one facade bay per floor: door + window + circular pipe opening
+          const wallEnt = reg('wall', { base: [6, 6.0002, z + H + 0.1502], end: [12, 6.0002, z + H + 0.1502],
+            height: H - 0.15, thickness: 0.2, baseLevel: lvlUp,
+            locationLine: 'centerline', primitive: 'line', closed: false, joins: { start: 0, end: 0 } },
+            () => {
+              const wp = { base: [6, 6.0002, z + H + 0.1502], end: [12, 6.0002, z + H + 0.1502], height: H - 0.15, thickness: 0.2 };
+              const ring = bim.wallRing(wp);
+              const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
+              if (!f) throw new Error('facade ring degenerate');
+              if (!m.pushPull(f, H - 0.15)) throw new Error('facade sweep failed');
+            });
+          const wp = { base: wallEnt.params.base, end: wallEnt.params.end, height: H - 0.15, thickness: 0.2 };
+          const cut = (type, t, w2, h2, sill, extra) => {
+            const before = new Set(m.faces.keys());
+            m.bimHold = wallEnt.id;
+            let info = null;
+            try { info = BT.HostedCut.cut(G, m, wp,
+              { distanceFromStart: t, width: w2, height: h2, sillHeight: sill, depth: 0.2 }); }
+            finally { m.bimHold = false; }
+            if (!info || info.error) throw new Error('facade cut failed');
+            const nf = [...m.faces.keys()].filter(id => !before.has(id));
+            const roles = {};
+            for (const id of nf) roles[id] = 'lining';
+            bim.create(type, Object.assign({ hostWallId: wallEnt.id, distanceFromStart: info.t,
+              width: w2, height: h2, sillHeight: sill, depth: 0.2, facing: 1, hand: 1 }, extra || {}), roles, []);
+          };
+          cut('door', 1.0, 1.2, 2.2, 0);                                  // balcony door
+          cut('window', 3.4, 1.5, 1.2, 0.9);                              // window
+          cut('opening', 4.9, 0.5, 0.5, 1.2, { shape: 'circle', dia: 0.5 }); // WALL-201 pipe
+        });
+
+        if (s < STORIES - 1) stage('slab — F' + (s + 1) + ' ceiling', () => {
+          // punches at every column (3mm reveal) + stair + hoistway + circle
+          const outer = [[-0.15, -0.15, slabZ], [12.15, -0.15, slabZ], [12.15, 6.15, slabZ], [-0.15, 6.15, slabZ]];
+          const punches = S.columnHolesForSlab(m,
+            { baseLevel: lvlUp, thickness: 0.15, _planeZ: slabZ },
+            { outer: outer.map(q => q.slice()), holes: [] });
+          const hw = EF.hoistwayRing({ x: ELEV.x, y: ELEV.y, w: ELEV.w, d: ELEV.d, wall: ELEV.wall })
+            .map(q => [q[0], q[1], slabZ]);
+          const stair = [[STAIR.x - STAIR.w / 2, STAIR.y - STAIR.d / 2, slabZ],
+            [STAIR.x + STAIR.w / 2, STAIR.y - STAIR.d / 2, slabZ],
+            [STAIR.x + STAIR.w / 2, STAIR.y + STAIR.d / 2, slabZ],
+            [STAIR.x - STAIR.w / 2, STAIR.y + STAIR.d / 2, slabZ]];
+          let circle = null;
+          if (s === 1) { // one circular penetration (16-gon, r 0.3 at (5,1))
+            circle = [];
+            for (let k = 0; k < 16; k++) {
+              const a = (k / 16) * Math.PI * 2;
+              circle.push([+(5 + 0.3 * Math.cos(a)).toFixed(4), +(1 + 0.3 * Math.sin(a)).toFixed(4), slabZ]);
+            }
+          }
+          const holes = [hw, stair, ...punches.map(p2 => {
+            const r = p2.ring;
+            const cx = r.reduce((a, q) => a + q.x, 0) / r.length;
+            const cy = r.reduce((a, q) => a + q.y, 0) / r.length;
+            return r.map(q => {
+              const dx = q.x - cx, dy = q.y - cy, l = Math.hypot(dx, dy) || 1;
+              return [+(q.x + dx / l * 0.003).toFixed(6), +(q.y + dy / l * 0.003).toFixed(6), slabZ];
+            });
+          })];
+          if (circle) holes.push(circle);
+          reg('floor', { thickness: 0.15, baseLevel: lvlUp, regions: [{ outer, holes }] },
+            () => {
+              const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
+                holes.map(hg => hg.map(q => G.v(...q))));
+              if (!f) throw new Error('slab ring degenerate');
+              if (!m.pushPull(f, -0.15)) throw new Error('slab sweep failed');
+            });
+        });
       }
 
-      // --------------------------------------- wall with door + window cut
-      // along grid 1 on the slab top; HostedCut punches both holes so the
-      // WALL-206/208 trim steel has real openings to work around. The wall
-      // REGISTERS FIRST (demo5's pattern): the doors must carry the wall's
-      // id as hostWallId or the rebar never sees them
-      const wallEnt = reg('wall', { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2,
-          baseLevel: 'l1', locationLine: 'centerline', primitive: 'line', closed: false,
-          joins: { start: 0, end: 0 } },
-        () => {
-          const ring = bim.wallRing({ base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2 });
-          const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
-          if (!f) throw new Error('wall ring degenerate');
-          if (!m.pushPull(f, 2.7)) throw new Error('wall sweep failed');
-        });
-      {
-        const wp = { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2 };
-        const cut = (type, t, w, h, sill) => {
-          const before = new Set(m.faces.keys());
-          m.bimHold = wallEnt.id;
-          let info = null;
-          try { info = BT.HostedCut.cut(G, m, wp,
-            { distanceFromStart: t, width: w, height: h, sillHeight: sill, depth: 0.2 }); }
-          finally { m.bimHold = false; }
-          if (!info || info.error) throw new Error('opening cut failed');
-          // the cut faces belong to the door lining (demo5 convention);
-          // the wall keeps its (possibly split) faces from the reg above
-          const nf = [...m.faces.keys()].filter(id => !before.has(id));
-          const roles = {};
-          for (const id of nf) roles[id] = 'lining';
-          bim.create(type, { hostWallId: wallEnt.id, distanceFromStart: info.t,
-            width: w, height: h, sillHeight: sill, depth: 0.2, facing: 1, hand: 1 }, roles, []);
+      // ================================================== REBAR
+      // RECORD-ONLY: the 5-story cage would be ~800k pipe faces; the
+      // model stores centerline records instead (ribbons + BBS read
+      // them) and the whole building builds in seconds
+      m.rebarPipes = false;
+      stage('reinforcement (every element)', () => {
+        const fpad = { type: 'foundation', foundation: {
+          bottom: 0.04, side: 0.05, topLayer: 'X',
+          xDia: 0.012, xMode: 'spacing', xValue: 0.2,
+          yDia: 0.012, yMode: 'spacing', yValue: 0.2,
+          stubX: 2, stubY: 2, stubDia: 0.014, lap: 0.5, leg: 0.15, colW: COL, colL: COL } };
+        const fmat = { type: 'foundation', foundation: { ...fpad.foundation, kind: 'mat' } };
+        const ccol = { type: 'column', column: {
+          tie: { l: 0.04, r: 0.04, t: 0.04, b: 0.04, front: 0.05, dia: 0.008,
+            bentAngle: 135, bentFactor: 6, mode: 'spacing', value: 0.2 },
+          main: { dia: 0.016, tOffset: 0.05, bOffset: 0.05, type: 'straight',
+            splice: { mode: 'lap' } } } };
+        const bbeam = { type: 'beam', beam: {
+          side: 0.03, end: 0.05, tieDia: 0.008, bentAngle: 135, bentFactor: 6,
+          mode: 'spacing', value: 0.25,
+          topCount: 2, topDia: 0.014, botCount: 3, botDia: 0.016,
+          top: 0.03, bot: 0.03, skin: 0, skinDia: 0.012, integrity: true } };
+        const sslab = { type: 'slab', slab: {
+          bottom: 0.025, top: 0.025, side: 0.025,
+          xDia: 0.012, xSpacing: 0.25, yDia: 0.012, ySpacing: 0.25,
+          topMesh: false, topDia: 0 } };
+        const wwall = { type: 'wall', wall: {
+          cover: 0.04, vDia: 0.012, vSpacing: 0.3, hDia: 0.012, hSpacing: 0.3,
+          twoCurtains: true, vOff: 0.05, boundary: true } };
+        const ssog = { type: 'slab', slab: { ...sslab.slab, sog: true, sogDia: 0.012 } };
+
+        const rebarOne = (ent, params) => {
+          const fid = (ent.faces || []).find(id => m.faces.get(id));
+          if (!fid) throw new Error('no face on ' + ent.id);
+          const res = ER.buildElementRebar(m, fid, params, bim.entities);
+          if (res && res.error) throw new Error(ent.type + ' ' + ent.id + ' rebar: ' + res.error);
+          return res;
         };
-        cut('door', 1.6, 1.2, 2.2, 0);     // entrance door
-        cut('window', 4.4, 1.5, 1.2, 0.9); // window
-      }
-
-      // -------------------------------------------- slab-on-ground apron
-      // freestanding SOG pad west of the pier: SOG-102/105 edge steel
-      reg('floor', { thickness: 0.12, baseLevel: 'l0', regions: [{ outer: [
-            [13, -3.2, 0.12], [17, -3.2, 0.12], [17, -0.8, 0.12], [13, -0.8, 0.12]], holes: [] }] },
-        () => {
-          const f = m.addFaceFromRings([
-            G.v(13, -3.2, 0.12), G.v(17, -3.2, 0.12),
-            G.v(17, -0.8, 0.12), G.v(13, -0.8, 0.12)]);
-          if (!f) throw new Error('apron ring degenerate');
-          m.pushPull(f, -0.12);
-        });
-
-      // ------------------------------------------------------------ rebar
-      // one pass per element; entities are all registered so the beam
-      // generator sees its columns (BM-202 far-side development)
-      const fpad = { type: 'foundation', foundation: {
-        bottom: 0.04, side: 0.05, topLayer: 'X',
-        xDia: 0.012, xMode: 'spacing', xValue: 0.15,
-        yDia: 0.012, yMode: 'spacing', yValue: 0.15,
-        stubX: 2, stubY: 2, stubDia: 0.014, lap: 0.5, leg: 0.15, colW: COL, colL: COL } };
-      const fmat = { type: 'foundation', foundation: { ...fpad.foundation, kind: 'mat' } };
-      const fpile = { type: 'foundation', foundation: { ...fpad.foundation,
-        kind: 'pilecap', piles: 4, pileS: 0.4, pileDia: 0.3, pileLap: 0.5 } };
-      const ccol = { type: 'column', column: {
-        tie: { l: 0.04, r: 0.04, t: 0.04, b: 0.04, front: 0.05, dia: 0.008,
-          bentAngle: 135, bentFactor: 6, mode: 'spacing', value: 0.18 },
-        main: { dia: 0.016, tOffset: 0.05, bOffset: 0.05, type: 'straight',
-          splice: { mode: 'lap' } } } };
-      const bbeam = { type: 'beam', beam: {
-        side: 0.03, end: 0.05, tieDia: 0.008, bentAngle: 135, bentFactor: 6,
-        mode: 'spacing', value: 0.2,
-        topCount: 2, topDia: 0.014, botCount: 3, botDia: 0.016,
-        top: 0.03, bot: 0.03, skin: 0, skinDia: 0.012, integrity: true } };
-      const sslab = { type: 'slab', slab: {
-        bottom: 0.025, top: 0.025, side: 0.025,
-        xDia: 0.012, xSpacing: 0.2, yDia: 0.012, ySpacing: 0.2,
-        topMesh: false, topDia: 0 } };
-      const wwall = { type: 'wall', wall: {
-        cover: 0.04, vDia: 0.012, vSpacing: 0.2, hDia: 0.012, hSpacing: 0.2,
-        twoCurtains: true, vOff: 0.05 } };
-      const ssog = { type: 'slab', slab: { ...sslab.slab, sog: true, sogDia: 0.012 } };
-
-      const rebarOne = (ent, params) => {
-        const fid = (ent.faces || []).find(id => m.faces.get(id));
-        if (!fid) throw new Error('no face on ' + ent.id);
-        const res = ER.buildElementRebar(m, fid, params, bim.entities);
-        if (res && res.error) throw new Error(ent.type + ' ' + ent.id + ' rebar (' + (ent.faces || []).length + ' faces): ' + res.error);
-        return res;
-      };
-      let rebarFaces = 0;
-      const track = res => { if (res && res.ids) rebarFaces += res.ids.length; };
-      for (const ent of bim.entities) {
-        if (ent.type === 'foundation') {
-          const circular = ent.params.radius != null;
-          const kind = circular ? undefined : (ent.params.kind || 'pad');
-          const fp = circular ? { ...fpad.foundation, stubX: 0, stubY: 0 } // pier column splices onto the shaft steel
-            : kind === 'mat' ? fmat : kind === 'pilecap' ? fpile : fpad;
-          track(rebarOne(ent, circular ? { type: 'foundation', foundation: fp } : kind === 'mat' ? fmat : kind === 'pilecap' ? fpile : fpad));
-        } else if (ent.type === 'column') track(rebarOne(ent, ccol));
-        else if (ent.type === 'beam') track(rebarOne(ent, bbeam));
-        else if (ent.type === 'wall') track(rebarOne(ent, wwall));
-        else if (ent.type === 'floor') {
-          const apron = ent.params.baseLevel === 'l0';
-          track(rebarOne(ent, apron ? ssog : sslab));
+        for (const ent of bim.entities) {
+          if (ent.type === 'foundation') {
+            const circular = ent.params.radius != null;
+            const kind = circular ? null : ent.params.kind;
+            rebarOne(ent, circular
+              ? { type: 'foundation', foundation: { ...fpad.foundation, stubX: 0, stubY: 0 } }
+              : kind === 'mat' ? fmat
+                : { type: 'foundation', foundation: { ...fpad.foundation } });
+          } else if (ent.type === 'column') rebarOne(ent, ccol);
+          else if (ent.type === 'beam') rebarOne(ent, bbeam);
+          else if (ent.type === 'wall') rebarOne(ent, wwall);
+          else if (ent.type === 'floor') {
+            const apron = ent.params.baseLevel === 'l0';
+            rebarOne(ent, apron ? ssog : sslab);
+          }
         }
+      });
+
+      // run the stages with UI paint between them
+      for (let i = 0; i < stages.length; i++) {
+        if (onProgress) onProgress(stages[i].label, i, stages.length);
+        stages[i].fn();
+        await new Promise(r => setTimeout(r, 0));
       }
 
-      // finish: register every edge once, release the batch. REBAR faces
-      // are skipped - addRebarPath already stamps their edges, and a bulk
-      // sweep over 100k pipe quads floods the edge pass into a grey wall
-      // that buries the cages under the x-ray view
+      // count + finish
       for (const f of m.faces.values()) {
         if (f.userData && f.userData.rebar) continue;
         m.edgesForRing(f.loop, true);
         for (const h of (f.holes || [])) m.edgesForRing(h, true);
       }
       m.reapOrphanEdges();
-
+      for (const f of m.faces.values()) if (f.userData && f.userData.rebar) rebarFaces++;
       const counts = {};
       for (const e of bim.entities) counts[e.type] = (counts[e.type] || 0) + 1;
       counts.rebarFaces = rebarFaces;
@@ -259,5 +310,5 @@
     }
   }
 
-  window.DemoMNL66 = { build };
+  window.DemoMNL66 = { buildAsync };
 })();

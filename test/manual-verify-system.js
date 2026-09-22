@@ -23,8 +23,11 @@ const check = (name, cond, extra = '') => {
   // ============ 1. THE DEMO: every phase in one scene ============
   const t0 = Date.now();
   await p.evaluate(() => { window.app.action('demomnl66'); });
-  await sleep(4000);
-  let st = await p.evaluate(() => {
+  await sleep(2000);
+  let st = null;
+  for (let i = 0; i < 90 && !(st && st.recipe === 'mnl66'); i++) {
+    await sleep(1000);
+    st = await p.evaluate(() => {
     const m = window.app.model;
     const byRole = {}, ents = {};
     for (const e of window.app.bim.entities) ents[e.type] = (ents[e.type] || 0) + 1;
@@ -32,15 +35,20 @@ const check = (name, cond, extra = '') => {
       const r = f.userData.rebar.role || f.userData.rebar.shape;
       byRole[r] = (byRole[r] || 0) + 1;
     }
-    return { ents, byRole, faces: m.faces.size, mode: window.app.view.rebarMode,
+    for (const rec of (m._rebarRecords ? m._rebarRecords.values() : [])) {
+      const r = (rec.meta && (rec.meta.role || rec.meta.shape)) || 'bar';
+      byRole[r] = (byRole[r] || 0) + 1;
+    }
+    return { ents, byRole, faces: m.faces.size, bars: (m._rebarRecords ? m._rebarRecords.size : 0), mode: window.app.view.rebarMode,
       recipe: window.app._demoRecipe, xray: window.app.xrayOn };
   });
+  }
   const dt = ((Date.now() - t0) / 1000).toFixed(1);
-  check('demo builds', st.faces > 100000, st.faces + ' faces in ' + dt + 's');
-  check('entities: 6 foundations, 7 columns, 7 beams, 2 floors, 2 doors, 1 wall',
-    st.ents.foundation === 6 && st.ents.column === 7 && st.ents.beam === 7
-    && st.ents.floor === 2 && (st.ents.door || 0) === 1 && (st.ents.window || 0) === 1
-    && st.ents.wall === 1,
+  check('demo builds (record-only rebar)', st.bars > 5000 && st.faces < 5000, st.bars + ' bar records, ' + st.faces + ' solid faces in ' + dt + 's');
+  check('5-story entities: 4 foundations, 33 columns, 30 beams, 5 slabs, shaft',
+    st.ents.foundation === 4 && st.ents.column >= 33 && st.ents.beam >= 30
+    && st.ents.floor === 5 && (st.ents.door || 0) >= 5 && (st.ents.window || 0) >= 4
+    && st.ents.wall >= 21,
     JSON.stringify(st.ents));
   check('Phase 4 BM-202/204: beam far-side hooks', (st.byRole.hooked || 0) > 0, String(st.byRole.hooked));
   check('Phase 3 SLAB-206: opening trim bars', (st.byRole.trim || 0) > 0, String(st.byRole.trim));
@@ -50,7 +58,9 @@ const check = (name, cond, extra = '') => {
   check('Phase 5 WALL-208: corner diagonals', (st.byRole.diag || 0) > 0, String(st.byRole.diag));
   check('Phase 5 WALL-100A: wall starter dowels', (st.byRole['wall-dowel'] || 0) > 0, String(st.byRole['wall-dowel']));
   check('Phase 6 COL-200: splice pieces (pier column)', (st.byRole['splice-lower'] || 0) > 0, String(st.byRole['splice-lower'] || 0));
-  check('Phase 7 FND-161: pile dowels', (st.byRole['pile-dowel'] || 0) > 0, String(st.byRole['pile-dowel'] || 0));
+  check('WALL-110: shear-wall boundary elements', (st.byRole.boundary || 0) > 0, String(st.byRole.boundary || 0));
+  check('FND-102: strip-footing wall dowels', (st.byRole['wall-dowel'] || 0) >= 200, String(st.byRole['wall-dowel'] || 0));
+  check('foundations: raft + combined + strip starters', (st.byRole.lshape || 0) > 0, String(st.byRole.lshape || 0));
   check('Phase 7 FND-161/150: pile + pier ties', ((st.byRole['pile-tie'] || 0) + (st.byRole['pier-tie'] || 0)) > 0);
   check('Phase 7 FND-150: pier shaft verticals', (st.byRole['pier-vertical'] || 0) > 0);
   check('Phase 8 SOG-102: apron edge bars', (st.byRole['sog-edge'] || 0) > 0);
@@ -75,21 +85,31 @@ const check = (name, cond, extra = '') => {
     return { ms: +dtSel.toFixed(0), faces: window.app.sel.faces.size, edges: window.app.sel.edges.size };
   });
   check('Ctrl+A fast with the cage loaded', sel.ms < 400, sel.ms + 'ms, ' + sel.faces + ' faces');
-  check('no rebar edges in bulk selection', sel.edges < 1000, sel.edges + ' edges');
+  const rebarEdges = await p.evaluate(() => [...window.app.model.edges.values()]
+    .filter(e => e.userData && e.userData.rebar).length);
+  check('no rebar edges in bulk selection', rebarEdges === 0, rebarEdges + ' rebar edges of ' + sel.edges);
 
   // ============ 4. reload: recipe restore + light mode persisted ============
   const t2 = Date.now();
   await p.reload({ waitUntil: 'domcontentloaded' });
   let rebuilt = false;
-  for (let i = 0; i < 40 && !rebuilt; i++) {
+  for (let i = 0; i < 90 && !rebuilt; i++) {
     await sleep(500);
-    rebuilt = await p.evaluate(() => window.app.model && window.app.model.faces.size > 100000);
+    rebuilt = await p.evaluate(() => window.app.bim.entities.length > 130
+      && window.app._demoRecipe === 'mnl66' && window.app.view.rebarMode === 'light');
   }
   const rl = await p.evaluate(() => ({ mode: window.app.view.rebarMode, recipe: window.app._demoRecipe }));
   check('reload rebuilds the demo from the recipe', rebuilt, ((Date.now() - t2) / 1000).toFixed(1) + 's');
   check('light mode persists across reload', rl.mode === 'light' && rl.recipe === 'mnl66');
 
   // ============ 5. normal drawing session (not the demo) ============
+  // let the recipe restore finish building before replacing the model
+  for (let i = 0; i < 60; i++) {
+    const settled = await p.evaluate(() => window.app.bim.entities.length > 130
+      && window.app.view.rebarMode === 'light');
+    if (settled) break;
+    await sleep(500);
+  }
   // fresh model directly (action('new') would confirm over the demo scene)
   await p.evaluate(() => {
     const app = window.app;

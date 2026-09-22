@@ -3105,7 +3105,28 @@ class Model {
    *  deleting concrete leaves bars untouched. Faces carry userData.rebar
    *  {shape, diameter, length, ...meta} for the future schedules. */
   static _rebarSeq = 1;
-  addRebarPath(pts, diameter, { color = null, ringSegs = 12, meta = null } = {}) {
+  addRebarPath(pts, diameter, { color = null, ringSegs = 12, meta = null, pipe } = {}) {
+    // RECORD-ONLY MODE (model.rebarPipes === false): heavy scenes store
+    // the bar as a centerline record (ribbons + schedules read it) and
+    // skip the pipe solid entirely - a 5-story cage drops from ~800k
+    // kernel faces to a few thousand records
+    if (pipe === false || this.rebarPipes === false) {
+      const P0 = [];
+      for (const q of pts) {
+        const c0 = G.clone(q);
+        if (!P0.length || G.dist(P0[P0.length - 1], c0) > 1e-6) P0.push(c0);
+      }
+      if (P0.length < 2 || !(diameter > 1e-6)) return [];
+      let len0 = 0;
+      for (let i0 = 1; i0 < P0.length; i0++) len0 += G.dist(P0[i0 - 1], P0[i0]);
+      this._rebarPid = (this.constructor._rebarSeq = (this.constructor._rebarSeq || 1) + 1) - 1;
+      this._rebarSerial = (this._rebarSerial || 0) + 1;
+      if (!this._rebarRecords) this._rebarRecords = new Map();
+      this._rebarRecords.set(this._rebarPid, { pid: this._rebarPid, dia: diameter,
+        length: +len0.toFixed(6), line: P0.map(q => [q.x, q.y, q.z, diameter]),
+        meta: { ...(meta || {}), diameter, length: +len0.toFixed(6), pid: this._rebarPid } });
+      return [];
+    }
     this._rebarPid = (this.constructor._rebarSeq = (this.constructor._rebarSeq || 1) + 1) - 1;
     const P = [];
     for (const q of pts) {

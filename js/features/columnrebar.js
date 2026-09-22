@@ -125,7 +125,7 @@
       const [z0, z1] = endsOf(c.helixBOffset, c.helixTOffset, c.helixDia / 2);
       if (Math.abs(z1 - z0) <= 0) return { error: 'helix offsets leave no height' };
       const turns = Math.max(1, Math.abs(z1 - z0) / Math.max(c.pitch, 1e-4));
-      const N = Math.min(2400, Math.max(48, Math.round(turns * 24)));
+      const N = Math.min(1200, Math.max(36, Math.round(turns * 12)));
       const helix = [];
       for (let i = 0; i <= N; i++) {
         const t = i / N, ang = t * turns * Math.PI * 2;

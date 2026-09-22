@@ -98,9 +98,9 @@
       const f = m.faces.get(fid);
       if (!f) continue;
       const n = G.norm(G.loopNormal(m.pts(f.loop)));
-      if (n.z < 0.999) continue;
+      if (!(n.z >= 0.999)) continue; // NaN (hole tessellation fragments) too
       const c = m.faceCentroid(f);
-      if (!c) continue;
+      if (!c || !Number.isFinite(c.z)) continue;
       zTop = Math.max(zTop, c.z);
       out.push({ f, c });
     }
@@ -182,8 +182,37 @@
     if (!isFinite(axis.x) || G.len(axis) < 0.5) return { error: 'beam baseline is not horizontal' };
     const fid = endFaceOfBeam(m, ent, axis);
     if (!fid) return { error: 'cannot find the beam end face (fully embedded?)' };
-    const fr = window.Rebar.faceFrame(m, fid);
-    if (!fr) return { error: 'cannot frame the beam section' };
+    const fr0 = window.Rebar.faceFrame(m, fid);
+    if (!fr0) return { error: 'cannot frame the beam section' };
+    // T/L sections: the kernel splits the concave end cap into quads -
+    // widen the frame to the UNION of every axis-normal face at the same
+    // station or the top row frames one fragment instead of the flange
+    let fr = fr0;
+    {
+      const c0 = m.faceCentroid(m.faces.get(fid));
+      const capT = c0 ? G.dot(c0, axis) : null;
+      if (capT != null) {
+        const P00 = fr0.map(fr0.u0, fr0.v0);
+        let uA = fr0.u0, uB = fr0.u1, vA = fr0.v0, vB = fr0.v1;
+        for (const id2 of ent.faces || []) {
+          if (id2 === fid) continue;
+          const f2 = m.faces.get(id2);
+          if (!f2) continue;
+          const n2 = G.norm(G.loopNormal(m.pts(f2.loop)));
+          if (Math.abs(G.dot(n2, axis)) < 0.9) continue;
+          const c2 = m.faceCentroid(f2);
+          if (!c2 || Math.abs(G.dot(c2, axis) - capT) > 1e-3) continue;
+          for (const q of m.pts(f2.loop)) {
+            const rel = G.sub(q, P00);
+            const uu = fr0.u0 + G.dot(rel, fr0.u), vv = fr0.v0 + G.dot(rel, fr0.v);
+            uA = Math.min(uA, uu); uB = Math.max(uB, uu);
+            vA = Math.min(vA, vv); vB = Math.max(vB, vv);
+          }
+        }
+        if (uA < fr0.u0 - 1e-6 || uB > fr0.u1 + 1e-6 || vA < fr0.v0 - 1e-6 || vB > fr0.v1 + 1e-6)
+          fr = { ...fr0, u0: uA, u1: uB, v0: vA, v1: vB };
+      }
+    }
     // stirrup hooks belong at the section's TOP: faceFrame's v sign flips
     // with which end face was picked, so mirror the mapping when needed -
     // frT guarantees the numerically larger v maps upward in world z
@@ -515,7 +544,7 @@
     // circular families (top loop beyond a rectangle) want the helix cage —
     // merge the dialog's rectangular fields onto sensible helix defaults
     const c = p.column || {};
-    if (m.pts(tops[0].f.loop).length > 6 && c.type !== 'circular' && !c.circ)
+    if (isCircularLoop(m.pts(tops[0].f.loop)) && c.type !== 'circular' && !c.circ)
       p.column = { ...c, type: 'circular', circ: {
         sideCover: c.tie ? c.tie.l || 0.04 : 0.04,
         helixDia: c.tie ? c.tie.dia || 0.008 : 0.008,
@@ -565,7 +594,7 @@
     // A CIRCULAR pad (drilled-pier cap, FND-150) clips every bar to its
     // chord through the disc instead of the bounding box
     const padLoop = m.pts(pad.loop);
-    const isCirc = padLoop.length > 6;
+    const isCirc = isCircularLoop(padLoop);
     let pc = null;
     if (isCirc) {
       const cxL = padLoop.reduce((s, q2) => s + q2.x, 0) / padLoop.length;
@@ -631,12 +660,24 @@
     const ped = fp.pedestal && fp.pedestal.height >= 0.05 ? +fp.pedestal.height : 0;
     const topZ = zTop + ped;
     const base = fp.base || fp.center || [0, 0, 0];
-    let col = null;
+    // COMBINED FOOTINGS: EVERY column standing on the pad gets starters
+    // (a two-column strap pad is the classic FND-103 case); a WALL above
+    // makes it a STRIP FOOTING - a line of wall dowels along the run
+    const cols = [];
+    let wallHost = null;
     for (const e of entities || []) {
-      if (e.type !== 'column' || !e.params || !e.params.base) continue;
-      const b = e.params.base;
-      if (Math.abs(b[2] - topZ) < 0.02 && dist2D(b, base) < Math.max(spanU, spanV) / 2) { col = e; break; }
+      if (!e.params) continue;
+      if (e.type === 'column' && Array.isArray(e.params.base)) {
+        const b = e.params.base;
+        if (Math.abs(b[2] - topZ) < 0.02 && dist2D(b, base) < Math.max(spanU, spanV) / 2) cols.push(e);
+      } else if (e.type === 'wall' && !e.params.closed && Array.isArray(e.params.base)
+        && Array.isArray(e.params.end)) {
+        const b = e.params.base, b2 = e.params.end;
+        if (Math.abs(b[2] - topZ) < 0.02
+          && dist2D([(b[0] + b2[0]) / 2, (b[1] + b2[1]) / 2], base) < Math.max(spanU, spanV)) wallHost = e;
+      }
     }
+    const col = cols[0] || null;
     const colW = col ? +col.params.width || q.colW : q.colW;
     const colL = col ? +col.params.depth || q.colL : q.colL;
     const cx = col ? col.params.base[0] : base[0];
@@ -652,26 +693,51 @@
     // onto the shaft steel instead)
     const noStarters = !+q.stubX || !+q.stubY;
     if (!noStarters) {
-    const nx = Math.max(2, Math.round(q.stubX)), ny = Math.max(2, Math.round(q.stubY));
-    const grid = [];
-    for (const x of spread(nx, cx - colW / 2, cx + colW / 2))
-      for (const y of [cy - colL / 2, cy + colL / 2]) grid.push([x, y]);
-    for (const y of spread(ny, cy - colL / 2, cy + colL / 2))
-      for (const x of [cx - colW / 2, cx + colW / 2]) grid.push([x, y]);
-    const seen = new Set();
-    for (const [x, y] of grid) {
-      const k = x.toFixed(4) + '|' + y.toFixed(4);
-      if (seen.has(k)) continue;
-      seen.add(k);
-      let inx = cx - x, iny = cy - y;
-      const il = Math.hypot(inx, iny);
-      if (il < 1e-6) { inx = 1; iny = 0; } else { inx /= il; iny /= il; }
-      const map = (s, z) => G.v(x + inx * s, y + iny * s, z);
-      const pts = window.Rebar.roundedPath(
-        [{ a: zLeg, b: -(q.leg + q.stubDia) }, { a: zLeg, b: 0 }, { a: stubTop, b: 0 }],
-        1.5 * q.stubDia);
-      add(pts.map(t => map(t.b, t.a)), q.stubDia, { shape: 'lshape', count: seen.size });
-      ties++; // starters counted with the verticals
+    const oneColumn = (cx2, cy2, cw2, cl2) => {
+      const nx = Math.max(2, Math.round(q.stubX)), ny = Math.max(2, Math.round(q.stubY));
+      const grid = [];
+      for (const x of spread(nx, cx2 - cw2 / 2, cx2 + cw2 / 2))
+        for (const y of [cy2 - cl2 / 2, cy2 + cl2 / 2]) grid.push([x, y]);
+      for (const y of spread(ny, cy2 - cl2 / 2, cy2 + cl2 / 2))
+        for (const x of [cx2 - cw2 / 2, cx2 + cw2 / 2]) grid.push([x, y]);
+      const seen = new Set();
+      for (const [x, y] of grid) {
+        const k = x.toFixed(4) + '|' + y.toFixed(4);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        let inx = cx2 - x, iny = cy2 - y;
+        const il = Math.hypot(inx, iny);
+        if (il < 1e-6) { inx = 1; iny = 0; } else { inx /= il; iny /= il; }
+        const map = (s, z) => G.v(x + inx * s, y + iny * s, z);
+        const pts = window.Rebar.roundedPath(
+          [{ a: zLeg, b: -(q.leg + q.stubDia) }, { a: zLeg, b: 0 }, { a: stubTop, b: 0 }],
+          1.5 * q.stubDia);
+        add(pts.map(t => map(t.b, t.a)), q.stubDia, { shape: 'lshape', count: seen.size });
+        ties++; // starters counted with the verticals
+      }
+    };
+    for (const c2 of cols.length ? cols : [null])
+      oneColumn(c2 ? +c2.params.base[0] : cx, c2 ? +c2.params.base[1] : cy,
+        c2 ? +c2.params.width || q.colW : colW, c2 ? +c2.params.depth || q.colL : colL);
+    // STRIP FOOTING (wall above): a line of wall dowels along the run at
+    // the wall's spacing (FND-102: dowels match the wall verticals)
+    if (wallHost) {
+      const wa = wallHost.params.base, wb2 = wallHost.params.end;
+      const wL = Math.hypot(wb2[0] - wa[0], wb2[1] - wa[1]);
+      const ux2 = (wb2[0] - wa[0]) / wL, uy2 = (wb2[1] - wa[1]) / wL;
+      const t2 = wallHost.params.thickness || 0.2;
+      const sW = Math.max(0.15, Math.min(0.25, (wallHost.params.vSpacing || 0.2)));
+      const nW = Math.max(2, Math.ceil(wL / sW) + 1);
+      for (const s of spread(nW, 0, wL))
+        for (const off of [t2 / 2 - 0.04 - q.stubDia / 2, -(t2 / 2 - 0.04 - q.stubDia / 2)]) {
+          const x = wa[0] + ux2 * s - uy2 * off, y = wa[1] + uy2 * s + ux2 * off;
+          const map = (s3, z) => G.v(x + ux2 * s3, y + uy2 * s3, z);
+          const pts = window.Rebar.roundedPath(
+            [{ a: zLeg, b: -(q.leg + q.stubDia) }, { a: zLeg, b: 0 }, { a: stubTop, b: 0 }],
+            1.5 * q.stubDia);
+          add(pts.map(t3 => map(t3.b, t3.a)), q.stubDia, { shape: 'lshape', role: 'wall-dowel', count: nW });
+          ties++;
+        }
     }
     } // noStarters guard
     // ---- FND-150 DRILLED PIER: a circular pad gets the shaft cage — a
@@ -754,9 +820,25 @@
     const tops = topFaces(m, ent);
     if (!tops.length) return { error: 'cannot find the slab top face' };
     const zTop = tops[0].c.z;
-    const regions = tops.map(({ f }) => ({
+    const regions = tops.map(({ f }, ri2) => ({
       outer: m.pts(f.loop).map(v => ({ x: v.x, y: v.y })),
-      holes: (f.holes || []).map(h => m.pts(h).map(v => ({ x: v.x, y: v.y }))),
+      holes: (f.holes || []).map((h, hi) => {
+        const raw = m.pts(h);
+        if (raw.length && raw.every(v => v && Number.isFinite(v.x) && Number.isFinite(v.y)))
+          return raw.map(v => ({ x: v.x, y: v.y }));
+        // curved holes can lose their vertex remap through pushPull: fall
+        // back to the ENTITY's own sketch (params.regions), then to the
+        // surviving points' bbox
+        const pr = ((ent.params || {}).regions || [])[ri2] || {};
+        const ph = ((pr.holes || [])[hi] || []).filter(q => q && isFinite(q[0]) && isFinite(q[1]));
+        if (ph.length >= 3) return ph.map(q => ({ x: q[0], y: q[1] }));
+        const live = raw.filter(Boolean);
+        if (live.length < 3) return null;
+        let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        for (const v of live) { x0 = Math.min(x0, v.x); x1 = Math.max(x1, v.x);
+          y0 = Math.min(y0, v.y); y1 = Math.max(y1, v.y); }
+        return [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+      }).filter(Boolean),
     }));
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const r of regions) for (const v of r.outer) {
@@ -1046,6 +1128,14 @@
       .filter(e => e && e.params && e.params.hostWallId === ent.id
         && (e.type === 'door' || e.type === 'window' || e.type === 'opening'))
       .map(e => {
+        // WALL-201 circular openings (pipe penetrations): trim around
+        // the circumscribed square of the disc
+        if (e.params.shape === 'circle' && +e.params.dia > 0.05) {
+          const rd = +e.params.dia / 2;
+          const tc2 = Math.max(rd * 2, Math.min(L - rd * 2, +e.params.distanceFromStart || L / 2));
+          const zoC = zBot + Math.max(0, +e.params.sillHeight || 0) + rd;
+          return { s0: tc2 - rd, s1: tc2 + rd, z0: zoC - rd, z1: zoC + rd, circle: true };
+        }
         const w = Math.max(0.1, +e.params.width || 0.9);
         const tc = Math.max(w / 2, Math.min(L - w / 2, +e.params.distanceFromStart || L / 2));
         const zo0 = zBot + Math.max(0, +e.params.sillHeight || 0);
@@ -1064,6 +1154,19 @@
     // wall base and add one L-dowel per vertical station per curtain:
     // horizontal leg inside the host, rising the Class B lap into the wall.
     const num0 = v => { const n = +v; return Number.isFinite(n) ? n : null; };
+    // ---- WALL-110 SHEAR WALL BOUNDARY ELEMENTS: concentrated end
+    // verticals - 2 extra bars inside each wall end, each curtain
+    const boundaryN = q.boundary ? 2 : 0;
+    for (let bi = 0; bi < boundaryN; bi++)
+      for (const off of curtains)
+        for (const sEnd of [q.cover + q.vDia / 2 + 0.02 + bi * (q.vDia + 0.025),
+          L - q.cover - q.vDia / 2 - 0.02 - bi * (q.vDia + 0.025)]) {
+          const px = ax + ux * sEnd + nx * off, py = ay + uy * sEnd + ny * off;
+          const zb2 = zBot + (q.vOff || 0.05);
+          add([G.v(px, py, zb2), G.v(px, py, zTop)], q.vDia,
+            { shape: 'straight', dir: 'v', role: 'boundary', count: boundaryN * 2 });
+          bars++;
+        }
     const hostTopZ = e => {
       if (!e || !e.params) return null;
       if (e.type === 'foundation' && Array.isArray(e.params.base)) return num0(e.params.base[2]);
@@ -1194,6 +1297,23 @@
   }
 
   // ------------------------------------------------------------- facade
+  /** A loop is CIRCULAR when 8+ vertices sit at a near-constant radius
+   * from the centroid (a real 16-gon pier/circular column). Split faces
+   * carry collinear split vertices - vertex COUNT alone misfired and gave
+   * square columns full 2400-point helix cages. */
+  function isCircularLoop(pts) {
+    if (!pts || pts.length < 8) return false;
+    let cx = 0, cy = 0;
+    for (const q of pts) { cx += q.x; cy += q.y; }
+    cx /= pts.length; cy /= pts.length;
+    let rMin = 1e9, rMax = 0;
+    for (const q of pts) {
+      const r = Math.hypot(q.x - cx, q.y - cy);
+      rMin = Math.min(rMin, r); rMax = Math.max(rMax, r);
+    }
+    return rMax > 1e-6 && rMin / rMax > 0.85;
+  }
+
   const TYPE_OF = { beam: 'beam', column: 'column', foundation: 'foundation', footing: 'foundation', floor: 'slab', slab: 'slab', wall: 'wall' };
 
   /** Build the whole-element cage. `entities` = the app's entity list (the
@@ -1208,7 +1328,8 @@
     const ids = [];
     const add = (pts, dia, meta) => {
       const made = (sink || m).addRebarPath(pts, dia,
-        { color: window.Rebar.REBAR_COLOR, meta: { ...(meta || {}), host: type } });
+        { color: window.Rebar.REBAR_COLOR, ringSegs: 6, // hex pipes: 2x lighter cages
+          meta: { ...(meta || {}), host: type } });
       ids.push(...made);
       return made;
     };

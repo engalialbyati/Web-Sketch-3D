@@ -4959,30 +4959,34 @@ class App {
   // slab, wall openings with trim steel, SOG apron). X-Ray comes on so
   // the cages read through the concrete.
   loadMnl66Demo() {
-    const go = () => {
-      const ModelCls = Model;
-      this.bindModel(new ModelCls());
-      this.undoStack = []; this.redoStack = [];
-      this.exitGroup(); this.clearSelection();
-      if (!window.DemoMNL66) { this.toast('demo-mnl66 feature not loaded', true); return; }
-      let counts;
-      try { counts = window.DemoMNL66.build(this); }
-      catch (e) { this.toast('MNL-66 demo failed: ' + (e.message || e), true); return; }
+    const done = counts => {
       this.onLevelsChanged();
       if (this.bim && this.bim._hostsDirty) this.bim._hostsDirty.clear();
       this.view.rebuild();
       this.updateInfo(); this.refreshGroups();
       if (this.elements && this.elements.refresh) this.elements.refresh();
       this.view.zoomExtents();
-      this._demoRecipe = 'mnl66'; // autosave the RECIPE, not 115k faces
+      this._demoRecipe = 'mnl66'; // autosave the RECIPE, not the cage geometry
       if (!this.xrayOn) this.action('toggleXray');
-      // the ~115k-face cage displays as light centerlines: instant and smooth
+      // the cage displays as light centerlines: instant and smooth
       this.rebarLight = true; this.view.setRebarMode('light');
-      this.toast('MNL-66 reinforcement demo loaded — '
+      this.toast('MNL-66 5-story demo loaded — '
         + Object.entries(counts || {}).filter(([k]) => k !== 'rebarFaces')
           .map(([k, n]) => n + ' ' + k + 's').join(', ')
         + ', ' + (counts.rebarFaces || 0) + ' rebar faces');
       this._saveAutosave();
+    };
+    const go = () => {
+      const ModelCls = Model;
+      this.bindModel(new ModelCls());
+      this.undoStack = []; this.redoStack = [];
+      this.exitGroup(); this.clearSelection();
+      if (!window.DemoMNL66) { this.toast('demo-mnl66 feature not loaded', true); return; }
+      const fail = e => this.toast('MNL-66 demo failed: ' + (e.message || e), true);
+      this.toast('Building the 5-story MNL-66 building — about half a minute…');
+      window.DemoMNL66.buildAsync(this, (label, i2, n) => {
+        this.setStatus('Building MNL-66 building — ' + label + ' (' + (i2 + 1) + '/' + n + ')');
+      }).then(done, fail);
     };
     const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
     if (hasWork) this.confirmDialog('Load the MNL-66 demo? Unsaved changes will be lost.', go);
@@ -8113,6 +8117,24 @@ class App {
     const m = this.model;
     const rows = new Map();
     const seenBars = new Set(); // a bar's meta is stamped on EVERY face of its tube - count it once
+    // record-only bars (model.rebarPipes === false scenes) feed the same
+    // table - one entry per record, no tube faces exist
+    const recRows = () => {
+      for (const rec of (m._rebarRecords ? m._rebarRecords.values() : [])) {
+        const rb = rec.meta;
+        const barKey = 'p' + rec.pid;
+        if (seenBars.has(barKey)) continue;
+        seenBars.add(barKey);
+        const diaMM = Math.round((rec.dia || 0) * 1000);
+        const len = +(rec.length || 0).toFixed(3);
+        if (!diaMM || len <= 0) continue;
+        const cnt = Math.max(1, rb.count || 1);
+        const k = [rb.host || rb.shape || 'rebar', rb.shape || 'bar', diaMM, len].join('|');
+        const row = rows.get(k) || { host: rb.host || '', shape: rb.shape || 'bar', diaMM, len, bars: 0, sets: 0 };
+        row.bars += cnt; row.sets++;
+        rows.set(k, row);
+      }
+    };
     for (const f of m.faces.values()) {
       const rb = f.userData && f.userData.rebar;
       if (!rb) continue;
@@ -8127,6 +8149,7 @@ class App {
       row.bars += cnt; row.sets++;
       rows.set(k, row);
     }
+    recRows();
     return [...rows.values()].sort((a, b) => (a.host + a.shape).localeCompare(b.host + b.shape) || b.diaMM - a.diaMM);
   }
   // ELEMENT SCHEDULES (ACI 315-18 4.10, MNL-66): per-type schedule
@@ -8136,6 +8159,16 @@ class App {
     const m = this.model;
     const rows = [];
     const entRebar = new Map(); // entId -> {shape, dia, count, len}
+    for (const rec of (m._rebarRecords ? m._rebarRecords.values() : [])) {
+      const rb = rec.meta;
+      const key = rb.host + '|' + rb.shape + '|' + Math.round((rec.dia || 0) * 1000) + '|' + (rec.length || 0).toFixed(2);
+      if (!entRebar.has(key)) entRebar.set(key, { host: rb.host, shape: rb.shape,
+        diaMM: Math.round((rec.dia || 0) * 1000), len: +(rec.length || 0).toFixed(2),
+        count: 0, pids: new Set() });
+      const row = entRebar.get(key);
+      row.count += Math.max(1, rb.count || 1);
+      row.pids.add(rec.pid);
+    }
     for (const f of m.faces.values()) {
       const rb = f.userData && f.userData.rebar;
       if (!rb) continue;
