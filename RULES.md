@@ -107,3 +107,10 @@ where ACI is silent.
 - **Drilled pier (FND-150)**: a circular pad (loop > 6 points)
   auto-detects -- shaft verticals on a ring at <= 200 mm + circular ties
   through the cap; the bottom mesh clips to chords through the disc.
+
+## Slab-on-ground perimeter steel (MNL-66(20) SOG-102/103/105)
+- SOG toggle on the slab rebar: the mesh is NOT trimmed at the thickened
+  edge (SOG-103: reinforcement continuous through the thickening).
+- Each exterior edge carries 2 continuous bottom bars (SOG-102) resting
+  on the mesh, lapped min(0.6 m, L/4) past each corner (SOG-105) and
+  clipped to the slab polygon -- nothing pokes into open air.

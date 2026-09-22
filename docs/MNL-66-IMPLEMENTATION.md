@@ -177,8 +177,13 @@ to app features with implementation status.
   faces (top mesh under the top cover)
 - FND-111+: Grade beams use the Beam tool (continuous top/bottom + ties
   already per the beam generator)
-### Phase 8 — Slab-on-ground (long tail)
+### Phase 8 — Slab-on-ground (DONE)
 - SOG-100+: All joint types and thickened edges
+  - slab rebar gains an SOG toggle: the mesh stays CONTINUOUS through the
+    thickened edge (SOG-103) and every exterior edge carries 2 continuous
+    bottom bars lapped past the corners (SOG-102/105), clipped to the
+    slab polygon; control-joint saw cuts themselves are a drawing concern,
+    not reinforcement
 
 ### Appendix (Section 4)
 - Lap splice tables by bar size and fc'
