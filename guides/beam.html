@@ -2,98 +2,128 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Beam Reinforcement - Interactive Detailing Guide</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%23a94442%27/%3E%3C/svg%3E">
+<title>Beam Reinforcement - Interactive Detailing Guide (App Engine)</title>
 <style>
   :root { --ink:#232220; --muted:#86827a; --acc:#4723b3; --ok:#1a7f4e; --bad:#b32623; --bg:#f4f3f1; --card:#fff; }
   * { box-sizing:border-box; }
   body { margin:0; font:15px/1.55 Georgia,'Times New Roman',serif; color:var(--ink); background:var(--bg); }
-  header { background:var(--card); border-bottom:3px solid var(--acc); padding:18px 26px 12px; }
-  header h1 { margin:0; font-size:26px; }
+  header { background:var(--card); border-bottom:3px solid var(--acc); padding:16px 26px 10px; }
+  header h1 { margin:0; font-size:25px; }
   header p { margin:4px 0 0; color:var(--muted); font-size:13.5px; }
-  main { display:grid; grid-template-columns:330px 1fr; gap:18px; padding:18px 26px 60px; max-width:1500px; margin:0 auto; }
-  aside { position:sticky; top:12px; align-self:start; }
-  .card { background:var(--card); border-radius:10px; padding:14px 16px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
-  .card h3 { margin:0 0 8px; font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--acc); }
-  label { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:7px 0; font-size:13.5px; }
+  main { display:grid; grid-template-columns:340px 1fr; gap:16px; padding:16px 24px 60px; max-width:1560px; margin:0 auto; }
+  aside { position:sticky; top:10px; align-self:start; max-height:calc(100vh - 20px); overflow:auto; padding-right:4px; }
+  .card { background:var(--card); border-radius:10px; padding:12px 14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .card h3 { margin:0 0 6px; font-size:12.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--acc); }
+  label { display:flex; justify-content:space-between; align-items:center; gap:6px; margin:6px 0; font-size:13px; }
   label span.val { font-family:Consolas,monospace; color:var(--acc); font-weight:bold; }
-  input[type=number], select { width:96px; padding:4px 6px; border:1px solid #ccc9; border-radius:6px; font:13px Consolas,monospace; text-align:right; }
-  h2 { font-size:19px; margin:26px 0 6px; border-left:5px solid var(--acc); padding-left:10px; }
+  input[type=number], select { width:86px; padding:3px 5px; border:1px solid #ccc9; border-radius:6px; font:12.5px Consolas,monospace; text-align:right; }
+  input[type=checkbox] { transform:scale(1.15); }
+  .row { display:flex; gap:6px; align-items:center; }
+  h2 { font-size:18.5px; margin:24px 0 6px; border-left:5px solid var(--acc); padding-left:10px; }
   h2 small { color:var(--muted); font-weight:normal; font-size:13px; }
-  .clause { display:inline-block; background:#efebff; color:var(--acc); border:1px solid #d9d0f5; font:12px Consolas,monospace; padding:1px 7px; border-radius:10px; margin-left:6px; vertical-align:2px; }
-  .step { background:var(--card); border-radius:10px; padding:12px 16px; margin:10px 0; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .clause { display:inline-block; background:#efebff; color:var(--acc); border:1px solid #d9d0f5; font:11.5px Consolas,monospace; padding:1px 7px; border-radius:10px; margin-left:6px; vertical-align:2px; }
+  .step { background:var(--card); border-radius:10px; padding:11px 15px; margin:9px 0; box-shadow:0 1px 4px rgba(0,0,0,.06); }
   .step b.n { display:inline-block; background:var(--acc); color:#fff; width:22px; height:22px; border-radius:50%; text-align:center; line-height:22px; font-size:13px; margin-right:8px; }
-  .checks table { width:100%; border-collapse:collapse; font-size:13.5px; }
-  .checks td, .checks th { padding:6px 8px; border-bottom:1px solid #eee; text-align:left; }
+  .checks table { width:100%; border-collapse:collapse; font-size:13px; }
+  .checks td, .checks th { padding:5px 8px; border-bottom:1px solid #eee; text-align:left; }
   .checks td.num { font-family:Consolas,monospace; white-space:nowrap; }
   .pass { color:var(--ok); font-weight:bold; } .fail { color:var(--bad); font-weight:bold; }
-  .fig { background:var(--card); border-radius:10px; padding:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin:10px 0; }
+  .fig { background:var(--card); border-radius:10px; padding:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin:9px 0; }
   .fig .cap { font-size:12.5px; color:var(--muted); text-align:center; margin-top:4px; }
-  svg text { font-family:Georgia,serif; } svg .dim { font:11.5px Consolas,monospace; fill:#555; }
+  .src { font:12.5px Consolas,monospace; color:var(--ok); background:#f2faf5; border:1px solid #cfe9da; border-radius:8px; padding:7px 10px; margin:4px 0 8px; }
+  .src.err { color:var(--bad); background:#fdf2f2; border-color:#eed3d3; }
+  svg text { font-family:Georgia,serif; } svg .dim { font:11px Consolas,monospace; fill:#666; }
   canvas { background:#fbfaf9; border-radius:8px; cursor:grab; display:block; width:100%; }
-  .eq { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:8px 0; }
-  .eq .note { font-size:13px; color:var(--muted); }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  .btns button { font:13px Georgia,serif; padding:5px 14px; border:1px solid var(--acc); color:var(--acc); background:#fff; border-radius:8px; cursor:pointer; }
+  .btns button.on { background:var(--acc); color:#fff; }
+  .eq { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:7px 0; }
+  .eq .note { font-size:12.5px; color:var(--muted); }
   footer { color:var(--muted); font-size:12.5px; padding:10px 26px 30px; }
-  @media (max-width:980px){ main { grid-template-columns:1fr; } aside { position:static; } }
+  @media (max-width:1000px){ main { grid-template-columns:1fr; } aside { position:static; max-height:none; } }
 </style>
 </head>
 <body>
 <header>
-  <h1>Beam Reinforcement &mdash; Interactive Detailing Guide</h1>
-  <p>Enter your design values. The section, the elevation, the lap/cutoff dimensions and the 3D cage update live. Every rule cites ACI 318-19 and MNL-66(20). Units: mm.</p>
+  <h1>Beam Reinforcement &mdash; the app's own generator, all its options</h1>
+  <p>Every option of the app's beam dialog, plus the columns it connects to. Section, elevation and 3D are the generator's real output, placed bar-by-bar in animation. Rules cite ACI 318-19 + MNL-66(20). Units: mm.</p>
 </header>
 
 <main>
 <aside>
-  <div class="card"><h3>Geometry</h3>
-    <label>Clear span L<sub>n</sub> <input id="Ln" type="number" value="6000" step="100"> <span class="val">mm</span></label>
-    <label>Width b <input id="b" type="number" value="300" step="25"> <span class="val">mm</span></label>
+  <div class="card"><h3>Geometry &amp; supports</h3>
+    <label>Span center-to-center <input id="L" type="number" value="6000" step="100"> <span class="val">mm</span></label>
+    <label>Width b <input id="b" type="number" value="250" step="25"> <span class="val">mm</span></label>
     <label>Height h <input id="h" type="number" value="500" step="25"> <span class="val">mm</span></label>
-    <label>Support (column) width <input id="cw" type="number" value="400" step="25"> <span class="val">mm</span></label>
-    <label>Concrete f'<sub>c</sub> <select id="fc"><option value="28" selected>28 MPa (4 ksi)</option><option value="35">35 MPa (5 ksi)</option></select></label>
+    <label>Column at START <input id="colS" type="checkbox" checked></label>
+    <label>Column at END <input id="colE" type="checkbox" checked></label>
+    <label>Column b &times; h <input id="cb" type="number" value="300" step="25"><input id="ch" type="number" value="300" step="25"> <span class="val">mm</span></label>
+    <label>Concrete f'<sub>c</sub> <select id="fc"><option value="28" selected>28 MPa</option><option value="35">35 MPa</option></select></label>
   </div>
-  <div class="card"><h3>Main bars</h3>
-    <label>Bottom bars n &times; &empty; <input id="bn" type="number" value="5" min="2" step="1"><input id="bd" type="number" value="12" step="2"> <span class="val">mm</span></label>
-    <label>Top bars n &times; &empty; <input id="tn" type="number" value="2" min="2" step="1"><input id="td" type="number" value="14" step="2"> <span class="val">mm</span></label>
-    <label>End anchorage <select id="hook"><option value="90" selected>90&deg; hook</option><option value="180">180&deg; hook</option></select></label>
+  <div class="card"><h3>Stirrups (ties)</h3>
+    <label>&empty; <input id="sd" type="number" value="8" step="2"> <span class="val">mm</span></label>
+    <label>Mode <select id="sMode"><option value="spacing" selected>Spacing</option><option value="amount">Amount</option></select>
+      <input id="sVal" type="number" value="200" step="25"> <span class="val" id="sUnit">mm</span></label>
+    <label>Seismic zones <input id="seis" type="checkbox"></label>
   </div>
-  <div class="card"><h3>Stirrups &amp; covers</h3>
-    <label>Stirrup &empty; <input id="sd" type="number" value="8" step="2"> <span class="val">mm</span></label>
-    <label>Stirrup spacing s <input id="ss" type="number" value="150" step="25"> <span class="val">mm</span></label>
-    <label>Cover c <input id="cv" type="number" value="40" step="5"> <span class="val">mm</span></label>
+  <div class="card"><h3>Longitudinal</h3>
+    <label>Bottom n&times;&empty; <input id="bn" type="number" value="3" min="2"><input id="bd" type="number" value="16" step="2"> <span class="val">mm</span></label>
+    <label>Top n&times;&empty; <input id="tn" type="number" value="2" min="2"><input id="td" type="number" value="14" step="2"> <span class="val">mm</span></label>
+    <label>Hook TOP <select id="hT"><option value="none">None</option><option value="90" selected>90&deg;</option><option value="180">180&deg;</option></select></label>
+    <label>Hook BOTTOM <select id="hB"><option value="none">None</option><option value="90" selected>90&deg;</option><option value="180">180&deg;</option></select></label>
+    <label>180&deg; return <input id="hRet" type="number" value="400" step="50"> <span class="val">mm</span></label>
+    <label>Extra TOP n, cut Ln/ <div class="row"><input id="txN" type="number" value="2" min="0"><input id="txC" type="number" value="4"></div></label>
+    <label>Extra BOTTOM n, cut Ln/ <div class="row"><input id="bxN" type="number" value="0" min="0"><input id="bxC" type="number" value="8"></div></label>
+    <label>Bent-up n, at Ln/ <div class="row"><input id="ckN" type="number" value="0" min="0"><input id="ckA" type="number" value="6"></div></label>
+    <label>Skin n + &empty; <div class="row"><input id="skN" type="number" value="0" min="0"><input id="skD" type="number" value="12"></div></label>
+    <label>Integrity steel (2+2) <input id="integ" type="checkbox" checked></label>
+  </div>
+  <div class="card"><h3>Covers &amp; offsets</h3>
+    <label>Side/top/bot cover <input id="cov" type="number" value="30" step="5"> <span class="val">mm</span></label>
+    <label>Bar end offset <input id="end" type="number" value="50" step="10"> <span class="val">mm</span></label>
   </div>
 </aside>
 
 <section>
-<h2>1. Design values <small>computed from your inputs</small></h2>
-<div class="card eqs">
-  <div class="eq"><svg id="eqAs" width="430" height="64"></svg><span class="note">Gross steel area of the bottom row</span></div>
-  <div class="eq"><svg id="eqAsmin" width="430" height="64"></svg><span class="note">Minimum flexural steel <span class="clause">ACI 9.6.1.2</span></span></div>
-  <div class="eq"><svg id="eqLd" width="430" height="76"></svg><span class="note">Straight development length, tension <span class="clause">ACI 25.4.2.3</span></span></div>
-  <div class="eq"><svg id="eqLdh" width="430" height="64"></svg><span class="note">Anchorage of a standard hook <span class="clause">ACI 25.4.3.1</span></span></div>
-  <div class="eq"><svg id="eqHook" width="430" height="64"></svg><span class="note">Hook geometry: tail beyond bend <span class="clause">ACI Table 25.3.1</span></span></div>
-  <div class="eq"><svg id="eqCut" width="430" height="64"></svg><span class="note">Top extra bars cut at L<sub>n</sub>/4 past the support face (traditional detailing; the book's Fig. 5.7.2 uses 0.125L<sub>n</sub> for slab bottom bars)</span></div>
+<div class="src" id="engineSrc">engine status</div>
+
+<h2>1. Cross-section <small>projected from the generator's real output</small></h2>
+<div class="fig"><svg id="sec" width="100%" height="380" viewBox="0 0 560 380"></svg>
+<div class="cap">The actual mid-span stirrup path and bar positions returned by the engine.</div></div>
+
+<h2>2. Elevation <small>every real bar, side view</small></h2>
+<div class="fig"><svg id="elev" width="100%" height="360" viewBox="0 0 980 360"></svg>
+<div class="cap">Framing trim at the columns, far-side development, cutoff zones (shaded), hooks, stirrups, cranks &mdash; all real generator paths.</div></div>
+
+<h2>3. 3D cage &mdash; animated placement <small>drag rotates, wheel zooms</small></h2>
+<div class="fig">
+  <div class="btns">
+    <button id="play">Play placement</button>
+    <button id="reset">Reset</button>
+    <button id="spin">Auto-rotate</button>
+    <span style="font-size:12.5px;color:#86827a">speed <input id="spd" type="range" min="0.2" max="3" step="0.1" value="1" style="width:110px"></span>
+  </div>
+  <canvas id="c3d" width="900" height="400"></canvas>
+  <div class="cap" id="animCap">placement order: stirrups &rarr; bottom row &rarr; top row &rarr; extras &rarr; bent-up &rarr; hooks</div>
 </div>
 
-<h2>2. Cross-section <small>how the cage sits inside the beam</small></h2>
-<div class="fig"><svg id="sec" width="100%" height="360" viewBox="0 0 560 360"></svg>
-<div class="cap">Live section &mdash; cover ring, closed stirrup with 135&deg; laps, bottom/top rows spread to clear spacing.</div></div>
+<h2>4. Design values</h2>
+<div class="card eqs">
+  <div class="eq"><svg id="eqAs" width="470" height="52"></svg><span class="note">Bottom steel area</span></div>
+  <div class="eq"><svg id="eqLd" width="470" height="66"></svg><span class="note">Straight development <span class="clause">ACI 25.4.2.3</span></span></div>
+  <div class="eq"><svg id="eqLdh" width="470" height="52"></svg><span class="note">Hook anchorage <span class="clause">ACI 25.4.3.1</span></span></div>
+  <div class="eq"><svg id="eqCut" width="470" height="52"></svg><span class="note">Curtailment of extras</span></div>
+</div>
 
-<h2>3. Elevation <small>where every bar starts, runs, bends and stops</small></h2>
-<div class="fig"><svg id="elev" width="100%" height="330" viewBox="0 0 980 330"></svg>
-<div class="cap">Live elevation &mdash; cutoff zones, hooks into the columns at the far side of the ties, stirrup spacing.</div></div>
-
-<h2>4. 3D cage <small>drag to rotate</small></h2>
-<div class="fig"><canvas id="c3d" width="900" height="380"></canvas>
-<div class="cap" id="src3d">cage source</div></div>
-
-<h2>5. Step-by-step placement <small>the bar-by-bar story with the code reason</small></h2>
+<h2>5. Step-by-step placement <small>adapts to your options</small></h2>
 <div id="steps"></div>
 
-<h2 class="checks">6. Code checks <small>live pass / fail</small></h2>
+<h2 class="checks">6. Code checks</h2>
 <div class="card"><table id="chk"></table></div>
 </section>
 </main>
-<footer>WebSketch 3D education guide &mdash; companion to the app (the same generator: js/features/elementrebar.js &rarr; buildBeamRebar()). Clause numbers per ACI 318-19; figures per ACI Detailing Manual MNL-66(20).</footer>
+<footer>Every drawing here is the output of the app's real generator (js/features/elementrebar.js &rarr; buildBeamRebar; js/StructuralManager.js &rarr; buildBeam framing trim). Clauses per ACI 318-19; figures per MNL-66(20) BM-202/203/204.</footer>
 
 <script src="../js/geometry.js"></script>
 <script src="../js/tools/base.js"></script>
@@ -101,9 +131,9 @@
 <script src="../js/features/rebar.js"></script>
 <script src="../js/features/columnrebar.js"></script>
 <script src="../js/features/elementrebar.js"></script>
+<script src="../js/StructuralManager.js"></script>
 <script>
 'use strict';
-// ───────────────────────── helpers ─────────────────────────
 const $ = id => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
 function el(svg, tag, attrs, txt) {
@@ -112,373 +142,337 @@ function el(svg, tag, attrs, txt) {
   if (txt != null) e.textContent = txt;
   svg.appendChild(e); return e;
 }
-function line(svg, x1,y1,x2,y2, w, color, dash) {
-  return el(svg,'line',{x1,y1,x2,y2,stroke:color||'#444','stroke-width':w||1.5,
-    ...(dash?{'stroke-dasharray':dash}:{})});
+function line(s,x1,y1,x2,y2,w,c,d){return el(s,'line',{x1,y1,x2,y2,stroke:c||'#555','stroke-width':w||1.5,'stroke-linecap':'round',...(d?{'stroke-dasharray':d}:{})});}
+function poly(s, pts, w, c) {
+  const d = pts.map((p,i)=>(i?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  return el(s,'path',{d, fill:'none', stroke:c, 'stroke-width':w, 'stroke-linecap':'round','stroke-linejoin':'round'});
 }
-function dim(svg, x1,y1,x2,y2, label, off) {
-  // horizontal dimension with arrows + text
-  const y = y1 + (off||0);
-  line(svg,x1,y,x2,y,1,'#777');
-  [[x1,y],[x2,y]].forEach(([x]) => line(svg,x,y-5,x,y+5,1,'#777'));
-  const t = el(svg,'text',{x:(x1+x2)/2, y:y-6, 'text-anchor':'middle', class:'dim'},label);
-  return t;
-}
-function mmline(svg, x, y, w, h, color, wd) { return el(svg,'line',{x1:x,y1:y,x2:x+w,y2:y+h,stroke:color,'stroke-width':wd||3,'stroke-linecap':'round'}); }
 
-// ───────────────────────── inputs → values ─────────────────────────
+// ───────── inputs ─────────
 function V() {
   const v = {
-    Ln:+$('Ln').value, b:+$('b').value, h:+$('h').value, cw:+$('cw').value,
-    fc:+$('fc').value, bn:+$('bn').value, bd:+$('bd').value,
-    tn:+$('tn').value, td:+$('td').value, hook:$('hook').value,
-    sd:+$('sd').value, ss:+$('ss').value, cv:+$('cv').value };
-  v.d = v.h - v.cv - v.bd/2;                       // effective depth (to bottom row)
-  v.As = v.bn * Math.PI * v.bd*v.bd/4;             // bottom steel area (mm2)
-  v.db_in = v.bd;                                  // hook bars = bottom bars
-  // ACI 25.4.2.3(a)  ld = fy ψt ψe ψs / (20 λ √f'c) · db   [psi-basis; metric-equal]
-  // Grade 420, ψt=ψe=λ=1, ψs=0.8 for db<=19mm:
-  v.psi_s = v.bd <= 19 ? 0.8 : 1.0;
-  v.ld = Math.ceil(420/(20*Math.sqrt(v.fc)) * v.psi_s * v.bd);      // mm
-  // ACI 25.4.3.1(a) ldh = fy ψe ψr / (50 λ √f'c) · db  (defaults)
-  v.ldh = Math.ceil(420/(50*Math.sqrt(v.fc)) * v.bd);
-  // Table 25.3.1
-  v.tail90 = 12*v.bd;  v.tail180 = Math.max(4*v.bd, 65); v.tailStir = Math.max(6*v.sd, 75);
-  v.R = 3.5*v.bd;                                  // centerline bend radius (app convention)
-  v.cut = Math.round(v.Ln/4);                      // top extras cut
-  v.smax = Math.min(Math.floor(v.d/2), 600);       // 9.7.6.2.2
-  v.Asmin = Math.max(0.25*Math.sqrt(v.fc)/420, 1.4/420) * v.b * v.d;  // 9.6.1.2 (metric)
-  v.spacing = (v.b - 2*v.cv - 2*v.sd - v.bn*v.bd) / Math.max(1,(v.bn-1));
+    L:+$('L').value, b:+$('b').value, h:+$('h').value, cb:+$('cb').value, ch:+$('ch').value,
+    fc:+$('fc').value, sd:+$('sd').value, sMode:$('sMode').value, sVal:+$('sVal').value,
+    seis:$('seis').checked, bn:+$('bn').value, bd:+$('bd').value, tn:+$('tn').value, td:+$('td').value,
+    hT:$('hT').value, hB:$('hB').value, hRet:+$('hRet').value,
+    txN:+$('txN').value, txC:+$('txC').value || 4, bxN:+$('bxN').value, bxC:+$('bxC').value || 8,
+    ckN:+$('ckN').value, ckA:+$('ckA').value || 6, skN:+$('skN').value, skD:+$('skD').value,
+    integ:$('integ').checked, cov:+$('cov').value, end:+$('end').value,
+    colS:$('colS').checked, colE:$('colE').checked };
+  v.d = v.h - v.cov - v.bd/2;
+  v.As = v.bn*Math.PI*v.bd*v.bd/4;
+  v.psi = v.bd<=19?0.8:1;
+  v.ld = Math.ceil(420/(20*Math.sqrt(v.fc))*v.psi*v.bd);
+  v.ldh = Math.ceil(420/(50*Math.sqrt(v.fc))*v.bd);
+  v.cutT = Math.round((v.L - (v.colS?v.cb:0) - (v.colE?v.cb:0))/v.txC);
+  v.cutB = Math.round((v.L - (v.colS?v.cb:0) - (v.colE?v.cb:0))/v.bxC);
+  v.smax = Math.min(Math.floor(v.d/2), 600);
   return v;
 }
+$('sMode').addEventListener('change', () => $('sUnit').textContent = $('sMode').value==='spacing' ? 'mm' : 'pcs');
 
-// ───────────────────────── equation SVGs ─────────────────────────
-function eqFrac(svg, num, den, x, y) {
-  el(svg,'text',{x, y, 'font-size':15,'font-style':'italic'},num);
-  const w = Math.max(num.length, den.length)*8.2;
-  el(svg,'line',{x1:x-2, y1:y+5, x2:x+w, y2:y+5, stroke:'#232220','stroke-width':1.2});
-  el(svg,'text',{x, y:y+22, 'font-size':15,'font-style':'italic'},den);
-  return w;
-}
-function drawEqs(v) {
-  const mk = (id) => { const s = $(id); s.innerHTML=''; return s; };
-  let s = mk('eqAs');
-  el(s,'text',{x:0,y:26,'font-size':16,'font-style':'italic'},'A');
-  el(s,'text',{x:10,y:31,'font-size':10},'s');
-  el(s,'text',{x:26,y:26,'font-size':16},'= n \u00b7 \u03c0\u00b7d');
-  el(s,'text',{x:108,y:31,'font-size':10},'b');
-  el(s,'text',{x:120,y:20,'font-size':10},2); el(s,'text',{x:127,y:33,'font-size':16},'/'); el(s,'text',{x:120,y:44,'font-size':10},4);
-  let x = 150; const w1 = eqFrac(s,'\u03c0 d\u00b2\u1d47','4',x,26);
-  el(s,'text',{x:x+w1+16,y:26,'font-size':15},'= '+v.bn+' \u00b7 \u03c0\u00b7'+v.bd+'\u00b2/4 = ');
-  el(s,'text',{x:x+w1+230,y:26,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, Math.round(v.As)+' mm\u00b2');
-
-  s = mk('eqAsmin');
-  el(s,'text',{x:0,y:26,'font-size':16,'font-style':'italic'},'A');
-  el(s,'text',{x:10,y:31,'font-size':10},'s,min');
-  el(s,'text',{x:40,y:26,'font-size':15},'= max( 0.25\u221af\u2019c / fy , 1.4/fy ) \u00b7 b\u00b7d = ');
-  el(s,'text',{x:346,y:26,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, Math.round(v.Asmin)+' mm\u00b2');
-
-  s = mk('eqLd');
-  el(s,'text',{x:0,y:22,'font-size':15,'font-style':'italic'},'\u2113');
-  el(s,'text',{x:8,y:27,'font-size':10},'d');
-  el(s,'text',{x:26,y:22,'font-size':15},'= fy \u03c8t \u03c8e \u03c8s \u2215 (20 \u03bb \u221af\u2019c) \u00b7 d');
-  el(s,'text',{x:246,y:27,'font-size':10},'b');
-  x = 266; const wf = eqFrac(s,'420 \u03c8s','20\u221a'+v.fc, x, 22);
-  el(s,'text',{x:x+wf+10,y:22,'font-size':14},' \u00b7 '+v.bd+' = ');
-  el(s,'text',{x:x+wf+82,y:22,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, v.ld+' mm');
-  el(s,'text',{x:0,y:56,'font-size':12.5,fill:'#86827a'},'Grade 420, \u03c8t=\u03c8e=\u03bb=1, \u03c8s='+v.psi_s+' (\u2264 19 mm) \u2014 tension, straight bar');
-
-  s = mk('eqLdh');
-  el(s,'text',{x:0,y:26,'font-size':15,'font-style':'italic'},'\u2113');
-  el(s,'text',{x:8,y:31,'font-size':10},'dh');
-  el(s,'text',{x:34,y:26,'font-size':15},'= fy \u03c8e \u03c8r \u2215 (50 \u03bb \u221af\u2019c) \u00b7 d');
-  el(s,'text',{x:250,y:31,'font-size':10},'b');
-  el(s,'text',{x:266,y:26,'font-size':15},'= '+ (420/(50*Math.sqrt(v.fc))).toFixed(1) +' \u00b7 '+v.bd+' = ');
-  el(s,'text',{x:420,y:26,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, v.ldh+' mm');
-
-  s = mk('eqHook');
-  el(s,'text',{x:0,y:26,'font-size':15},'90\u00b0 hook tail = 12 d');
-  el(s,'text',{x:150,y:31,'font-size':10},'b');
-  el(s,'text',{x:168,y:26,'font-size':15},' = 12\u00b7'+v.bd+' = ');
-  el(s,'text',{x:252,y:26,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, v.tail90+' mm');
-  el(s,'text',{x:330,y:26,'font-size':13,fill:'#86827a'},'(stirrup 135\u00b0 tail = max(6d,75) = '+v.tailStir+' mm)');
-
-  s = mk('eqCut');
-  el(s,'text',{x:0,y:26,'font-size':15},'Top extras extend L');
-  el(s,'text',{x:126,y:31,'font-size':10},'n'); el(s,'text',{x:134,y:26,'font-size':15},'/4 = '+v.Ln+'/4 = ');
-  el(s,'text',{x:224,y:26,'font-size':15,'font-weight':'bold',fill:'#4723b3'}, v.cut+' mm');
-  el(s,'text',{x:320,y:26,'font-size':13,fill:'#86827a'},'past the support face');
-}
-
-// ───────────────────────── cross-section SVG ─────────────────────────
-function drawSec(v) {
-  const s = $('sec'); s.innerHTML = '';
-  const W = 560, H = 360, sc = Math.min((H-110)/v.h, (W-160)/v.b);
-  const cx = W/2, cy = (H-40)/2 + 10;
-  const bw = v.b*sc, hh = v.h*sc;
-  // concrete
-  el(s,'rect',{x:cx-bw/2, y:cy-hh/2, width:bw, height:hh, fill:'#eceae6', stroke:'#6b675f','stroke-width':1.6});
-  // stirrup: rounded rect inset cover
-  const c = v.cv*sc, r = Math.max(6, v.sd*sc*0.6);
-  const sx = cx-bw/2+c, sy = cy-hh/2+c, sw = bw-2*c, sh = hh-2*c;
-  el(s,'rect',{x:sx, y:sy, width:sw, height:sh, fill:'none', stroke:'#a94442','stroke-width':Math.max(2.5,v.sd*sc*0.9), rx:r});
-  // 135° lap marks (two small ticks at top corners, alternating)
-  [[sx,sy,-1],[sx+sw,sy,1]].forEach(([px,py,d],i) => {
-    if (i%2===0)
-      mmline(s, px, py, px + d*10*sc/Math.max(sc,1)/1, py + 12*Math.min(sc,1.2), '#a94442', 2.4);
-  });
-  // bottom bars
-  const n = v.bn, dia = Math.max(7, v.bd*sc);
-  const innerW = sw - 2*r;
-  for (let i=0;i<n;i++) {
-    const x = n>1 ? sx + r + i*(innerW-2*r)/(n-1) + (0) : sx+sw/2;
-    const y = sy + sh - r;
-    el(s,'circle',{cx:x, cy:y, r:dia/2, fill:'#a94442', stroke:'#7c2f2d','stroke-width':1});
-  }
-  // top bars
-  const nt = v.tn, diat = Math.max(7, v.td*sc);
-  for (let i=0;i<nt;i++) {
-    const x = nt>1 ? sx + r + i*(innerW-2*r)/(nt-1) : sx+sw/2;
-    el(s,'circle',{cx:x, cy:sy+r, r:diat/2, fill:'#a94442', stroke:'#7c2f2d','stroke-width':1});
-  }
-  // dims
-  dim(s, cx-bw/2, cy+hh/2+6, cx+bw/2, cy+hh/2+6, 'b = '+v.b, 26);
-  // vertical dim right side
-  const dx = cx+bw/2+14;
-  line(s,dx,cy-hh/2,dx,cy+hh/2,1,'#777');
-  line(s,dx-5,cy-hh/2,dx+5,cy-hh/2,1,'#777'); line(s,dx-5,cy+hh/2,dx+5,cy+hh/2,1,'#777');
-  el(s,'text',{x:dx+8,y:cy,'font-size':12,class:'dim'},'h = '+v.h);
-  // cover callout
-  line(s, cx-bw/2, cy-hh/2, cx-bw/2+c, cy-hh/2+c, 1, '#777');
-  el(s,'text',{x:cx-bw/2-6, y:cy-hh/2-10,'font-size':12,class:'dim'},'cover '+v.cv);
-  el(s,'text',{x:sx+4, y:sy-8,'font-size':12,class:'dim'},'stirrup \u2300'+v.sd+' @ '+v.ss);
-  el(s,'text',{x:sx+sw/2, y:sy+sh+r+18,'font-size':12.5,'text-anchor':'middle',fill:'#7c2f2d'},
-    'BOTTOM: '+v.bn+' \u2300'+v.bd+'  (A'+ 's' +' = '+Math.round(v.As)+' mm\u00b2)');
-  el(s,'text',{x:sx+sw/2, y:sy-r-12,'font-size':12.5,'text-anchor':'middle',fill:'#7c2f2d'},'TOP: '+v.tn+' \u2300'+v.td);
-  // clear spacing note
-  el(s,'text',{x:sx+sw/2, y:sy+sh+r+34,'font-size':11.5,'text-anchor':'middle',class:'dim'},
-    'clear spacing between bars = '+Math.round(v.spacing)+' mm (need \u2265 max(d'+ 'b' +', 25) = '+Math.max(v.bd,25)+' mm)');
-}
-
-// ───────────────────────── elevation SVG ─────────────────────────
-function drawElev(v) {
-  const s = $('elev'); s.innerHTML = '';
-  const W = 980, H = 330;
-  const m = { l: 60, r: 60, t: 64 };
-  const total = v.Ln + 2*v.cw;
-  const sc = (W - m.l - m.r) / total;
-  const x0 = m.l, beamY = m.t, bh = 70;
-  const faceL = x0 + v.cw*sc, faceR = x0 + (v.cw+v.Ln)*sc;
-  // columns
-  el(s,'rect',{x:x0, y:beamY-46, width:v.cw*sc, height:bh+92, fill:'#e2dfd9', stroke:'#6b675f','stroke-width':1.2});
-  el(s,'rect',{x:x0+(v.cw+v.Ln)*sc, y:beamY-46, width:v.cw*sc, height:bh+92, fill:'#e2dfd9', stroke:'#6b675f','stroke-width':1.2});
-  // beam
-  el(s,'rect',{x:faceL, y:beamY, width:v.Ln*sc, height:bh, fill:'#eceae6', stroke:'#6b675f','stroke-width':1.5});
-  // Ln/4 cutoff zones (shaded)
-  el(s,'rect',{x:faceL, y:beamY, width:v.cut*sc, height:bh, fill:'#4723b3', opacity:0.07});
-  el(s,'rect',{x:faceR-v.cut*sc, y:beamY, width:v.cut*sc, height:bh, fill:'#4723b3', opacity:0.07});
-  el(s,'text',{x:faceL+v.cut*sc/2, y:beamY+bh+14,'font-size':11,class:'dim','text-anchor':'middle'},'L/4 = '+v.cut);
-  el(s,'text',{x:faceR-v.cut*sc/2, y:beamY+bh+14,'font-size':11,class:'dim','text-anchor':'middle'},'L/4');
-  const yB = beamY + bh - 12, yT = beamY + 12;
-  // BOTTOM bars: run full + into columns to the FAR SIDE + 90 hook up
-  const farL = x0 + v.cw*sc*0.9, farR = x0 + (v.cw+v.Ln+v.cw*0.1)*sc;
-  mmline(s, farL, yB+8, farR, yB+8, '#a94442', 3.4);
-  // hooks at far side
-  const hk = v.hook==='90';
-  mmline(s, farL, yB+8, farL, yB+8-(hk? 26: 12), '#a94442', 3.4);
-  mmline(s, farR, yB+8, farR, yB+8-(hk? 26:12), '#a94442', 3.4);
-  if (!hk) { mmline(s, farR, yB-4, farR-20, yB-4, '#a94442', 3); mmline(s, farL, yB-4, farL+20, yB-4, '#a94442', 3); }
-  // TOP bars: continuous + extras in L/4 (drawn slightly above)
-  mmline(s, farL, yT-2, farR, yT-2, '#a94442', 3);
-  mmline(s, farL, yT-2, farL, yT+14, '#a94442', 3);   // top hook down into column
-  mmline(s, farR, yT-2, farR, yT+14, '#a94442', 3);
-  // top extras (dashed) inside L/4
-  mmline(s, faceL, yT+7, faceL+v.cut*sc, yT+7, '#c98a88', 2.4);
-  mmline(s, faceR-v.cut*sc, yT+7, faceR, yT+7, '#c98a88', 2.4);
-  // stirrups along span
-  const nSt = Math.max(4, Math.floor(v.Ln/v.ss));
-  for (let i=0;i<=nSt;i++) {
-    const x = faceL + i*(v.Ln*sc/nSt);
-    line(s, x, beamY+6, x, beamY+bh-6, 1.6, '#8a5f5e');
-  }
-  // dims
-  dim(s, x0, beamY+bh+30, x0+v.cw*sc, beamY+bh+30, 'column '+v.cw, 0);
-  dim(s, faceL, beamY+bh+30, faceR, beamY+bh+30, 'Ln = '+v.Ln+' (clear span)', 0);
-  // labels
-  el(s,'text',{x:faceL+10, y:beamY+bh-20,'font-size':12,fill:'#7c2f2f'},'bottom '+v.bn+'\u2300'+v.bd+' run through, hook at far side of column ties');
-  el(s,'text',{x:faceL+10, y:beamY+24,'font-size':12,fill:'#7c2f2f'},'top '+v.tn+'\u2300'+v.td+' continuous + extras (dashed) in L/4');
-  el(s,'text',{x:(faceL+faceR)/2, y:beamY-10,'font-size':11.5,class:'dim','text-anchor':'middle'},
-    'stirrups \u2300'+v.sd+' @ '+v.ss+'  (max allowed '+v.smax+')');
-}
-
-// ───────────────────────── 3D cage (canvas isometric) ─────────────────────────
-let yaw = -0.7, pitch = 0.42, zoom = 1, dragging = false, lx=0, ly=0;
-var APP = { ok: false, paths: [], note: '' };
-function realAppCage(v) {
-  // Run the APP'S OWN GENERATOR on the user's values (mm -> m)
+// ───────── run the APP engine ─────────
+function runEngine(v) {
   try {
-    var G = window.G, Model = window.Model, ER = window.ElementRebar;
+    const G = window.G, Model = window.Model, ER = window.ElementRebar, SMc = window.StructuralManager;
     if (!G || !Model || !ER) throw new Error('engine modules not loaded');
-    var m = new Model();
-    // beam solid: section in the YZ plane, swept along +X (the test recipe)
-    var L = v.Ln / 1000, b2 = v.b / 1000, h2 = v.h / 1000;
-    var P = function (y, z) { return G.v(0, y, z); };
-    var y0 = v.cv/1000, y1 = b2 - v.cv/1000, z0 = v.cv/1000, z1 = h2 - v.cv/1000;
-    var loop = [P(y0,z0), P(y1,z0), P(y1,z1), P(y0,z1)];
-    var before = new Set(m.faces.keys());
-    var f0 = m.addFaceFromRings(loop);
-    m.pushPull(f0, L);
-    var faces = Array.from(m.faces.keys()).filter(function(id){ return !before.has(id) && m.faces.has(id); });
-    for (var fid of faces) m.faces.get(fid).userData = { bimEntityId: 'b1', bimType: 'beam' };
-    var ent = { id: 'b1', type: 'beam', faces: faces,
-      params: { baseline: [[0, b2/2, h2], [L, b2/2, h2]], profile: 'rectangular',
-        webWidth: v.b/1000, height: v.h/1000 } };
-    // NOTE: preview uses a top face? buildElementRebar resolves from the face id
-    var q = { type: 'beam', beam: {
-      side: v.cv/1000, end: v.cv/1000, tieDia: v.sd/1000,
-      bentAngle: 135, bentFactor: 6,
-      mode: 'spacing', value: v.ss/1000,
-      topCount: v.tn, topDia: v.td/1000, botCount: v.bn, botDia: v.bd/1000,
-      top: v.cv/1000, bot: v.cv/1000, skin: 0, skinDia: 0.012, integrity: false,
-      topHook: v.hook === '90' ? '90' : '180', botHook: v.hook === '90' ? '90' : '180' } };
-    var fid2 = null, bestZ = -1e9;
-    for (var id2 of faces) { var ff = m.faces.get(id2);
-      var n = G.norm(G.loopNormal(m.pts(ff.loop)));
-      var c = m.faceCentroid(ff);
-      if (n.z > 0.999 && c && c.z > bestZ) { bestZ = c.z; fid2 = id2; } }
-    var res = ER.previewElementRebar(m, fid2, q, [ent]);
+    const m = new Model();
+    const ents = [];
+    m.bimEntities = ents;
+    const k = 1/1000;
+    const L = v.L*k, cw = v.cb*k, cd = v.ch*k, H = v.h*k;
+    const addCol = (cx, tag) => {
+      const before = new Set(m.faces.keys());
+      const ring = [G.v(cx-cw/2, -cd/2, 0), G.v(cx+cw/2, -cd/2, 0), G.v(cx+cw/2, cd/2, 0), G.v(cx-cw/2, cd/2, 0)];
+      const f0 = m.addFaceFromRings(ring);
+      m.pushPull(f0, H + 0.1);
+      const faces = [...m.faces.keys()].filter(id => !before.has(id) && m.faces.has(id));
+      for (const id of faces) m.faces.get(id).userData = { bimEntityId: tag, bimType: 'column' };
+      ents.push({ id: tag, type: 'column', faces, params: { base:[cx,0,0], width:cw, depth:cd, height:H } });
+    };
+    if (v.colS) addCol(0, 'cA');
+    if (v.colE) addCol(L, 'cB');
+    const bp = { baseline: [[0, 0, H], [L, 0, H]], profile: 'rectangular',
+      webWidth: v.b*k, height: H, zJustification: 'Top' };
+    const before = new Set(m.faces.keys());
+    if (SMc) {
+      const SM = new SMc(()=>[], ()=>ents);
+      SM.buildBeam(G, m, bp);
+    } else {
+      const ring = [G.v(0,-v.b*k/2,H*0.4), G.v(L,-v.b*k/2,H*0.4), G.v(L,v.b*k/2,H*0.4), G.v(0,v.b*k/2,H*0.4)];
+      const f0 = m.addFaceFromRings(ring); m.pushPull(f0, H*0.6);
+    }
+    const beamFaces = [...m.faces.keys()].filter(id => !before.has(id) && m.faces.has(id))
+      .filter(id => { const f = m.faces.get(id); return f && (!f.userData || !f.userData.bimEntityId); });
+    for (const id of beamFaces) { const f = m.faces.get(id);
+      if (!f.userData) f.userData = {}; f.userData.bimEntityId = 'b1'; f.userData.bimType = 'beam'; }
+    ents.push({ id: 'b1', type: 'beam', faces: beamFaces, params: bp });
+    const fid = beamFaces[0];
+    const q = { type: 'beam', beam: {
+      side: v.cov*k, end: v.end*k, tieDia: v.sd*k, bentAngle: 135, bentFactor: 6,
+      mode: v.sMode, value: v.sMode==='spacing' ? v.sVal*k : v.sVal, seismic: v.seis, first: 0.05,
+      topCount: v.tn, topDia: v.td*k, botCount: v.bn, botDia: v.bd*k,
+      top: v.cov*k, bot: v.cov*k,
+      skin: v.skN, skinDia: v.skD*k,
+      topHook: v.hT, botHook: v.hB, hookRet: v.hRet*k,
+      topExtra: v.txN, topCut: 1/v.txC, botExtra: v.bxN, botCut: 1/v.bxC,
+      crank: v.ckN, crankAt: 1/v.ckA,
+      integrity: v.integ } };
+    const res = ER.previewElementRebar(m, fid, q, ents);
     if (res.error) throw new Error(res.error);
-    APP.ok = true; APP.paths = res.paths; APP.note = '';
-  } catch (e) {
-    APP.ok = false; APP.paths = []; APP.note = 'app engine: ' + e.message;
-  }
-  return APP;
+    return { ok: true, paths: res.paths, res, err: null };
+  } catch (e) { return { ok: false, paths: [], res: null, err: e.message }; }
 }
-// fallback schematic cage kept for offline/error display
-function cage(v) {
-  // world: x along span, y transverse, z up (mm)
-  const L = v.Ln, bw = v.b, hh = v.h, cv = v.cv, sd = v.sd;
-  const far = v.cw*0.9;                            // penetration into column
-  const x0 = -far, x1 = L + far;
-  const y0 = cv + sd + v.bd/2, y1 = bw - cv - sd - v.bd/2;
-  const zB = cv + sd + v.bd/2, zT = hh - cv - sd - v.td/2;
-  const tail = v.hook==='90' ? v.tail90 : v.tail180;
-  const bars = [];
-  const spread = (n, a, b2) => Array.from({length:n},(_,i)=> n>1 ? a+i*(b2-a)/(n-1) : (a+b2)/2);
-  // bottom bars: straight + vertical tail at both ends
-  for (const y of spread(v.bn, y0, y1))
-    bars.push({pts:[[x0,zB,y],[x1,zB,y],[x1,zB+tail,y],[x0,zB+tail,y]], w:v.bd, red:1});
-  // top bars: straight + tail down
-  for (const y of spread(v.tn, y0, y1))
-    bars.push({pts:[[x0,zT,y],[x1,zT,y],[x1,zT-tail,y],[x0,zT-tail,y]], w:v.td, red:1});
-  // stirrups: rectangles (as rings) each ss
-  const nSt = Math.max(3, Math.floor(L/v.ss));
-  for (let i=0;i<=nSt;i++) {
-    const x = i*L/nSt;
-    const ys = cv+sd, ye = bw-cv-sd, zs = cv+sd, ze = hh-cv-sd;
-    bars.push({pts:[[x,zs,ys],[x,ze,ys],[x,ze,ye],[x,zs,ye],[x,zs,ys]], w:sd, stir:1});
+
+// ───────── section SVG (real paths) ─────────
+function drawSec(v, R) {
+  const s = $('sec'); s.innerHTML = '';
+  const W = 560, H = 380;
+  if (!R.ok) { el(s,'text',{x:W/2,y:H/2,'text-anchor':'middle','font-size':14,fill:'#b32623'},'engine: '+R.err); return; }
+  const sc = Math.min((H-140)/v.h, (W-180)/v.b);
+  const X = y => W/2 + y*sc, Y = z => 40 + (v.h - z)*sc;
+  el(s,'rect',{x:X(-v.b/2),y:Y(v.h),width:v.b*sc,height:v.h*sc,fill:'#eceae6',stroke:'#6b675f','stroke-width':1.6});
+  // real stirrup nearest mid-span
+  const mid = v.L/2000;
+  const ties = R.paths.filter(p => Math.abs(p.dia*1000 - v.sd) < 1e-6 && p.pts.length > 2)
+    .map(p => ({ p, cx: p.pts.reduce((a,q)=>a+q.x,0)/p.pts.length }))
+    .sort((a,b) => Math.abs(a.cx-mid) - Math.abs(b.cx-mid));
+  if (ties.length)
+    poly(s, ties[0].p.pts.map(q => [X(q.y*1000), Y(q.z*1000)]), Math.max(2.4, v.sd*sc*0.06), '#a94442');
+  // real longitudinal bars: hooked bars are multi-point polylines, so plot
+  // the vertex closest to mid-span (its y,z is the section position)
+  for (const p of R.paths) {
+    if (p.pts.length < 2) continue;
+    const dia = p.dia*1000;
+    if (Math.abs(dia - v.sd) < 1e-6) continue; // stirrup drawn above
+    const isBot = Math.abs(dia - v.bd) < 1e-6, isTop = Math.abs(dia - v.td) < 1e-6;
+    if (!isBot && !isTop && dia < v.skD) continue; // skin bars only above skin dia
+    let best = null, bd2 = 1e9;
+    for (let i = 1; i < p.pts.length; i++) {
+      const a = p.pts[i-1], b2 = p.pts[i];
+      const d2 = Math.abs((a.x + b2.x)/2*1000 - v.L/2);
+      if (d2 < bd2) { bd2 = d2; best = { y: (a.y + b2.y)/2*1000, z: (a.z + b2.z)/2*1000 }; }
+    }
+    if (!best) continue;
+    el(s,'circle',{cx:X(best.y), cy:Y(best.z), r:Math.max(3.2, dia*sc/2),
+      fill:'#a94442', stroke:'#7c2f2d','stroke-width':1});
   }
-  return bars;
+  el(s,'text',{x:X(0),y:Y(v.h)-10,'font-size':12.5,'text-anchor':'middle',fill:'#7c2f2f'},
+    'TOP '+v.tn+'\u2300'+v.td+'   BOTTOM '+v.bn+'\u2300'+v.bd+'   stirrup \u2300'+v.sd+
+    (v.seis?' (seismic)':(v.sMode==='spacing'?' @ '+v.sVal:' n='+v.sVal)));
+  el(s,'text',{x:X(0),y:Y(0)+20,'font-size':11.5,'text-anchor':'middle',class:'dim'},
+    'cover '+v.cov+' mm \u2014 real stirrup path + bar positions from the generator');
+  el(s,'text',{x:X(0),y:Y(v.h)+16,'font-size':11.5,'text-anchor':'middle',class:'dim'},'b = '+v.b+' mm   (h = '+v.h+' mm)');
 }
-function draw3D() {
+
+// ───────── elevation SVG (real paths) ─────────
+function drawElev(v, R) {
+  const s = $('elev'); s.innerHTML = '';
+  const W = 980, H = 360;
+  if (!R.ok) { el(s,'text',{x:W/2,y:H/2,'text-anchor':'middle','font-size':14,fill:'#b32623'},'engine: '+R.err); return; }
+  const x0 = -v.cb*0.8, x1 = v.L + v.cb*0.8, z0 = -0.15*v.h, z1 = v.h*1.35;
+  const sc = Math.min((W-100)/(x1-x0), (H-100)/(z1-z0));
+  const X = x => 50 + (x-x0)*sc, Y = z => H-46 - (z-z0)*sc;
+  // columns
+  if (v.colS) el(s,'rect',{x:X(-v.cb/2), y:Y(v.h*1.02), width:v.cb*sc, height:v.h*1.02*sc, fill:'#e2dfd9', stroke:'#6b675f','stroke-width':1.1});
+  if (v.colE) el(s,'rect',{x:X(v.L-v.cb/2), y:Y(v.h*1.02), width:v.cb*sc, height:v.h*1.02*sc, fill:'#e2dfd9', stroke:'#6b675f','stroke-width':1.1});
+  // cutoff shading
+  const clearL = v.colS ? v.cb/2 : 0, clearR = v.colE ? v.L - v.cb/2 : v.L;
+  const cl = Math.max(1, clearR - clearL);
+  el(s,'rect',{x:X(clearL), y:Y(v.h), width:(cl/v.txC)*sc, height:v.h*sc, fill:'#4723b3', opacity:0.07});
+  el(s,'rect',{x:X(clearR-cl/v.txC), y:Y(v.h), width:(cl/v.txC)*sc, height:v.h*sc, fill:'#4723b3', opacity:0.07});
+  el(s,'text',{x:X(clearL+cl/v.txC/2), y:Y(v.h)+v.h*sc+14,'font-size':11,class:'dim','text-anchor':'middle'},'Ln/'+v.txC);
+  el(s,'text',{x:X(clearR-cl/v.txC/2), y:Y(v.h)+v.h*sc+14,'font-size':11,class:'dim','text-anchor':'middle'},'Ln/'+v.txC);
+  // real bars (x,z)
+  const mainD = Math.max(v.bd, v.td);
+  for (const p of R.paths) {
+    const dia = p.dia*1000, isTie = Math.abs(dia - v.sd) < 1e-6;
+    poly(s, p.pts.map(q => [X(q.x*1000), Y(q.z*1000)]),
+      Math.max(1, isTie ? 1.2 : dia/mainD*3), isTie ? '#9a7371' : '#a94442');
+  }
+  // span dim
+  line(s, X(clearL), Y(-0.08*v.h), X(clearR), Y(-0.08*v.h), 1, '#777');
+  el(s,'text',{x:X((clearL+clearR)/2), y:Y(-0.08*v.h)-6,'font-size':11.5,class:'dim','text-anchor':'middle'},
+    'clear span Ln = '+Math.round(cl)+' mm'+(R.res.supports ? '   |   supports: '+R.res.supports.start+' / '+R.res.supports.end : ''));
+  el(s,'text',{x:X(v.L/2), y:24,'font-size':12,class:'dim','text-anchor':'middle'},
+    (v.colS||v.colE ? 'columns trim the beam \u2014 bars develop to the FAR SIDE of the column ties (BM-202)' : 'free ends \u2014 integrity hooks at the faces'));
+}
+
+// ───────── 3D animated ─────────
+let yaw = -0.65, pitch = 0.38, zoom = 1, dragging = false, lx = 0, ly = 0;
+let ANIM = { t: 0, playing: false, spin: false, speed: 1, order: null, last: 0 };
+function classify(p, v) {
+  const dia = p.dia*1000;
+  const xs = p.pts.map(q => q.x*1000);
+  const len = Math.max(...xs) - Math.min(...xs);
+  if (Math.abs(dia - v.sd) < 1e-6) return 0;
+  if (p.pts.length === 2) {
+    if (Math.abs(dia - v.bd) < 1e-6 && len > v.L*0.7) return 1;
+    if (Math.abs(dia - v.td) < 1e-6 && len > v.L*0.7) return 2;
+    return 3;
+  }
+  return 4;
+}
+function draw3D(v, R) {
   const cv = $('c3d'), ctx = cv.getContext('2d');
-  const v = V();
-  realAppCage(v);
-  let bars, src;
-  if (APP.ok) {
-    // REAL paths from the app generator: project pts (m -> mm space)
-    bars = APP.paths.map(p => ({ pts: p.pts.map(q => [q.x*1000, q.z*1000, q.y*1000]),
-      w: p.dia*1000, red: p.dia >= Math.min(v.bd, v.td)/1000 ? 1 : 0 }));
-    src = 'cage generated by the APP engine (ElementRebar.previewElementRebar) - '
-      + APP.paths.length + ' bars';
-  } else { bars = cage(v); src = 'schematic fallback - ' + APP.note; }
-  const info = document.getElementById('src3d'); if (info) info.textContent = src;
-  const W = cv.width = cv.clientWidth, H = cv.height = 380;
+  const W = cv.width = cv.clientWidth, H = cv.height = 400;
   ctx.clearRect(0,0,W,H);
-  const cx = W/2, cy = H/2+30;
-  const modelW = v.Ln + 2*(v.cw + 120);
-  const sc = Math.min(W/(modelW*1.25), H/(v.h*3.2)) * zoom;
-  const P = (x,z,y) => {
-    const x1 = x - modelW/2 + v.cw + 120, y1 = y - v.b/2, z1 = z - v.h/2 + 120;
+  if (!R.ok) { ctx.fillStyle = '#b32623'; ctx.font = '14px Georgia';
+    ctx.fillText('engine: ' + R.err, 16, 30); return; }
+  const k = 1000;
+  const allX = R.paths.flatMap(p => p.pts.map(q => q.x*k));
+  const allZ = R.paths.flatMap(p => p.pts.map(q => q.z*k));
+  const x0 = Math.min(...allX, 0), x1 = Math.max(...allX, v.L);
+  const z0 = Math.min(...allZ, 0), z1 = Math.max(...allZ, v.h);
+  const cx0 = W/2, cy0 = H/2 + 10;
+  const sc = Math.min(W/((x1-x0)*1.4), H/((z1-z0)*3.2)) * zoom;
+  const P = (x, z, y) => {
+    const xa = x-(x0+x1)/2, ya = y - v.b/2, za = z-(z0+z1)/2;
     const ca = Math.cos(yaw), sa = Math.sin(yaw);
-    const X = (x1*ca - y1*sa), Y = (x1*sa + y1*ca);
-    const Z = z1;
-    const zz = Z*Math.cos(pitch) - Y*Math.sin(pitch)*0.42;
-    const yy = Y*Math.cos(pitch)*0.82 + Z*Math.sin(pitch);
-    return [cx + X*sc, cy - yy*sc];
+    const X2 = xa*ca - ya*sa, Y2 = xa*sa + ya*ca;
+    return [cx0 + X2*sc, cy0 - (Y2*0.8 + za*Math.sin(pitch))*sc];
   };
-  // beam outline (ghost)
-  ctx.strokeStyle = '#c8c5bf'; ctx.lineWidth = 1.2;
-  const box = [[0,0,0],[modelW,0,0],[modelW,v.b,0],[0,v.b,0],[0,0,v.h],[modelW,0,v.h],[modelW,v.b,v.h],[0,v.b,v.h]];
-  const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-  for (const [a,b2] of edges) {
-    const pa = P(box[a][0], box[a][2], box[a][1]), pb = P(box[b2][0], box[b2][2], box[b2][1]);
-    ctx.beginPath(); ctx.moveTo(pa[0],pa[1]); ctx.lineTo(pb[0],pb[1]); ctx.stroke();
-  }
-  // bars
-  for (const bar of bars) {
-    ctx.strokeStyle = bar.red ? '#a94442' : '#8a5f5e';
-    ctx.lineWidth = Math.max(1.4, bar.w*sc*0.55);
+  ctx.strokeStyle = '#c8c5bf'; ctx.lineWidth = 1.1;
+  const box = (a,b2,zlo,zhi) => {
+    const pts = [[a,b2,zlo],[a+ (arguments.length?0:0),b2,zlo]];
+  };
+  // simpler ghost boxes
+  const ghost = (xa, xb, ya, yb, za, zb) => {
+    const pts = [[xa,ya,za],[xb,ya,za],[xb,yb,za],[xa,yb,za],[xa,ya,zb],[xb,ya,zb],[xb,yb,zb],[xa,yb,zb]];
+    for (const [i,j] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]) {
+      const p1 = P(pts[i][0], pts[i][2], pts[i][1]), p2 = P(pts[j][0], pts[j][2], pts[j][1]);
+      ctx.beginPath(); ctx.moveTo(p1[0],p1[1]); ctx.lineTo(p2[0],p2[1]); ctx.stroke();
+    }
+  };
+  const bx0 = v.colS ? v.cb/2 : -v.b/2, bx1 = v.colE ? v.L - v.cb/2 : v.L + v.b/2;
+  ghost(bx0, bx1, -v.b/2, v.b/2, 0, v.h);
+  if (v.colS) ghost(-v.cb/2, v.cb/2, -v.ch/2, v.ch/2, 0, v.h*1.02);
+  if (v.colE) ghost(v.L-v.cb/2, v.L+v.cb/2, -v.ch/2, v.ch/2, 0, v.h*1.02);
+  if (!ANIM.order || ANIM.order.length !== R.paths.length)
+    ANIM.order = R.paths.map((p, i) => ({ p, cls: classify(p, v), i })).sort((a,b2) => a.cls - b2.cls || a.i - b2.i);
+  const n = ANIM.order.length;
+  const reveal = ANIM.playing ? Math.min(n, Math.ceil(ANIM.t * n / 6 * ANIM.speed)) : n;
+  let shown = 0;
+  for (let i = 0; i < reveal; i++) {
+    const p = ANIM.order[i].p, dia = p.dia*1000;
+    ctx.strokeStyle = Math.abs(dia - v.sd) < 1e-6 ? '#8a5f5e' : '#a94442';
+    ctx.lineWidth = Math.max(1.3, dia/v.bd*2.4);
     ctx.lineJoin = 'round'; ctx.beginPath();
-    bar.pts.forEach((p,i) => { const q = P(p[0],p[1],p[2]); i? ctx.lineTo(q[0],q[1]) : ctx.moveTo(q[0],q[1]); });
-    ctx.stroke();
+    p.pts.forEach((q, j) => { const w2 = P(q.x*k, q.z*k, q.y*k);
+      j ? ctx.lineTo(w2[0],w2[1]) : ctx.moveTo(w2[0],w2[1]); });
+    ctx.stroke(); shown++;
   }
-  ctx.fillStyle = '#86827a'; ctx.font = '12px Consolas';
-  ctx.fillText('drag = rotate   wheel = zoom', 12, H-10);
+  $('animCap').textContent = ANIM.playing
+    ? 'placing\u2026 ' + shown + ' / ' + n + ' bars'
+    : shown + ' bars \u2014 drag = rotate, wheel = zoom';
 }
-cv3d_events: {
-  const c = $('c3d');
+function tick(ts) {
+  if (!ANIM.last) ANIM.last = ts;
+  const dt = Math.min(0.05, (ts - ANIM.last)/1000); ANIM.last = ts;
+  if (ANIM.playing) { ANIM.t += dt;
+    if (ANIM.t*ANIM.speed > 8) { ANIM.playing = false; $('play').classList.remove('on'); $('play').textContent = 'Play placement'; } }
+  if (ANIM.spin) yaw += dt*0.35;
+  if (ANIM.playing || ANIM.spin) draw3D(V(), LAST);
+  requestAnimationFrame(tick);
+}
+let LAST = null;
+$('play').onclick = () => { ANIM.playing = !ANIM.playing; ANIM.t = 0; ANIM.order = null;
+  $('play').classList.toggle('on', ANIM.playing);
+  $('play').textContent = ANIM.playing ? 'Placing\u2026' : 'Play placement'; };
+$('reset').onclick = () => { ANIM.playing = false; ANIM.t = 0; ANIM.order = null;
+  $('play').classList.remove('on'); $('play').textContent = 'Play placement'; refresh(); };
+$('spin').onclick = () => { ANIM.spin = !ANIM.spin; $('spin').classList.toggle('on', ANIM.spin); };
+$('spd').oninput = e => ANIM.speed = +e.target.value;
+{ const c = $('c3d');
   c.addEventListener('mousedown', e => { dragging = true; lx = e.clientX; ly = e.clientY; });
   addEventListener('mouseup', () => dragging = false);
-  addEventListener('mousemove', e => {
-    if (!dragging) return;
+  addEventListener('mousemove', e => { if (!dragging) return;
     yaw += (e.clientX-lx)*0.008; pitch = Math.max(-0.2, Math.min(1.2, pitch + (e.clientY-ly)*0.006));
-    lx = e.clientX; ly = e.clientY; draw3D();
-  });
-  c.addEventListener('wheel', e => { e.preventDefault(); zoom = Math.max(0.4, Math.min(3, zoom*(e.deltaY<0?1.1:0.9))); draw3D(); }, {passive:false});
+    lx = e.clientX; ly = e.clientY; if (LAST) draw3D(V(), LAST); });
+  c.addEventListener('wheel', e => { e.preventDefault();
+    zoom = Math.max(0.4, Math.min(3, zoom*(e.deltaY<0?1.1:0.9)));
+    if (LAST) draw3D(V(), LAST); }, { passive:false }); }
+
+// ───────── equations ─────────
+function eqTxt(svg, items) { svg.innerHTML = '';
+  items.forEach(it => el(svg,'text',{x:it[0],y:it[1],'font-size':it[4]||15,
+    ...(it[3]?{'font-weight':'bold'}:{}), ...(it[5]?{fill:it[5]}:{})}, it[2])); }
+function drawEqs(v) {
+  eqTxt($('eqAs'), [[0,26,'As = n\u00b7\u03c0\u00b7db\u00b2/4 = '+v.bn+'\u00b7\u03c0\u00b7'+v.bd+'\u00b2/4 = '],
+    [330,26,Math.round(v.As)+' mm\u00b2',15,1,'#4723b3']]);
+  eqTxt($('eqLd'), [[0,22,'\u2113d = fy\u03c8s/(20\u221af\u2019c)\u00b7db = '+(420/(20*Math.sqrt(v.fc))).toFixed(1)+'\u00b7'+v.psi+'\u00b7'+v.bd+' = '],
+    [352,22,v.ld+' mm',15,1,'#4723b3'],
+    [0,52,'Grade 420, \u03c8s = '+v.psi+' (\u2264 19 mm) \u2014 tension, straight bar',12.5,0,'#86827a']]);
+  eqTxt($('eqLdh'), [[0,26,'\u2113dh = fy/(50\u221af\u2019c)\u00b7db = '+(420/(50*Math.sqrt(v.fc))).toFixed(1)+'\u00b7'+v.bd+' = '],
+    [300,26,v.ldh+' mm',15,1,'#4723b3']]);
+  eqTxt($('eqCut'), [[0,26,'extra top cut at Ln/'+v.txC+' = '+v.cutT+' mm past the face   |   extra bottom Ln/'+v.bxC+' = '+v.cutB+' mm']]);
 }
 
-// ───────────────────────── steps ─────────────────────────
+// ───────── steps ─────────
 function drawSteps(v) {
-  const S = [
-    ['Lay the stirrups first', 'Closed stirrups \u2300'+v.sd+' every '+v.ss+' mm along the clear span '+v.Ln+' mm. Closed (not open) so they confine the concrete core and carry shear all the way around.',
-      'ACI 9.7.6.2 (closed stirrup types) + 25.7.1.6 (integrity bars must be enclosed by closed stirrups)'],
-    ['Bottom (main) bars go in next', v.bn+' bars \u2300'+v.bd+' sit ON the stirrups at the bottom: side cover '+v.cv+', resting on the stirrup, so their centroid is '+ (v.cv+v.sd+v.bd/2) +' mm above the soffit. They run the FULL clear span.',
-      'ACI 20.5.1.3 (cover) + 9.7.1 (bars developed on both sides of every section)'],
-    ['The bottom bars do NOT stop at the column face', 'They continue INTO the column and bend '+v.hook+'\u00b0 at the far side of the column ties ('+v.ldh+' mm minimum anchorage; the tail is '+v.tail90+' mm). Why a hook? A straight bar would need '+v.ld+' mm of embedment \u2014 usually longer than the column \u2014 the hook develops the same force in '+v.ldh+' mm.',
-      'ACI 9.7.3.2 (anchorage at supports) + 25.4.3.1 (hooked anchorage \u2113dh) + MNL-66 BM-202 "extend beam bars with a standard hook to the far side of the column ties"'],
-    ['Top bars over the supports', v.tn+' bars \u2300'+v.td+' run continuous along the top, hook down into both columns (same far-side rule). Extra top bars (if needed) live only in the negative-moment zone: L/4 = '+v.cut+' mm past each support face, then stop.',
-      'ACI 9.7.3.3 (development of flexural bars) + MNL-66 Fig. 5.7.2 (0.125L'+ "\u2099" +' cutoffs for slab bottom bars illustrate the same principle)'],
-    ['Hook geometry is not optional', 'A 90\u00b0 hook = bend on radius '+ (6*v.bd) +' mm inside diameter + a straight tail of '+v.tail90+' mm (12d'+ "\u1d47" +'). A 180\u00b0 hook tail = max(4d'+ "\u1d47" +', 65 mm). Stirrup 135\u00b0 tails = max(6d'+ "\u1d47" +', 75 mm) = '+v.tailStir+' mm.',
-      'ACI Table 25.3.1 (standard hook geometry)'],
-    ['Tie the integrity steel', 'At least 2 bottom + 2 top bars must be CONTINUOUS, pass through the column cage, and be anchored to develop f'+ "\u1d67" +' at the support \u2014 that is exactly the far-side hooks above. The integrity bars keep the beam hanging to the column if a support is damaged.',
-      'ACI 9.7.7.1\u20139.7.7.4 + MNL-66 BM-2 checklist (p. 91)'],
-    ['Check spacing \u2014 both ways', 'Along the span: stirrups \u2264 '+v.smax+' mm (d/2 = '+Math.floor(v.d/2)+' mm). Across the section: clear space between bars \u2265 max(d'+ "\u1d47" +', 25 mm) \u2014 yours is '+Math.round(v.spacing)+' mm.',
-      'ACI 9.7.6.2.2 (longitudinal stirrup spacing) + 25.2.3 (transverse bar spacing)'],
-  ];
+  const S = [];
+  S.push(['Stirrups first \u2014 \u2300'+v.sd+(v.seis?' (seismic zones)':(v.sMode==='spacing'?' @ '+v.sVal+' mm':' n = '+v.sVal)),
+    v.seis ? 'First tie 50 mm off the support face; confinement zones 2h at min(d/4, 125 mm); mid-span at d/2.'
+           : 'Closed loops, 135\u00b0 laps alternating around the section, every corner bar engaged by a bend.',
+    'ACI 9.7.6.2 + 25.7.1.6'+(v.seis?'; zone rules ACI 18.6.5':'')]);
+  S.push(['Bottom row: '+v.bn+' \u2300'+v.bd+' run the full span',
+    (v.colS||v.colE
+      ? 'They do NOT stop at the column face \u2014 they continue INTO the column and hook ('+v.hB+') at the far side of the column ties (\u2113dh = '+v.ldh+' mm, tail 12db = '+12*v.bd+' mm).'
+      : 'Free ends: the row finishes with the '+v.hB+' integrity hook at the face.'),
+    'ACI 9.7.3.2 + 25.4.3.1 + Table 25.3.1; MNL-66 BM-202']);
+  if (v.txN > 0) S.push(['Extra top bars: '+v.txN+' in the support zones',
+    'Extra top steel lives only in the negative-moment zone \u2014 Ln/'+v.txC+' = '+v.cutT+' mm past each support face, then cut; the outer end keeps the row hook.',
+    'ACI 9.7.3.3; MNL-66 Fig. 5.7.2 cutoff pattern']);
+  if (v.bxN > 0) S.push(['Extra bottom bars: '+v.bxN+' mid-span',
+    'Positive-moment extras stop Ln/'+v.bxC+' = '+v.cutB+' mm short of both supports, square-cut ends.',
+    'ACI 9.7.3; traditional curtailment']);
+  if (v.ckN > 0) S.push(['Bent-up (cranked) bars: '+v.ckN,
+    'Bottom bars crank up at 45\u00b0 starting ~Ln/'+v.ckA+' from each support, finishing with 90\u00b0 hooks at the top elevation \u2014 they help carry shear near the supports.',
+    'ACI 9.7.6.1 (shear reinforcement forms); classic bent-bar detailing']);
+  if (v.skN > 0) S.push(['Skin bars: '+v.skN+' \u2300'+v.skD+' per side',
+    'Side-face steel controls cracking in deep beams \u2014 bars spread over h/2 at \u2264 250 mm, both faces.',
+    'ACI 9.7.2.3 (required when h > 900 mm)']);
+  if (v.integ) S.push(['Integrity steel ties the frame together',
+    'Min 2+2 continuous bars in closed stirrups, passing THROUGH the column cage, anchored to develop fy \u2014 the far-side hook does exactly that.',
+    'ACI 9.7.7.1\u20139.7.7.4; MNL-66 BM-2 (p. 91)']);
+  if (v.colS || v.colE) S.push(['The joint: three cages meet here',
+    'Column bars run through; beam bars hook around them at the far side of the column ties; stirrup spacing tightens to 8 in (203 mm) through the 0.6 m connection zone.',
+    'MNL-66 BM-202 + BM-203; ACI 9.7.7.3']);
   $('steps').innerHTML = S.map(([t,b2,c],i) =>
     '<div class="step"><b class="n">'+(i+1)+'</b><b>'+t+'</b><span class="clause">'+c+'</span><br>'+b2+'</div>').join('');
 }
-
-// ───────────────────────── checks ─────────────────────────
-function drawChecks(v) {
+// ───────── checks ─────────
+function drawChecks(v, R) {
   const rows = [
-    ['Minimum flexural steel', 'A'+ "\u209b" +' = '+Math.round(v.As)+' \u2265 A'+ "\u209b,min" +' = '+Math.round(v.Asmin)+' mm\u00b2', v.As >= v.Asmin, 'ACI 9.6.1.2'],
-    ['Integrity bars', 'bottom \u2265 2 ('+v.bn+') and top \u2265 2 ('+v.tn+') continuous', v.bn >= 2 && v.tn >= 2, 'ACI 9.7.7.2'],
-    ['Stirrup spacing', 's = '+v.ss+' \u2264 max = min(d/2, 600) = '+v.smax+' mm', v.ss <= v.smax, 'ACI 9.7.6.2.2'],
-    ['Clear spacing between bars', Math.round(v.spacing)+' \u2265 max(d'+ "\u1d47" +'='+v.bd+', 25) mm', v.spacing >= Math.max(v.bd,25), 'ACI 25.2.3'],
-    ['Skin reinforcement', 'h = '+v.h+(v.h>900?' > 900 \u2192 side bars required over h/2 at \u2264 250 mm':' \u2264 900 \u2192 not required'), v.h<=900, 'ACI 9.7.2.3'],
-    ['Hook tail (90\u00b0)', 'tail = '+v.tail90+' = 12d'+ "\u1d47" +' mm', true, 'ACI Table 25.3.1'],
+    ['Engine agreement', R.ok ? R.paths.length+' bars generated; supports '+(R.res.supports?R.res.supports.start+'/'+R.res.supports.end:'n/a') : R.err,
+      R.ok, 'buildBeamRebar()'],
+    ['Minimum flexural steel', 'As = '+Math.round(v.As)+' \u2265 As,min = '+Math.round(Math.max(0.25*Math.sqrt(v.fc)/420,1.4/420)*v.b*v.d)+' mm\u00b2',
+      v.As >= Math.max(0.25*Math.sqrt(v.fc)/420,1.4/420)*v.b*v.d, 'ACI 9.6.1.2'],
+    ['Integrity bars', 'bottom \u2265 2 ('+v.bn+'), top \u2265 2 ('+v.tn+')', v.bn>=2 && v.tn>=2, 'ACI 9.7.7.2'],
+    ['Stirrup spacing', v.sMode==='spacing' ? 's = '+v.sVal+' \u2264 '+v.smax+' (d/2)' : 'n = '+v.sVal+' \u2192 computed spacing',
+      v.sMode!=='spacing' || v.sVal <= v.smax, 'ACI 9.7.6.2.2'],
+    ['Skin steel', v.h>900 ? 'h = '+v.h+' > 900 \u2192 side bars required' : 'h = '+v.h+' \u2264 900',
+      v.h <= 900 || v.skN > 0, 'ACI 9.7.2.3'],
+    ['Hook anchorage', (v.colS||v.colE ? 'far-side development \u2113dh = '+v.ldh+' mm' : 'free-end hooks 12db = '+12*v.bd+' mm'),
+      true, 'ACI 25.4.3.1 + Table 25.3.1'],
   ];
-  $('chk').innerHTML = '<tr><th>Check</th><th>Condition</th><th>Value</th><th></th><th>Clause</th></tr>' +
+  $('chk').innerHTML = '<tr><th>Check</th><th>Condition</th><th></th><th>Clause / source</th></tr>'+
     rows.map(r => '<tr><td>'+r[0]+'</td><td class="num">'+r[1]+'</td><td class="'+(r[2]?'pass':'fail')+'">'+(r[2]?'PASS':'FAIL')+'</td><td class="num">'+r[3]+'</td></tr>').join('');
 }
-
-// ───────────────────────── wire up ─────────────────────────
-function refresh() { const v = V(); drawEqs(v); drawSec(v); drawElev(v); draw3D(v); drawSteps(v); drawChecks(v); }
+function refresh() {
+  const v = V(); const R = runEngine(v); LAST = R;
+  const s = $('engineSrc');
+  if (R.ok) { s.className = 'src';
+    s.textContent = 'APP ENGINE LIVE \u2014 '+R.paths.length+' bars from buildBeam (framing trim'+
+      ((v.colS||v.colE)?' + far-side development':'')+'); supports '+(R.res.supports?R.res.supports.start+' / '+R.res.supports.end:'n/a'); }
+  else { s.className = 'src err'; s.textContent = 'engine error: '+R.err; }
+  ANIM.order = null;
+  drawSec(v, R); drawElev(v, R); draw3D(v, R); drawEqs(v); drawSteps(v); drawChecks(v, R);
+}
 document.querySelectorAll('input,select').forEach(i => i.addEventListener('input', refresh));
-addEventListener('resize', draw3D);
+addEventListener('resize', () => { if (LAST) draw3D(V(), LAST); });
 refresh();
+requestAnimationFrame(tick);
 </script>
 </body>
 </html>

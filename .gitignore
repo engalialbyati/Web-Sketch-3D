@@ -21,3 +21,17 @@ dist/
 samples/hospital.ifc
 Saved Models/
 nul/
+
+# local ACI reference library (copyrighted — never commit)
+MNL-66.pdf
+Comprehensive BIM Element Taxonomy.docx
+supplemental Autocad files to ACI Detailing Manual Manual MNL-66(20) 2020/
+
+# session scratch
+_*.py
+_*.png
+_*.txt
+_demo_frame.js
+test/_*
+*.dbg
+_mnl66_details.json

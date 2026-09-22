@@ -607,36 +607,38 @@ class Viewport {
     // ribbons (built in BOTH modes so switching is instant): one entry per
     // bar pid, the centerline stamped by addRebarPath on the pipe's face 0
     {
-      const rp = [], ro = [], rs = [];
+      // one quad per segment — 4 corners (a,-1) (a,+1) (b,+1) (b,-1) plus an
+      // explicit index: a bare 2-vertex push makes the non-indexed mesh weld
+      // triangles ACROSS segments (and across bars), so separate rebar looks
+      // connected to its neighbours
+      const rp = [], ro = [], rs = [], ridx = [];
+      const pushSeg = (a, b2) => {
+        const b0 = rp.length / 3;
+        rp.push(a[0], a[1], a[2], a[0], a[1], a[2], b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
+        ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2], a[0], a[1], a[2], a[0], a[1], a[2]);
+        rs.push(-1, 1, 1, -1);
+        ridx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
+      };
       const seenPid = new Set();
       for (const f of model.faces.values()) {
         const meta = f.userData && f.userData.rebar;
         if (!meta || !meta.line || seenPid.has(meta.pid)) continue;
         seenPid.add(meta.pid);
         const L2 = meta.line;
-        for (let k = 1; k < L2.length; k++) {
-          const a = L2[k - 1], b2 = L2[k];
-          rp.push(a[0], a[1], a[2], a[0], a[1], a[2]);
-          ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
-          rs.push(-1, 1, -1, 1);
-        }
+        for (let k = 1; k < L2.length; k++) pushSeg(L2[k - 1], L2[k]);
       }
       // record-only bars (model.rebarPipes === false scenes)
       if (model._rebarRecords) {
         for (const rec of model._rebarRecords.values()) {
           const L2 = rec.line;
-          for (let k = 1; k < L2.length; k++) {
-            const a = L2[k - 1], b2 = L2[k];
-            rp.push(a[0], a[1], a[2], a[0], a[1], a[2]);
-            ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
-            rs.push(-1, 1, -1, 1);
-          }
+          for (let k = 1; k < L2.length; k++) pushSeg(L2[k - 1], L2[k]);
         }
       }
       const rbg = new THREE.BufferGeometry();
       rbg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
       rbg.setAttribute('other', new THREE.Float32BufferAttribute(ro, 3));
       rbg.setAttribute('side', new THREE.Float32BufferAttribute(rs, 1));
+      rbg.setIndex(ridx);
       this.rebarRibbon.geometry.dispose();
       this.rebarRibbon.geometry = rbg;
       this.rebarRibbon.visible = this.rebarMode === 'light';
