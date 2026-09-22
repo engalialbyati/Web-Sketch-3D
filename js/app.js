@@ -2802,6 +2802,7 @@ class App {
   // Replace the document's model, rebinding the managers that hold a model
   // reference (levels, BIM entities, anything else with cached .model).
   bindModel(m) {
+    this._demoRecipe = null; // model swap drops the recipe; loaders re-set it
     this.model = m;
     this.levelManager.model = m;
     this.bim.model = m;
@@ -4967,6 +4968,7 @@ class App {
       this.updateInfo(); this.refreshGroups();
       if (this.elements && this.elements.refresh) this.elements.refresh();
       this.view.zoomExtents();
+      this._demoRecipe = 'mnl66'; // autosave the RECIPE, not 115k faces
       if (!this.xrayOn) this.action('toggleXray');
       this.toast('MNL-66 reinforcement demo loaded — '
         + Object.entries(counts || {}).filter(([k]) => k !== 'rebarFaces')
@@ -8574,6 +8576,8 @@ class App {
     return this._openTx;
   }
   _runTx(label, fn) {
+    this._demoRecipe = null; // a real edit invalidates the demo recipe
+
     if (this._rebuilding) { this.toast('Rebuilding from parameters — edits resume in a moment', true); return undefined; }
     const tx = this._beginTx(label);
     let out;
@@ -9091,6 +9095,13 @@ class App {
     clearTimeout(this._asTimer);
     this._asTimer = setTimeout(() => {
       try {
+        // DEMO RECIPE: a loaded demo reloads from its recipe, not its
+        // geometry - the MNL-66 cage scene is ~115k faces and running
+        // serialize() on it after EVERY action froze the tab
+        if (this._demoRecipe) { this._autosaveStore(JSON.stringify({ demo: this._demoRecipe })); return; }
+        // the SAME cap as the restore side: a snapshot this heavy could
+        // never open again, so serializing it per action is pure freeze
+        if (this.model.faces.size > 25000) { this._autosaveStore(JSON.stringify({ heavy: this.model.faces.size })); return; }
         const snap = this.model.serialize();
         if (!this._asWorker) {
           try { this._asWorker = new Worker('js/autosaveWorker.js'); } catch (e) { this._asWorker = null; }
@@ -9136,7 +9147,23 @@ class App {
         if (rec && rec.s && rec.sv > sv) s = rec.s;
       } catch (e) { }
       if (!s) return;
+      // ~30 MB snapshot: the JSON.parse alone froze startup for
+      // seconds (old heavy demos wrote these). Cheap length check,
+      // no parse - wipe and start fresh
+      if (s.length > 3e7) {
+        this.toast('Saved model too heavy to open - cleared. Anything you build now autosaves fresh.', true);
+        try { localStorage.removeItem('websketch3d'); localStorage.removeItem('websketch3d.sv'); } catch (e2) { }
+        this._autosaveWriteIdb(Date.now(), JSON.stringify({ heavy: -1 }));
+        return;
+      }
       const data = JSON.parse(s);
+      // DEMO RECIPE: rebuild the scene live (3 s) instead of loading
+      // megabytes of geometry
+      if (data.demo === 'mnl66') {
+        this._demoRecipe = 'mnl66';
+        setTimeout(() => { if (this._demoRecipe === 'mnl66') this.loadMnl66Demo(); }, 150);
+        return;
+      }
       // SAFETY CAP: snapshots this size took seconds-to-minutes to open
       // (bridge-era cages froze tabs outright) - start empty instead
       if ((data.f || []).length > 25000) {
