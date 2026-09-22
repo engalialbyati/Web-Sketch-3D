@@ -5199,18 +5199,9 @@ class App {
       toggleXray: () => { A.xrayOn = !A.xrayOn; A.view.setXray(A.xrayOn); },
       rebarlight: () => {
         A.rebarLight = !A.rebarLight;
-        const apply = () => {
-          A.view.setRebarMode(A.rebarLight ? 'light' : 'detail');
-          A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline ribbons; switch back to pick bars'
-            : 'Rebar: DETAILED display (solid pipe bars)');
-        };
-        // record-only scenes (the MNL-66 demos) have NO pipe solids to show -
-        // materialize them from the centerline records before switching, in
-        // time-sliced chunks so the UI stays alive
-        const m = A.model;
-        if (!A.rebarLight && m.rebarPipes === false && m._rebarRecords && m._rebarRecords.size)
-          A.materializeRebarPipes(() => { A.view.rebuild(); apply(); });
-        else apply();
+        A.view.setRebarMode(A.rebarLight ? 'light' : 'detail');
+        A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline lines'
+          : 'Rebar: DETAILED display (solid bars, GPU-instanced - instant at any cage size)');
       },
       styleShaded: () => A.setFaceStyle('shaded'),
       styleMono: () => A.setFaceStyle('monochrome'),
@@ -7399,7 +7390,39 @@ class App {
     this.selGridZ = null;
     this.selGridIds.clear();
     this.selAssets.clear();
+    if (this._rebarSelPid != null) { this._rebarSelPid = null; this.view.setRebarSelection(null); }
     this.onSelectionChanged();
+  }
+  // one rebar bar selected in the detailed display: highlight its segments,
+  // show its schedule identity. Del removes the record (record bars only).
+  selectRebar(pid) {
+    this.sel = { edges: new Set(), faces: new Set() };
+    this.selGridId = null; this.selGridZ = null;
+    this.selGridIds.clear(); this.selAssets.clear();
+    this._rebarSelPid = pid;
+    this.view.setRebarSelection(pid);
+    const rec = this.model._rebarRecords && this.model._rebarRecords.get(pid);
+    if (rec) {
+      const d = Math.round((rec.dia || 0) * 1000);
+      const shape = rec.meta && rec.meta.shape ? ' ' + rec.meta.shape : '';
+      const role = rec.meta && rec.meta.role ? ' — ' + rec.meta.role : '';
+      this.setStatus(`Rebar \u2300${d}${shape} \u00d7 ${(rec.length || 0).toFixed(2)} m${role} — Del removes the bar`);
+    } else this.setStatus('Rebar bar selected — Del removes the bar');
+    this.onSelectionChanged();
+  }
+  _deleteSelectedRebar() {
+    const pid = this._rebarSelPid;
+    if (pid == null) return false;
+    const m = this.model;
+    if (m._rebarRecords && m._rebarRecords.has(pid)) {
+      m._rebarRecords.delete(pid);
+      m._rebarSerial = (m._rebarSerial || 0) + 1; // re-derive display caches
+      m.version++; // rebuild()'s no-op gate keys on version, not the serial
+    }
+    this._rebarSelPid = null;
+    this.view.setRebarSelection(null);
+    this.view.rebuild();
+    return true;
   }
   pruneSelection() {
     for (const id of [...this.sel.faces]) if (!this.model.faces.has(id)) this.sel.faces.delete(id);
@@ -8135,48 +8158,6 @@ class App {
     });
     if (ok2) this.selectElement(id);
   }
-  // RECORD -> SOLID: materialize pipe solids from the centerline records of
-  // a record-only scene (the MNL-66 demos build rebar as records for speed).
-  // Time-sliced chunks keep the UI responsive; the records STAY (schedules
-  // and light-mode ribbons keep reading them) — hex rings, one solid pipe
-  // per record, stamped so the rebar pass renders and picks them.
-  materializeRebarPipes(done) {
-    const m = this.model;
-    if (m._rebarPiping) { this.toast('Rebar conversion already running — one moment', true); return; }
-    const recs = [...(m._rebarRecords || new Map()).values()];
-    if (!recs.length) { if (done) done(); return; }
-    m._rebarPiping = true;
-    m.rebarPipes = true; // new bars from here on are solids again
-    let i = 0;
-    const step = () => {
-      const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
-      const t0 = now();
-      try {
-        while (i < recs.length) {
-          const rec = recs[i++];
-          m.addRebarPath(rec.line.map(q => G.v(q[0], q[1], q[2])), rec.dia,
-            { ringSegs: 6, meta: rec.meta, pipe: true });
-          // re-key the record to the pipe's pid so ribbons/schedules and the
-          // pipe stay one bar (never double-drawn, never orphaned)
-          if (m._rebarPid != null && m._rebarPid !== rec.pid) {
-            m._rebarRecords.delete(rec.pid);
-            m._rebarRecords.set(m._rebarPid, { ...rec, pid: m._rebarPid });
-          }
-          if (now() - t0 > 40) break;
-        }
-      } catch (e) { /* one bad record never kills the conversion */ }
-      if (i < recs.length) {
-        this.setStatus(`Converting rebar to solid bars — ${i}/${recs.length}…`);
-        setTimeout(step, 0);
-        return;
-      }
-      m._rebarPiping = false;
-      this.setStatus('');
-      if (done) done();
-    };
-    this.toast(`Converting ${recs.length} bars to solid pipes — progress in the status bar`);
-    setTimeout(step, 0);
-  }
   // BAR BENDING SCHEDULE: every loose rebar in the model, aggregated by
   // host + shape + diameter + bar length (the FreeCAD-Reinforcement BBS).
   // Weight per metre: 0.006165 * d^2 kg/m (rho = 7850, d in mm).
@@ -8574,6 +8555,7 @@ class App {
   }
   deleteSelection() {
     if (this.selAnn && this.deleteSelectedAnnotation()) return;
+    if (this._rebarSelPid != null && this._deleteSelectedRebar()) return;
     // selected asset instances go first — hosted ones heal their wall inside
     // one transaction (the rebuild re-cuts every OTHER hosted element)
     if (this.selAssets.size && this.assets) {

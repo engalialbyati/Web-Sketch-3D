@@ -319,6 +319,21 @@ class Viewport {
     this.rebarRibbon.frustumCulled = false;
     this.rebarRibbon.visible = false;
     this.scene.add(this.rebarRibbon);
+
+    // DETAIL rebar: GPU-INSTANCED hex prisms (the CSI/ETABS approach — any
+    // cage size is ONE draw call). Built from the same centerline cache the
+    // ribbons use; lit by the scene's sun+hemisphere; depth-write off +
+    // renderOrder 2 so bars show through X-ray ghost concrete exactly like
+    // the old pipe pass did.
+    this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0x9a423e, roughness: 0.62, metalness: 0.18 });
+    this.rebarSolidsMat.depthWrite = false;
+    this.rebarSolids = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarSolidsMat);
+    this.rebarSolids.visible = false;
+    this.scene.add(this.rebarSolids);
+    this._rbSerialBuilt = -1;
+    this._rbInstPid = null;
+    this._rbSelPid = null;
+    this._rebarPrismGeoCached = null;
     this.rebarMode = 'detail';
 
     // selected edges
@@ -512,14 +527,13 @@ class Viewport {
     const appLayers = (this.app.layers || []);
     const hiddenLayers = new Set(appLayers.filter(l => l.visible === false).map(l => l.id));
     const layerTints = new Map(appLayers.filter(l => l.color).map(l => [l.id, l.color]));
-    const rpos = [], rnor = [], rcol = [], rpick = [];
-    // light mode skips the pipe pass OUTRIGHT (invisible pipes need no
-    // buffers, no pick ids); detail mode always rebuilds fully - stale
-    // pick-id drift is not worth the 200 ms
-    const rebarActive = this.rebarMode === 'detail';
+    // rebar display NEVER flows through the face pass: solid bars are
+    // GPU-instanced prisms built from the centerline records (a materialized
+    // 500k-face pipe cage turned every rebuild into a 1.3 s triangulation
+    // stall and dragged orbiting to ~5 fps)
     for (const f of model.faces.values()) {
       if (f.hidden || (ff && !ff(f)) || elementFaceIds.has(f.id)) continue;
-      if (!rebarActive && f.userData && f.userData.rebar) continue; // light mode
+      if (f.userData && f.userData.rebar) continue; // instanced pass owns rebar
       if (hiddenLayers.has(f.layerId || '0')) continue;
       // content key: ring vertex ids + quantized coords + color/alpha
       const parts = [];
@@ -562,8 +576,7 @@ class Viewport {
         cache.set(f.id, entry);
         geoChanged = true; // this face's triangles changed
       }
-      const isRebar = !!(f.userData && f.userData.rebar);
-      const P = isRebar ? rpos : pos, N2 = isRebar ? rnor : nor, C = isRebar ? rcol : col, K = isRebar ? rpick : pickArr;
+      const P = pos, N2 = nor, C = col, K = pickArr;
       for (let k = 0; k < entry.pos.length; k += 3) {
         P.push(entry.pos[k], entry.pos[k + 1], entry.pos[k + 2]);
         N2.push(entry.n.x, entry.n.y, entry.n.z);
@@ -594,59 +607,91 @@ class Viewport {
       fg.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
     this.faceMesh.geometry.dispose();
     this.faceMesh.geometry = fg;
-    if (rebarActive) {
-      const rg = new THREE.BufferGeometry();
-      rg.setAttribute('position', new THREE.Float32BufferAttribute(rpos, 3));
-      rg.setAttribute('normal', new THREE.Float32BufferAttribute(rnor, 3));
-      rg.setAttribute('color', new THREE.Float32BufferAttribute(rcol, 4));
-      if (rpick.length) rg.setAttribute('pickId', new THREE.Float32BufferAttribute(rpick, 1));
-      this.rebarMesh.layers.enable(1); // layer 1 = GPU pick pass (bars stay selectable)
-      this.rebarMesh.geometry.dispose();
-      this.rebarMesh.geometry = rg;
-    }
-    // ribbons (built in BOTH modes so switching is instant): one entry per
-    // bar pid, the centerline stamped by addRebarPath on the pipe's face 0
+    // rebarMesh pass RETIRED: solid bars render as GPU-instanced prisms from
+    // the centerline cache below (the pipe-face buffer was the detail-mode
+    // stall). The mesh object stays for pick-pass compatibility, always empty.
+    this.rebarMesh.visible = false;
+    // ---- REBAR DISPLAY: ribbons (light) AND instanced solid prisms (detail)
+    // from ONE source — records ∪ face-stamped centerlines, deduped by pid —
+    // rebuilt only when the rebar serial changes so mode switches and
+    // selection rebuilds never re-walk the bars
     {
-      // one quad per segment — 4 corners (a,-1) (a,+1) (b,+1) (b,-1) plus an
-      // explicit index: a bare 2-vertex push makes the non-indexed mesh weld
-      // triangles ACROSS segments (and across bars), so separate rebar looks
-      // connected to its neighbours
-      const rp = [], ro = [], rs = [], ridx = [];
-      const pushSeg = (a, b2) => {
-        const b0 = rp.length / 3;
-        rp.push(a[0], a[1], a[2], a[0], a[1], a[2], b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
-        ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2], a[0], a[1], a[2], a[0], a[1], a[2]);
-        rs.push(-1, 1, 1, -1);
-        ridx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
-      };
-      const seenPid = new Set();
-      // a bar with a record draws from the record (records survive pipe
-      // materialization re-keyed to the pipe's pid — stamps and records
-      // must never both draw the same bar)
-      const recPids = model._rebarRecords;
-      for (const f of model.faces.values()) {
-        const meta = f.userData && f.userData.rebar;
-        if (!meta || !meta.line || seenPid.has(meta.pid)) continue;
-        if (recPids && recPids.has(meta.pid)) continue;
-        seenPid.add(meta.pid);
-        const L2 = meta.line;
-        for (let k = 1; k < L2.length; k++) pushSeg(L2[k - 1], L2[k]);
-      }
-      // record-only bars (model.rebarPipes === false scenes)
-      if (model._rebarRecords) {
-        for (const rec of model._rebarRecords.values()) {
-          const L2 = rec.line;
-          for (let k = 1; k < L2.length; k++) pushSeg(L2[k - 1], L2[k]);
+      const serial = model._rebarSerial || 0;
+      if (serial !== this._rbSerialBuilt) {
+        this._rbSerialBuilt = serial;
+        const bars = [];
+        if (model._rebarRecords)
+          for (const rec of model._rebarRecords.values())
+            bars.push({ pid: rec.pid, line: rec.line, dia: rec.dia });
+        const recPids = model._rebarRecords;
+        for (const f of model.faces.values()) {
+          const meta = f.userData && f.userData.rebar;
+          if (!meta || !meta.line || (recPids && recPids.has(meta.pid))) continue;
+          bars.push({ pid: meta.pid, line: meta.line, dia: meta.diameter });
         }
+        // one quad per segment — 4 corners (a,-1) (a,+1) (b,+1) (b,-1) plus an
+        // explicit index: a bare 2-vertex push makes the non-indexed mesh weld
+        // triangles ACROSS segments (and across bars), so separate rebar looks
+        // connected to its neighbours
+        const rp = [], ro = [], rs = [], ridx = [];
+        const pushSeg = (a, b2) => {
+          const b0 = rp.length / 3;
+          rp.push(a[0], a[1], a[2], a[0], a[1], a[2], b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
+          ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2], a[0], a[1], a[2], a[0], a[1], a[2]);
+          rs.push(-1, 1, 1, -1);
+          ridx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
+        };
+        // instanced hex prisms — CSI-style solid bars: one instance per
+        // polyline segment, ~24 tris each, ONE draw call for any cage size.
+        // Each segment is lengthened by ~0.85 r per end so bent joints close.
+        const M = new THREE.Matrix4(), Q = new THREE.Quaternion();
+        const UP = new THREE.Vector3(0, 1, 0), D = new THREE.Vector3();
+        const PC = new THREE.Vector3(), SC = new THREE.Vector3();
+        const mats = [], pids = [];
+        for (const b of bars) {
+          for (let k = 1; k < b.line.length; k++) {
+            const a = b.line[k - 1], c = b.line[k];
+            pushSeg(a, c);
+            const dx = c[0] - a[0], dy = c[1] - a[1], dz = c[2] - a[2];
+            const len = Math.hypot(dx, dy, dz);
+            if (!(len > 1e-9)) continue;
+            const r = Math.max(0.003, ((a[3] != null ? a[3] : b.dia) + (c[3] != null ? c[3] : b.dia)) / 4);
+            D.set(dx / len, dy / len, dz / len);
+            Q.setFromUnitVectors(UP, D);
+            PC.set((a[0] + c[0]) / 2, (a[1] + c[1]) / 2, (a[2] + c[2]) / 2);
+            SC.set(r, (len + r * 1.7) / 2, r);
+            mats.push(M.compose(PC, Q, SC).clone());
+            pids.push(b.pid);
+          }
+        }
+        const rbg = new THREE.BufferGeometry();
+        rbg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
+        rbg.setAttribute('other', new THREE.Float32BufferAttribute(ro, 3));
+        rbg.setAttribute('side', new THREE.Float32BufferAttribute(rs, 1));
+        rbg.setIndex(ridx);
+        this.rebarRibbon.geometry.dispose();
+        this.rebarRibbon.geometry = rbg;
+        // swap in a right-sized InstancedMesh (capacity is fixed at build)
+        const old = this.rebarSolids;
+        const nm = new THREE.InstancedMesh(this._rebarPrismGeoCached || (this._rebarPrismGeoCached = this._rebarPrismGeo()),
+          this.rebarSolidsMat, Math.max(mats.length, 1));
+        nm.count = mats.length;
+        for (let i = 0; i < mats.length; i++) nm.setMatrixAt(i, mats[i]);
+        if (nm.instanceMatrix) nm.instanceMatrix.needsUpdate = true;
+        nm.renderOrder = 2; nm.frustumCulled = false;
+        nm.visible = this.rebarMode === 'detail';
+        const white = new THREE.Color(0xffffff);
+        for (let i = 0; i < mats.length; i++) nm.setColorAt(i, white); // highlight base
+        if (nm.instanceColor) nm.instanceColor.needsUpdate = true;
+        this.scene.remove(old);
+        if (old.dispose) old.dispose();
+        this.rebarSolids = nm;
+        this.scene.add(nm);
+        this._rbInstPid = pids;
+        this._rbSelPid && this.setRebarSelection(this._rbSelPid);
       }
-      const rbg = new THREE.BufferGeometry();
-      rbg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
-      rbg.setAttribute('other', new THREE.Float32BufferAttribute(ro, 3));
-      rbg.setAttribute('side', new THREE.Float32BufferAttribute(rs, 1));
-      rbg.setIndex(ridx);
-      this.rebarRibbon.geometry.dispose();
-      this.rebarRibbon.geometry = rbg;
       this.rebarRibbon.visible = this.rebarMode === 'light';
+      if (this.rebarSolids) this.rebarSolids.visible = this.rebarMode === 'detail';
     }
 
     // edges (element edges included — shared/welded edges belong to the
@@ -752,13 +797,13 @@ class Viewport {
     this.faceUniforms.uMono.value = style === 'monochrome' ? 1.0 : 0.0;
   }
   setRebarMode(mode) {
-    // 'detail' = pipe solids, 'light' = centerline ribbons (fast display
-    // for finished cages; ribbons are view-only - switch back to pick bars)
+    // 'detail' = instanced solid bars, 'light' = centerline ribbons — both
+    // ride the SAME cached buffers, so switching is instant (no rebuild)
     this.rebarMode = mode === 'light' ? 'light' : 'detail';
-    this.rebarMesh.visible = this.rebarMode === 'detail';
     this.rebarRibbon.visible = this.rebarMode === 'light';
-    this._rbSig = null; // re-run the face pass under the new mode
-    this.rebuild();
+    if (this.rebarSolids) this.rebarSolids.visible = this.rebarMode === 'detail';
+    this.rebarMesh.visible = false; // retired pass, kept for pick compat
+    this.invalidate();
     try { localStorage.setItem('websketch3d.rebarMode', this.rebarMode); } catch (e) { }
   }
   setXray(on) {
@@ -1883,11 +1928,63 @@ class Viewport {
     out.sort((x, y) => x.t - y.t);
     return out;
   }
+  // unit hexagonal prism along +Y (circumradius 1, half-length 1) — the
+  // instanced rebar shape. Hex keeps the MNL-66 pipe look at a fraction of
+  // the triangle count (24 tris/segment vs a 6-ring extrusion's 20+ faces).
+  _rebarPrismGeo() {
+    const S = 6;
+    const ring = [];
+    for (let i = 0; i < S; i++) {
+      const a = (i + 0.5) * Math.PI * 2 / S;
+      ring.push([Math.cos(a), Math.sin(a)]);
+    }
+    const pos = [], nor = [], idx = [];
+    const bot = [], top = [];
+    for (let i = 0; i < S; i++) {
+      bot.push(pos.length / 3); pos.push(ring[i][0], -1, ring[i][1]); nor.push(ring[i][0], 0, ring[i][1]);
+      top.push(pos.length / 3); pos.push(ring[i][0], 1, ring[i][1]); nor.push(ring[i][0], 0, ring[i][1]);
+    }
+    const cb = pos.length / 3; pos.push(0, -1, 0); nor.push(0, -1, 0);
+    const ct = pos.length / 3; pos.push(0, 1, 0); nor.push(0, 1, 0);
+    for (let i = 0; i < S; i++) {
+      const j = (i + 1) % S;
+      idx.push(bot[i], bot[j], top[j], bot[i], top[j], top[i]); // sides
+      idx.push(cb, bot[j], bot[i]);                              // bottom fan
+      idx.push(ct, top[i], top[j]);                              // top fan
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+    g.setIndex(idx);
+    return g;
+  }
+  // pick a solid rebar instance (detail mode): instanceId -> bar pid
+  pickRebarAt(s) {
+    if (!this.rebarSolids || !this.rebarSolids.visible || !this._rbInstPid || !this._rbInstPid.length) return null;
+    if (!(this.rebarSolids instanceof THREE.InstancedMesh)) return null;
+    this.applyCamera();
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const hits = this.raycaster.intersectObject(this.rebarSolids, false);
+    for (const h of hits) {
+      if (h.instanceId != null && this._rbInstPid[h.instanceId] != null) return this._rbInstPid[h.instanceId];
+    }
+    return null;
+  }
+  // highlight every segment of one bar (by pid) in the instanced pass
+  setRebarSelection(pid) {
+    this._rbSelPid = pid || null;
+    const im = this.rebarSolids;
+    if (!im || !im.instanceColor || !this._rbInstPid) return;
+    const base = new THREE.Color(0xffffff), hot = new THREE.Color(0xffd24a);
+    for (let i = 0; i < this._rbInstPid.length; i++)
+      im.setColorAt(i, pid != null && this._rbInstPid[i] === pid ? hot : base);
+    im.instanceColor.needsUpdate = true;
+    this.invalidate();
+  }
   // Downloaded-asset instances (BlenderKit): the groups under the
   // blenderkit-assets root are real meshes, so a plain raycast finds them.
   // Returns the nearest instance id (their userData.blenderkit.id) or null.
-  pickAssetAt(s) {
-    const root = this.assetsRoot;
+  pickAssetAt(s) {    const root = this.assetsRoot;
     if (!root || !root.visible || !root.children.length) return null;
     this.applyCamera();
     this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());

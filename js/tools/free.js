@@ -450,6 +450,16 @@ class SelectTool extends Tool {
       if (gl2.length) app.selectGrids(gl2, { add: !!this._mod, keep: !!caughtElems });
     } else {
       const pick = app.pickEntity(ev);
+      // X-ray + detailed rebar: the bar under the cursor wins over the
+      // ghosted geometry behind it (inspecting cages is what X-ray is for)
+      if (!this._mod && app.view && app.view.pickRebarAt && app.view.rebarMode === 'detail' && app.xrayOn) {
+        const rpid = app.view.pickRebarAt(app.view.eventPt(ev));
+        if (rpid != null) {
+          app.selectRebar(rpid);
+          this._bandStart = null; this._band = false;
+          return;
+        }
+      }
       if (pick.asset != null) {
         // downloaded-asset instance: its own selection category (box outline)
         app.selectAsset(pick.asset, this._mod ? 'toggle' : 'replace');
