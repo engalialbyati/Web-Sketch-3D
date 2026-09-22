@@ -1138,6 +1138,9 @@ class Model {
    *  (drawn wires are curve-owned and faceless by design), so without
    *  this they leak and keep their groups alive forever. */
   deleteFaces(ids) {
+    let rebarDied = false;
+    for (const id of ids) { const f0 = this.faces.get(id); if (f0 && f0.userData && f0.userData.rebar) rebarDied = true; }
+    if (rebarDied) this._rebarSerial = (this._rebarSerial || 0) + 1;
     const ringEdges = new Set();
     for (const id of ids) {
       const f = this.faces.get(id);
@@ -3138,6 +3141,10 @@ class Model {
       return ring;
     });
     const out = this.loftRings(rings, { closed: false, capStart: true, capEnd: true, color, loose: true });
+    // light-display support: the swept pipe carries its CENTERLINE on the
+    // first face (a few floats per bar) so the renderer can draw bill-
+    // boarded ribbons instead of re-tessellating 100k pipe faces
+    this._rebarSerial = (this._rebarSerial || 0) + 1; // rebuild gate
     let length = 0;
     for (let i = 1; i < P.length; i++) length += G.dist(P[i - 1], P[i]);
     for (const id of out) {
@@ -3153,6 +3160,11 @@ class Model {
           const e = this.findEdge(ring[i], ring[(i + 1) % ring.length]);
           if (e && !e.userData) e.userData = { rebar: true };
         }
+    }
+    if (out.length) {
+      const f0 = this.faces.get(out[0]);
+      if (f0 && f0.userData && f0.userData.rebar)
+        f0.userData.rebar.line = P.map(q => [q.x, q.y, q.z, diameter]);
     }
     return out;
   }

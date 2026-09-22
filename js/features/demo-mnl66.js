@@ -137,37 +137,39 @@
 
       // --------------------------------------- wall with door + window cut
       // along grid 1 on the slab top; HostedCut punches both holes so the
-      // WALL-206/208 trim steel has real openings to work around
-      reg('wall', { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2,
+      // WALL-206/208 trim steel has real openings to work around. The wall
+      // REGISTERS FIRST (demo5's pattern): the doors must carry the wall's
+      // id as hostWallId or the rebar never sees them
+      const wallEnt = reg('wall', { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2,
           baseLevel: 'l1', locationLine: 'centerline', primitive: 'line', closed: false,
           joins: { start: 0, end: 0 } },
         () => {
-          const wp = { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2 };
-          const ring = bim.wallRing(wp);
+          const ring = bim.wallRing({ base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2 });
           const f = m.addFaceFromRings(ring.map(q => G.clone(q)));
           if (!f) throw new Error('wall ring degenerate');
           if (!m.pushPull(f, 2.7)) throw new Error('wall sweep failed');
-          const wallEnt = bim.entities[bim.entities.length - 1];
-          const cut = (t, w, h, sill) => {
-            m.bimHold = wallEnt.id;
-            try {
-              const info = BT.HostedCut.cut(G, m, wp,
-                { distanceFromStart: t, width: w, height: h, sillHeight: sill, depth: 0.2 });
-              if (!info || info.error) throw new Error('opening cut failed');
-              wallEnt.params._openings = (wallEnt.params._openings || []).concat(
-                [{ hostWallId: wallEnt.id, distanceFromStart: info.t, width: w, height: h, sillHeight: sill }]);
-            } finally { m.bimHold = false; }
-          };
-          cut(1.6, 1.2, 2.2, 0);     // entrance door
-          cut(4.4, 1.5, 1.2, 0.9);   // window
-          // register the openings as hosted entities the rebar reads
-          for (const o of wallEnt.params._openings) {
-            const before = new Set(m.faces.keys());
-            bim.create('door', { ...o, depth: 0.2, facing: 1, hand: 1 }, {}, []);
-            void before;
-          }
-          delete wallEnt.params._openings;
         });
+      {
+        const wp = { base: [0, 0, 3.1501], end: [6, 0, 3.1501], height: 2.7, thickness: 0.2 };
+        const cut = (type, t, w, h, sill) => {
+          const before = new Set(m.faces.keys());
+          m.bimHold = wallEnt.id;
+          let info = null;
+          try { info = BT.HostedCut.cut(G, m, wp,
+            { distanceFromStart: t, width: w, height: h, sillHeight: sill, depth: 0.2 }); }
+          finally { m.bimHold = false; }
+          if (!info || info.error) throw new Error('opening cut failed');
+          // the cut faces belong to the door lining (demo5 convention);
+          // the wall keeps its (possibly split) faces from the reg above
+          const nf = [...m.faces.keys()].filter(id => !before.has(id));
+          const roles = {};
+          for (const id of nf) roles[id] = 'lining';
+          bim.create(type, { hostWallId: wallEnt.id, distanceFromStart: info.t,
+            width: w, height: h, sillHeight: sill, depth: 0.2, facing: 1, hand: 1 }, roles, []);
+        };
+        cut('door', 1.6, 1.2, 2.2, 0);     // entrance door
+        cut('window', 4.4, 1.5, 1.2, 0.9); // window
+      }
 
       // -------------------------------------------- slab-on-ground apron
       // freestanding SOG pad west of the pier: SOG-102/105 edge steel

@@ -259,6 +259,7 @@ class Viewport {
     this.rebarMesh.material.depthWrite = false;
     this.rebarMesh.renderOrder = 2;
     this.scene.add(this.rebarMesh);
+
     this.triangleFace = [];
 
     // BIM elements render as unified per-element Groups (BimElement.js) —
@@ -305,6 +306,20 @@ class Viewport {
       ].join('\n'),
       fragmentShader: 'uniform vec3 uColor; void main() { gl_FragColor = vec4(uColor, 1.0); }',
     });
+
+    // LIGHT REBAR: billboarded centerline ribbons (one quad per bar
+    // segment) instead of the pipe solids - a 3000-bar cage drops from
+    // ~250k triangles + 500k edges to ~20k quads with no model edges
+    this.rebarRibbonMat = this.heavyMat.clone();
+    this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0xa94442);
+    this.rebarRibbonMat.uniforms.uPx.value = 2.5;
+    this.rebarRibbonMat.depthWrite = false;
+    this.rebarRibbon = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarRibbonMat);
+    this.rebarRibbon.renderOrder = 3;
+    this.rebarRibbon.frustumCulled = false;
+    this.rebarRibbon.visible = false;
+    this.scene.add(this.rebarRibbon);
+    this.rebarMode = 'detail';
 
     // selected edges
     this.selEdges = new THREE.LineSegments(new THREE.BufferGeometry(),
@@ -498,8 +513,13 @@ class Viewport {
     const hiddenLayers = new Set(appLayers.filter(l => l.visible === false).map(l => l.id));
     const layerTints = new Map(appLayers.filter(l => l.color).map(l => [l.id, l.color]));
     const rpos = [], rnor = [], rcol = [], rpick = [];
+    // light mode skips the pipe pass OUTRIGHT (invisible pipes need no
+    // buffers, no pick ids); detail mode always rebuilds fully - stale
+    // pick-id drift is not worth the 200 ms
+    const rebarActive = this.rebarMode === 'detail';
     for (const f of model.faces.values()) {
       if (f.hidden || (ff && !ff(f)) || elementFaceIds.has(f.id)) continue;
+      if (!rebarActive && f.userData && f.userData.rebar) continue; // light mode
       if (hiddenLayers.has(f.layerId || '0')) continue;
       // content key: ring vertex ids + quantized coords + color/alpha
       const parts = [];
@@ -574,14 +594,41 @@ class Viewport {
       fg.computeBoundsTree({ maxLeafSize: 1, strategy: window.MeshBVHLib ? MeshBVHLib.SAH : 2 });
     this.faceMesh.geometry.dispose();
     this.faceMesh.geometry = fg;
-    const rg = new THREE.BufferGeometry();
-    rg.setAttribute('position', new THREE.Float32BufferAttribute(rpos, 3));
-    rg.setAttribute('normal', new THREE.Float32BufferAttribute(rnor, 3));
-    rg.setAttribute('color', new THREE.Float32BufferAttribute(rcol, 4));
-    if (rpick.length) rg.setAttribute('pickId', new THREE.Float32BufferAttribute(rpick, 1));
-    this.rebarMesh.layers.enable(1); // layer 1 = GPU pick pass (bars stay selectable)
-    this.rebarMesh.geometry.dispose();
-    this.rebarMesh.geometry = rg;
+    if (rebarActive) {
+      const rg = new THREE.BufferGeometry();
+      rg.setAttribute('position', new THREE.Float32BufferAttribute(rpos, 3));
+      rg.setAttribute('normal', new THREE.Float32BufferAttribute(rnor, 3));
+      rg.setAttribute('color', new THREE.Float32BufferAttribute(rcol, 4));
+      if (rpick.length) rg.setAttribute('pickId', new THREE.Float32BufferAttribute(rpick, 1));
+      this.rebarMesh.layers.enable(1); // layer 1 = GPU pick pass (bars stay selectable)
+      this.rebarMesh.geometry.dispose();
+      this.rebarMesh.geometry = rg;
+    }
+    // ribbons (built in BOTH modes so switching is instant): one entry per
+    // bar pid, the centerline stamped by addRebarPath on the pipe's face 0
+    {
+      const rp = [], ro = [], rs = [];
+      const seenPid = new Set();
+      for (const f of model.faces.values()) {
+        const meta = f.userData && f.userData.rebar;
+        if (!meta || !meta.line || seenPid.has(meta.pid)) continue;
+        seenPid.add(meta.pid);
+        const L2 = meta.line;
+        for (let k = 1; k < L2.length; k++) {
+          const a = L2[k - 1], b2 = L2[k];
+          rp.push(a[0], a[1], a[2], a[0], a[1], a[2]);
+          ro.push(b2[0], b2[1], b2[2], b2[0], b2[1], b2[2]);
+          rs.push(-1, 1, -1, 1);
+        }
+      }
+      const rbg = new THREE.BufferGeometry();
+      rbg.setAttribute('position', new THREE.Float32BufferAttribute(rp, 3));
+      rbg.setAttribute('other', new THREE.Float32BufferAttribute(ro, 3));
+      rbg.setAttribute('side', new THREE.Float32BufferAttribute(rs, 1));
+      this.rebarRibbon.geometry.dispose();
+      this.rebarRibbon.geometry = rbg;
+      this.rebarRibbon.visible = this.rebarMode === 'light';
+    }
 
     // edges (element edges included — shared/welded edges belong to the
     // whole scene graph; hidden edges are skipped like hidden faces).
@@ -593,6 +640,10 @@ class Viewport {
     const LTT = window.Model ? Model.LINETYPES : [];
     const LWW = window.Model ? Model.LINEWEIGHTS : [];
     for (const e of model.edges.values()) {
+      // rebar pipe edges are pure overhead: 100k-bar cages carry ~500k
+      // edges (a ~1M-vertex line buffer drawn EVERY frame). The pipes
+      // render as faces in the rebar pass - their wireframe adds noise
+      if (e.userData && e.userData.rebar) continue;
       if (e.hidden || (ef && !ef(e))) continue;
       if (elementEdgeIds.has(e.id)) continue; // renders inside its element Group
       const eu = e.userData && e.userData.bimEntityId;
@@ -680,6 +731,16 @@ class Viewport {
     this.faceMesh.visible = style !== 'wireframe';
     if (this.elementsRoot) this.elementsRoot.visible = style !== 'wireframe';
     this.faceUniforms.uMono.value = style === 'monochrome' ? 1.0 : 0.0;
+  }
+  setRebarMode(mode) {
+    // 'detail' = pipe solids, 'light' = centerline ribbons (fast display
+    // for finished cages; ribbons are view-only - switch back to pick bars)
+    this.rebarMode = mode === 'light' ? 'light' : 'detail';
+    this.rebarMesh.visible = this.rebarMode === 'detail';
+    this.rebarRibbon.visible = this.rebarMode === 'light';
+    this._rbSig = null; // re-run the face pass under the new mode
+    this.rebuild();
+    try { localStorage.setItem('websketch3d.rebarMode', this.rebarMode); } catch (e) { }
   }
   setXray(on) {
     this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0;

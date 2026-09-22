@@ -2741,6 +2741,11 @@ class App {
     this.updateInfo();
     this.refreshGroups();
     this._restoreAutosave();
+    try {
+      if (localStorage.getItem('websketch3d.rebarMode') === 'light') {
+        this.rebarLight = true; this.view.setRebarMode('light');
+      }
+    } catch (e) { }
     // Revit-method first: boot into Precise Drawing unless the user last
     // chose another mode (setMode persists every explicit switch). Runs at
     // the very end — setMode swaps the ribbon/options bar/levels UI and
@@ -4828,6 +4833,7 @@ class App {
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
+        ['Rebar: Light / Detailed', 'rebarlight', '', 'rebarLight'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
@@ -4970,6 +4976,8 @@ class App {
       this.view.zoomExtents();
       this._demoRecipe = 'mnl66'; // autosave the RECIPE, not 115k faces
       if (!this.xrayOn) this.action('toggleXray');
+      // the ~115k-face cage displays as light centerlines: instant and smooth
+      this.rebarLight = true; this.view.setRebarMode('light');
       this.toast('MNL-66 reinforcement demo loaded — '
         + Object.entries(counts || {}).filter(([k]) => k !== 'rebarFaces')
           .map(([k, n]) => n + ' ' + k + 's').join(', ')
@@ -5104,15 +5112,31 @@ class App {
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
       rebuildParams: () => A.rebuildFromParams(),
-      selectAll: () => {
-        // rebar hidden inside concrete is not a bulk-selection target —
+            selectAll: () => {
+        // rebar hidden inside concrete is not a bulk-selection target -
         // Ctrl+A + Delete must never sweep an invisible cage away with the
-        // elements. X-Ray makes it visible, so selecting it is fair game.
+        // elements. X-Ray makes it fair game, but a giant cage (100k faces,
+        // 500k pipe edges) freezes the selection overlay outright - cap the
+        // bulk take and let big cages be picked bar by bar
         const vis = A.xrayOn;
-        const isRebar = x => !vis && x && x.userData && x.userData.rebar;
+        const CAP = 20000;
+        let allowance = vis ? CAP : 0, skipped = 0;
+        const faces = [];
+        for (const [id, f] of A.model.faces) {
+          if (f && f.userData && f.userData.rebar) {
+            if (allowance > 0) { faces.push(id); allowance--; } else skipped++;
+            continue;
+          }
+          faces.push(id);
+        }
+        if (skipped) A.toast(skipped + ' rebar faces skipped - cage too large for bulk selection (pick bars individually)');
+        // rebar pipe edges are never drawn nor picked as edges: always out
         A.sel = {
-          edges: new Set([...A.model.edges.keys()].filter(id => !isRebar(A.model.edges.get(id)))),
-          faces: new Set([...A.model.faces.keys()].filter(id => !isRebar(A.model.faces.get(id)))),
+          edges: new Set([...A.model.edges.keys()].filter(id => {
+            const e = A.model.edges.get(id);
+            return !(e && e.userData && e.userData.rebar);
+          })),
+          faces: new Set(faces),
         };
         A.onSelectionChanged();
       },
@@ -5153,6 +5177,12 @@ class App {
       },
       toggleFog: () => { A.fogOn = !A.fogOn; A.view.setFog(A.fogOn); },
       toggleXray: () => { A.xrayOn = !A.xrayOn; A.view.setXray(A.xrayOn); },
+      rebarlight: () => {
+        A.rebarLight = !A.rebarLight;
+        A.view.setRebarMode(A.rebarLight ? 'light' : 'detail');
+        A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline ribbons; switch back to pick bars'
+          : 'Rebar: DETAILED display (pipe solids)');
+      },
       styleShaded: () => A.setFaceStyle('shaded'),
       styleMono: () => A.setFaceStyle('monochrome'),
       styleWire: () => A.setFaceStyle('wireframe'),
