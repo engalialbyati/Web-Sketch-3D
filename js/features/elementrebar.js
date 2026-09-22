@@ -785,6 +785,63 @@
       alongY(td, zTop - (q.top + td / 2), q.ySpacing);
       alongX(td, zTop - (q.top + td + td / 2), q.xSpacing);
     }
+    // ---- MNL-66(20) SOG-102/103/105: SLAB-ON-GROUND PERIMETER STEEL ----
+    // The mesh stays CONTINUOUS through the thickened edge; each exterior
+    // edge carries 2 continuous bottom bars lapped past the corners
+    // (SOG-105: continuous all around, extend beyond the corner)
+    if (q.sog) {
+      const sDia = q.sogDia || q.xDia;
+      const zBar = zTop - (q.bottom + q.yDia + q.xDia + sDia / 2); // on the mesh
+      const inPoly = (poly, px, py) => { // ray cast, boundary counts inside
+        let inside = false;
+        for (let a = 0, b2 = poly.length - 1; a < poly.length; b2 = a++) {
+          const xa = poly[a].x, ya = poly[a].y, xb = poly[b2].x, yb = poly[b2].y;
+          if ((ya > py) !== (yb > py) && px < (xb - xa) * (py - ya) / (yb - ya) + xa)
+            inside = !inside;
+        }
+        return inside;
+      };
+      for (const rg of regions) {
+        const outer = rg.outer;
+        const cxr = outer.reduce((s, v2) => s + v2.x, 0) / outer.length;
+        const cyr = outer.reduce((s, v2) => s + v2.y, 0) / outer.length;
+        for (let e = 0; e < outer.length; e++) {
+          const A2 = outer[e], B2 = outer[(e + 1) % outer.length];
+          const ex = B2.x - A2.x, ey = B2.y - A2.y, L2 = Math.hypot(ex, ey);
+          if (L2 < 0.3) continue;
+          const ux = ex / L2, uy = ey / L2, nx = -uy, ny = ux;
+          const inw = ((cxr - A2.x) * nx + (cyr - A2.y) * ny) >= 0 ? 1 : -1;
+          const ext = Math.min(0.6, L2 / 4); // lap past each corner
+          for (let k = 0; k < 2; k++) {
+            const off = q.side + sDia / 2 + 0.01 + k * (sDia + 0.025);
+            const px2 = A2.x - ux * ext + nx * off * inw;
+            const py2 = A2.y - uy * ext + ny * off * inw;
+            const qx2 = B2.x + ux * ext + nx * off * inw;
+            const qy2 = B2.y + uy * ext + ny * off * inw;
+            // keep the longest inside-polygon run of the extended bar
+            const N2 = 48;
+            let bestA = -1, bestLen = 0, curA = -1;
+            for (let s2 = 0; s2 <= N2; s2++) {
+              const t2 = s2 / N2;
+              const xx = px2 + (qx2 - px2) * t2, yy = py2 + (qy2 - py2) * t2;
+              const ins = inPoly(outer, xx, yy);
+              if (ins && curA < 0) curA = t2;
+              if ((!ins || s2 === N2) && curA >= 0) {
+                // an outside closer means the run really ended one sample back
+                const endT = ins ? t2 : t2 - 1 / N2;
+                if (endT - curA > bestLen) { bestLen = endT - curA; bestA = curA; }
+                curA = -1;
+              }
+            }
+            if (bestLen * (L2 + 2 * ext) < 0.3) continue;
+            const g = t3 => G.v(px2 + (qx2 - px2) * t3, py2 + (qy2 - py2) * t3, zBar);
+            add([g(bestA), g(bestA + bestLen)], sDia,
+              { shape: 'straight', dir: 'edge', role: 'sog-edge', count: 2 });
+            bars++;
+          }
+        }
+      }
+    }
     // ---- SLAB-200/201: CORNER REINFORCEMENT (ACI 8.6.1.2) ----
     // Top & bottom bars extending L long/5 from each exterior corner,
     // in both X and Y directions (MNL-66 Option 2 - easier placement)
@@ -1273,7 +1330,10 @@
           ${D('es-xd', 'X Bar Diameter', 0.012)}
           ${F('es-xs', 'X Spacing', 0.15)}
           ${D('es-yd', 'Y Bar Diameter', 0.012)}
-          ${F('es-ys', 'Y Spacing', 0.15)}
+          
+          <div class="form-row"><label>SOG Edge (102)</label>
+            <label class="chk"><input type="checkbox" id="es-sog"> slab-on-ground: 2 continuous edge bars, mesh unbroken through the thickening</label></div>
+          ${D('es-sd', 'SOG Edge Dia', 0.012)}${F('es-ys', 'Y Spacing', 0.15)}
           <div class="form-row"><label>Corner Steel (SLAB-200)</label>
             <label class="chk"><input type="checkbox" id="es-corner" checked> auto at corners, Ln/5</label></div>
           <div class="form-row"><label>Opening Trim Bars (SLAB-202)</label>
@@ -1387,7 +1447,9 @@
     return { type: 'slab', slab: {
         bottom: v('es-b'), top: v('es-t'), side: v('es-side'),
         xDia: v('es-xd'), xSpacing: v('es-xs'), yDia: v('es-yd'), ySpacing: v('es-ys'),
-        topMesh: !!(document.getElementById('es-top') || {}).checked, topDia: v('es-td'),
+        sog: (document.getElementById('es-sog') || {}).checked === true,
+        sogDia: v('es-sd'),
+topMesh: !!(document.getElementById('es-top') || {}).checked, topDia: v('es-td'),
         cornerSteel: !!((document.getElementById('es-corner') || {}).checked !== undefined
           ? (document.getElementById('es-corner') || {}).checked : true),
         trimSteel: !!((document.getElementById('es-trim') || {}).checked !== undefined
