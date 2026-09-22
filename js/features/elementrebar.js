@@ -498,8 +498,18 @@
   }
 
   // ------------------------------------------------------------- COLUMN
-  function buildColumnRebar(m, ent, p, sink) {
+  function buildColumnRebar(m, ent, p, sink, entities) {
     const tops = topFaces(m, ent);
+    // COL-200 at the FOUNDATION level: the footing's starter dowels
+    // ARE the lower splice piece - lapping the column bars on top of
+    // them would stack three bars in every corner line. A foundation
+    // directly below turns the base lap off; the bars run whole and
+    // lap the starters (the book's base-of-column detail).
+    const cb = (ent.params || {}).base || [];
+    const hasStarters = (entities || []).some(e => e && e.type === 'foundation'
+      && !e.params._noStarters
+      && e.params && e.params.base && Math.abs(e.params.base[2] - (cb[2] || 0)) < 0.02
+      && dist2D(e.params.base, cb) < Math.max(+e.params.width || 0, +e.params.depth || 0) / 2 + 0.3);
     if (!tops.length) return { error: 'cannot find the column top face' };
     const fid = tops[0].f.id;
     // circular families (top loop beyond a rectangle) want the helix cage —
@@ -514,7 +524,14 @@
         helixBOffset: c.main ? c.main.bOffset || 0.05 : 0.05,
         mode: 'number', value: 6,
       } };
-    const res = window.ColumnRebar.buildColumnCage(m, fid, p.column, sink);
+    let colParams = p.column;
+    if (hasStarters && colParams && colParams.main && colParams.main.splice
+      && colParams.main.splice.mode === 'lap') {
+      // local only - the caller reuses p across previews (never mutate)
+      colParams = { ...colParams, main: { ...colParams.main,
+        splice: { ...colParams.main.splice, mode: 'none' } } };
+    }
+    const res = window.ColumnRebar.buildColumnCage(m, fid, colParams, sink);
     return { ties: res.ties, bars: res.bars, ids: res.ids, error: res.error };
   }
 
@@ -627,7 +644,14 @@
 
     // the horizontal starter leg sits just above the mesh (world z)
     const zLeg = zTop - fr.depth + q.bottom + layers[0].dia + layers[1].dia + q.stubDia / 2;
-    const stubTop = topZ + q.lap;
+    // the starter lap must reach the Class B tension lap (COL-200) -
+    // 0.5 m fell short of the 0.69 m a 14 mm dowel needs
+    const stubTop = topZ + Math.max(+q.lap || 0,
+      1.3 * 47.5 * (q.stubDia <= 0.0195 ? 0.8 : 1) * q.stubDia);
+    // an explicit stubX:0 suppresses starters (the pier column splices
+    // onto the shaft steel instead)
+    const noStarters = !+q.stubX || !+q.stubY;
+    if (!noStarters) {
     const nx = Math.max(2, Math.round(q.stubX)), ny = Math.max(2, Math.round(q.stubY));
     const grid = [];
     for (const x of spread(nx, cx - colW / 2, cx + colW / 2))
@@ -649,6 +673,7 @@
       add(pts.map(t => map(t.b, t.a)), q.stubDia, { shape: 'lshape', count: seen.size });
       ties++; // starters counted with the verticals
     }
+    } // noStarters guard
     // ---- FND-150 DRILLED PIER: a circular pad gets the shaft cage — a
     // ring of verticals plus circular ties carried through the cap depth
     let pierTies = 0;
@@ -1145,7 +1170,7 @@
       return made;
     };
     const res = type === 'beam' ? buildBeamRebar(m, ent, p, add, entities)
-      : type === 'column' ? buildColumnRebar(m, ent, p, sink)
+      : type === 'column' ? buildColumnRebar(m, ent, p, sink, entities)
         : type === 'foundation' ? buildFootingRebar(m, ent, p, add, entities)
           : type === 'wall' ? buildWallRebar(m, ent, p, add, entities)
             : buildSlabRebar(m, ent, p, add);

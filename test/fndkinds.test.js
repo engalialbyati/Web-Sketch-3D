@@ -124,6 +124,29 @@ module.exports = h => {
     ok(lens[0] > lens[lens.length - 1] + 0.1, `chords vary ${lens[0]} .. ${lens[lens.length - 1]}`);
   });
 
+  test('COL-200: a column over a foundation drops its base lap (starters own it)', () => {
+    // column 0.3x0.3x3 on the pad, rebar asked for a lap splice
+    const w = fnd();
+    const cb = new Set(w.m.faces.keys());
+    const cf = w.m.addFaceFromRings([G.v(0.75, 0.75, 0.6), G.v(1.05, 0.75, 0.6), G.v(1.05, 1.05, 0.6), G.v(0.75, 1.05, 0.6)]);
+    w.m.pushPull(cf, 3);
+    const cfaces = [...w.m.faces.keys()].filter(id => !cb.has(id));
+    for (const id of cfaces) { const f2 = w.m.faces.get(id); if (!f2.userData) f2.userData = {};
+      f2.userData.bimEntityId = 'c1'; f2.userData.bimType = 'column'; }
+    const cent = { id: 'c1', type: 'column', faces: cfaces,
+      params: { base: [0.9, 0.9, 0.6], width: 0.3, depth: 0.3, height: 3 } };
+    const q = { type: 'column', column: {
+      tie: { l: 0.04, r: 0.04, t: 0.04, b: 0.04, front: 0.05, dia: 0.008, mode: 'amount', value: 4 },
+      main: { dia: 0.016, tOffset: 0.05, bOffset: 0.05, type: 'straight', splice: { mode: 'lap' } } } };
+    const withF = ER.previewElementRebar(w.m, cfaces[0], q, [w.ent, cent]);
+    ok(!withF.error, withF.error || 'no error');
+    const whole = withF.paths.filter(x => x.dia === 0.016 && x.pts.length === 2);
+    eq(whole.length, 4, 'starters below: 4 WHOLE bars (the base lap is theirs)');
+    const noF = ER.previewElementRebar(w.m, cfaces[0], q, [cent]);
+    const pieces = noF.paths.filter(x => x.dia === 0.016 && x.pts.length === 2);
+    eq(pieces.length, 8, 'no foundation: the bars split into lapped pairs');
+  });
+
   test('pad default: unchanged behaviour (regression)', () => {
     const w = fnd();
     const pv = ER.previewElementRebar(w.m, topFaceOf(w), baseF(), [w.ent]);

@@ -391,7 +391,8 @@ module.exports = h => {
     eq(pv.ties, 8, 'starters counted');
     for (const s of stubs) {
       const zs = s.pts.map(q => q.z);
-      near(Math.max(...zs), 0.5, 1e-6, 'riser reaches pad top + lap');
+      near(Math.max(...zs), 1.3 * 47.5 * 0.8 * 0.014, 1e-6,
+        'riser reaches pad top + the Class B starter lap (0.69 m for 14 mm)');
       near(Math.min(...zs), -0.429, 1e-6, 'leg sits just above the bottom mesh');
       ok(s.pts[0].z < s.pts[s.pts.length - 1].z, 'leg first, riser up');
     }

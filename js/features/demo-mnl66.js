@@ -69,7 +69,8 @@
       }
       // freestanding drilled pier: a 16-gon cap — the rebar tool reads the
       // circular loop and swaps in the FND-150 shaft cage by itself
-      reg('foundation', { base: [PIER.x, PIER.y, 0], radius: PIER.R, thickness: 0.7, baseLevel: 'l0' },
+      reg('foundation', { base: [PIER.x, PIER.y, 0], radius: PIER.R, thickness: 0.7, baseLevel: 'l0',
+        _noStarters: true }, // its column splices onto the shaft steel instead
         () => {
           const ring = [];
           for (let k = 0; k < 16; k++) {
@@ -223,7 +224,9 @@
         if (ent.type === 'foundation') {
           const circular = ent.params.radius != null;
           const kind = circular ? undefined : (ent.params.kind || 'pad');
-          track(rebarOne(ent, kind === 'mat' ? fmat : kind === 'pilecap' ? fpile : fpad));
+          const fp = circular ? { ...fpad.foundation, stubX: 0, stubY: 0 } // pier column splices onto the shaft steel
+            : kind === 'mat' ? fmat : kind === 'pilecap' ? fpile : fpad;
+          track(rebarOne(ent, circular ? { type: 'foundation', foundation: fp } : kind === 'mat' ? fmat : kind === 'pilecap' ? fpile : fpad));
         } else if (ent.type === 'column') track(rebarOne(ent, ccol));
         else if (ent.type === 'beam') track(rebarOne(ent, bbeam));
         else if (ent.type === 'wall') track(rebarOne(ent, wwall));
