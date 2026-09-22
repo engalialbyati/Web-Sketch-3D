@@ -620,9 +620,14 @@ class Viewport {
         ridx.push(b0, b0 + 1, b0 + 2, b0, b0 + 2, b0 + 3);
       };
       const seenPid = new Set();
+      // a bar with a record draws from the record (records survive pipe
+      // materialization re-keyed to the pipe's pid — stamps and records
+      // must never both draw the same bar)
+      const recPids = model._rebarRecords;
       for (const f of model.faces.values()) {
         const meta = f.userData && f.userData.rebar;
         if (!meta || !meta.line || seenPid.has(meta.pid)) continue;
+        if (recPids && recPids.has(meta.pid)) continue;
         seenPid.add(meta.pid);
         const L2 = meta.line;
         for (let k = 1; k < L2.length; k++) pushSeg(L2[k - 1], L2[k]);

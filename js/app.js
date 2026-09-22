@@ -2094,9 +2094,25 @@ class BimEntityManager {
   _recutHosted(h, wallEnt, dist) {
     const m = this.model;
     const spec = { distanceFromStart: dist, width: h.params.width, height: h.params.height, sillHeight: h.params.sillHeight };
-    const info = window.BimTools.HostedCut.cut(G, m, wallEnt.params, spec);
-    if (info.error) return false;
+    // v0.6: the hold must NAME this wall as owner — under the caller's
+    // unnamed hold the wall's freshly-stamped faces are uncuttable islands
+    // and every re-cut dies with "opening does not sit inside a host face"
+    // (mirrors _rebuildWallCore's recut; this is what Rebuild-from-Parameters
+    // and wall splits go through)
+    const held = m.bimHold;
+    m.bimHold = wallEnt.id;
+    // snapshot BEFORE the cut (like _rebuildWallCore's recut): the reveal
+    // band is born FROM the cut, so a post-cut snapshot filters it back out
+    // and openings (no frame faces) end up owning nothing — faceless and
+    // reaped by the empty-faces sweep
     const hb = new Set(m.faces.keys());
+    let info;
+    try {
+      info = window.BimTools.HostedCut.cut(G, m, wallEnt.params, spec);
+    } finally {
+      m.bimHold = held;
+    }
+    if (info.error) return false;
     const faces = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, m, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
     h.faces = [...m.faces.keys()].filter(x => !hb.has(x));
     for (const fid of h.faces) {
@@ -4829,7 +4845,7 @@ class App {
       ]],
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
-        ['Bar Bending Schedule', 'bbsDlg'],
+        ['Bar Bending Schedule', 'bbsDlg'],
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
@@ -5110,7 +5126,7 @@ class App {
       analyticalCsv: () => A.exportAnalyticalCsv(),
       trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
       propDlg: () => A.propertyDialog(),
-      bbsDlg: () => A.bbsDialog(),
+      bbsDlg: () => A.bbsDialog(),
       schedDlg: (t) => A.scheduleDialog(t),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
@@ -5183,9 +5199,18 @@ class App {
       toggleXray: () => { A.xrayOn = !A.xrayOn; A.view.setXray(A.xrayOn); },
       rebarlight: () => {
         A.rebarLight = !A.rebarLight;
-        A.view.setRebarMode(A.rebarLight ? 'light' : 'detail');
-        A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline ribbons; switch back to pick bars'
-          : 'Rebar: DETAILED display (pipe solids)');
+        const apply = () => {
+          A.view.setRebarMode(A.rebarLight ? 'light' : 'detail');
+          A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline ribbons; switch back to pick bars'
+            : 'Rebar: DETAILED display (solid pipe bars)');
+        };
+        // record-only scenes (the MNL-66 demos) have NO pipe solids to show -
+        // materialize them from the centerline records before switching, in
+        // time-sliced chunks so the UI stays alive
+        const m = A.model;
+        if (!A.rebarLight && m.rebarPipes === false && m._rebarRecords && m._rebarRecords.size)
+          A.materializeRebarPipes(() => { A.view.rebuild(); apply(); });
+        else apply();
       },
       styleShaded: () => A.setFaceStyle('shaded'),
       styleMono: () => A.setFaceStyle('monochrome'),
@@ -8109,6 +8134,48 @@ class App {
       return true;
     });
     if (ok2) this.selectElement(id);
+  }
+  // RECORD -> SOLID: materialize pipe solids from the centerline records of
+  // a record-only scene (the MNL-66 demos build rebar as records for speed).
+  // Time-sliced chunks keep the UI responsive; the records STAY (schedules
+  // and light-mode ribbons keep reading them) — hex rings, one solid pipe
+  // per record, stamped so the rebar pass renders and picks them.
+  materializeRebarPipes(done) {
+    const m = this.model;
+    if (m._rebarPiping) { this.toast('Rebar conversion already running — one moment', true); return; }
+    const recs = [...(m._rebarRecords || new Map()).values()];
+    if (!recs.length) { if (done) done(); return; }
+    m._rebarPiping = true;
+    m.rebarPipes = true; // new bars from here on are solids again
+    let i = 0;
+    const step = () => {
+      const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+      const t0 = now();
+      try {
+        while (i < recs.length) {
+          const rec = recs[i++];
+          m.addRebarPath(rec.line.map(q => G.v(q[0], q[1], q[2])), rec.dia,
+            { ringSegs: 6, meta: rec.meta, pipe: true });
+          // re-key the record to the pipe's pid so ribbons/schedules and the
+          // pipe stay one bar (never double-drawn, never orphaned)
+          if (m._rebarPid != null && m._rebarPid !== rec.pid) {
+            m._rebarRecords.delete(rec.pid);
+            m._rebarRecords.set(m._rebarPid, { ...rec, pid: m._rebarPid });
+          }
+          if (now() - t0 > 40) break;
+        }
+      } catch (e) { /* one bad record never kills the conversion */ }
+      if (i < recs.length) {
+        this.setStatus(`Converting rebar to solid bars — ${i}/${recs.length}…`);
+        setTimeout(step, 0);
+        return;
+      }
+      m._rebarPiping = false;
+      this.setStatus('');
+      if (done) done();
+    };
+    this.toast(`Converting ${recs.length} bars to solid pipes — progress in the status bar`);
+    setTimeout(step, 0);
   }
   // BAR BENDING SCHEDULE: every loose rebar in the model, aggregated by
   // host + shape + diameter + bar length (the FreeCAD-Reinforcement BBS).

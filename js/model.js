@@ -94,10 +94,18 @@ class Model {
       if (this._bimHoldDepth++ === 0) {
         this._bimHoldEdges = new Set(this.edges.keys());
         this._bimOwner = (typeof v === 'string' && v) || null;
+      } else {
+        // NESTED hold: a NAMED one re-scopes the owner to that element for
+        // its duration (a hosted re-cut must open the host's freshly-stamped
+        // faces mid-build — 'the hold names THIS wall as owner'); an unnamed
+        // one keeps the current scope. Push/pop keeps the pairing exact.
+        (this._bimOwnerStack || (this._bimOwnerStack = [])).push(this._bimOwner);
+        if (typeof v === 'string' && v) this._bimOwner = v;
       }
     } else {
       if (this._bimHoldDepth > 0 && --this._bimHoldDepth === 0) {
         this._bimOwner = null;
+        this._bimOwnerStack = [];
         const born = this._bimHoldEdges;
         this._bimHoldEdges = null;
         if (born) {
@@ -123,6 +131,8 @@ class Model {
           }
           this.gc();
         }
+      } else if (this._bimOwnerStack && this._bimOwnerStack.length) {
+        this._bimOwner = this._bimOwnerStack.pop(); // restore the enclosing scope
       } else if (this._bimHoldDepth < 0) this._bimHoldDepth = 0;
     }
   }
