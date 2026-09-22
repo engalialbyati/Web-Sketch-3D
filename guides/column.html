@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Column Reinforcement - Interactive Detailing Guide</title>
+<style>
+  :root { --ink:#232220; --muted:#86827a; --acc:#1c5d99; --ok:#1a7f4e; --bad:#b32623; --bg:#f4f3f1; --card:#fff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.55 Georgia,'Times New Roman',serif; color:var(--ink); background:var(--bg); }
+  header { background:var(--card); border-bottom:3px solid var(--acc); padding:18px 26px 12px; }
+  header h1 { margin:0; font-size:26px; }
+  header p { margin:4px 0 0; color:var(--muted); font-size:13.5px; }
+  main { display:grid; grid-template-columns:330px 1fr; gap:18px; padding:18px 26px 60px; max-width:1500px; margin:0 auto; }
+  aside { position:sticky; top:12px; align-self:start; }
+  .card { background:var(--card); border-radius:10px; padding:14px 16px; margin-bottom:14px; box-shadow:0 1px4px rgba(0,0,0,.06); box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .card h3 { margin:0 0 8px; font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--acc); }
+  label { display:flex; justify-content:space-between; align-items:center; gap:8px; margin:7px 0; font-size:13.5px; }
+  label span.val { font-family:Consolas,monospace; color:var(--acc); font-weight:bold; }
+  input[type=number], select { width:96px; padding:4px 6px; border:1px solid #ccc9; border-radius:6px; font:13px Consolas,monospace; text-align:right; }
+  h2 { font-size:19px; margin:26px 0 6px; border-left:5px solid var(--acc); padding-left:10px; }
+  h2 small { color:var(--muted); font-weight:normal; font-size:13px; }
+  .clause { display:inline-block; background:#e8f0fa; color:var(--acc); border:1px solid #cfe0f2; font:12px Consolas,monospace; padding:1px 7px; border-radius:10px; margin-left:6px; vertical-align:2px; }
+  .step { background:var(--card); border-radius:10px; padding:12px 16px; margin:10px 0; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .step b.n { display:inline-block; background:var(--acc); color:#fff; width:22px; height:22px; border-radius:50%; text-align:center; line-height:22px; font-size:13px; margin-right:8px; }
+  .checks table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  .checks td, .checks th { padding:6px 8px; border-bottom:1px solid #eee; text-align:left; }
+  .checks td.num { font-family:Consolas,monospace; white-space:nowrap; }
+  .pass { color:var(--ok); font-weight:bold; } .fail { color:var(--bad); font-weight:bold; }
+  .fig { background:var(--card); border-radius:10px; padding:10px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin:10px 0; }
+  .fig .cap { font-size:12.5px; color:var(--muted); text-align:center; margin-top:4px; }
+  svg text { font-family:Georgia,serif; } svg .dim { font:11.5px Consolas,monospace; fill:#555; }
+  canvas { background:#fbfaf9; border-radius:8px; cursor:grab; display:block; width:100%; }
+  .eq { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:8px 0; }
+  .eq .note { font-size:13px; color:var(--muted); }
+  footer { color:var(--muted); font-size:12.5px; padding:10px 26px 30px; }
+  @media (max-width:980px){ main { grid-template-columns:1fr; } aside { position:static; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Column Reinforcement &mdash; Interactive Detailing Guide</h1>
+  <p>Longitudinal bars, ties, the story splice above every floor, and the starter lap at the foundation. Every rule cites ACI 318-19 and MNL-66(20). Units: mm.</p>
+</header>
+
+<main>
+<aside>
+  <div class="card"><h3>Section</h3>
+    <label>Width b <input id="b" type="number" value="300" step="25"> <span class="val">mm</span></label>
+    <label>Depth h <input id="h" type="number" value="300" step="25"> <span class="val">mm</span></label>
+    <label>Story height H <input id="H" type="number" value="3000" step="100"> <span class="val">mm</span></label>
+    <label>Concrete f'<sub>c</sub> <select id="fc"><option value="28" selected>28 MPa (4 ksi)</option><option value="35">35 MPa (5 ksi)</option></select></label>
+  </div>
+  <div class="card"><h3>Bars</h3>
+    <label>Longitudinal n &times; &empty; <input id="n" type="number" value="4" min="4" step="1"><input id="db" type="number" value="16" step="2"> <span class="val">mm</span></label>
+    <label>Tie &empty; <input id="td" type="number" value="8" step="2"> <span class="val">mm</span></label>
+    <label>Tie spacing s <input id="ts" type="number" value="200" step="25"> <span class="val">mm</span></label>
+    <label>Cover c <input id="cv" type="number" value="40" step="5"> <span class="val">mm</span></label>
+  </div>
+</aside>
+
+<section>
+<h2>1. Design values</h2>
+<div class="card eqs">
+  <div class="eq"><svg id="eqRho" width="470" height="64"></svg><span class="note">Reinforcement ratio must stay 1&ndash;8% <span class="clause">ACI 10.6.1</span></span></div>
+  <div class="eq"><svg id="eqLap" width="470" height="76"></svg><span class="note">Class B tension lap = 1.3 &times; &#8467;<sub>d</sub> <span class="clause">ACI 25.5.5.1</span>; &#8467;<sub>d</sub> per 25.4.2.3</span></div>
+  <div class="eq"><svg id="eqTie" width="470" height="64"></svg><span class="note">Maximum tie spacing <span class="clause">ACI 10.7.6.1.2</span></span></div>
+</div>
+
+<h2>2. Cross-section <small>bars + ties</small></h2>
+<div class="fig"><svg id="sec" width="100%" height="380" viewBox="0 0 560 380"></svg>
+<div class="cap">Live section &mdash; corner bars engaged by tie bends, 135&deg; laps alternating.</div></div>
+
+<h2>3. Elevation <small>the story splice + the base lap</small></h2>
+<div class="fig"><svg id="elev" width="100%" height="360" viewBox="0 0 980 360"></svg>
+<div class="cap">Live elevation &mdash; ties up the story, Class&nbsp;B splice above the slab (staggered), starter lap at the footing.</div></div>
+
+<h2>4. 3D cage <small>drag to rotate</small></h2>
+<div class="fig"><canvas id="c3d" width="900" height="400"></canvas><div class="cap" id="src3d">cage source</div></div>
+
+<h2>5. Step-by-step placement</h2>
+<div id="steps"></div>
+
+<h2 class="checks">6. Code checks</h2>
+<div class="card"><table id="chk"></table></div>
+</section>
+</main>
+<footer>WebSketch 3D education guide &mdash; companion to the app (the same generator: js/features/columnrebar.js &rarr; buildColumnCage, verticalBar). Clauses per ACI 318-19; figures per MNL-66(20) COL-20/COL-104/COL-200.</footer>
+
+<script src="../js/geometry.js"></script>
+<script src="../js/tools/base.js"></script>
+<script src="../js/model.js"></script>
+<script src="../js/features/rebar.js"></script>
+<script src="../js/features/columnrebar.js"></script>
+<script src="../js/features/elementrebar.js"></script>
+<script>
+'use strict';
+var CHAR = { lap: String.fromCharCode(8467) };
+const $ = id => document.getElementById(id);
+const NS = 'http://www.w3.org/2000/svg';
+function el(svg, tag, attrs, txt) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (txt != null) e.textContent = txt;
+  svg.appendChild(e); return e;
+}
+function mmline(svg,x1,y1,x2,y2,color,wd){ return el(svg,'line',{x1,y1,x2,y2,stroke:color,'stroke-width':wd||3,'stroke-linecap':'round'}); }
+function line(svg,x1,y1,x2,y2,w,color,dash){ return el(svg,'line',{x1,y1,x2,y2,stroke:color||'#444','stroke-width':w||1.5,...(dash?{'stroke-dasharray':dash}:{})}); }
+function eqFrac(svg, num, den, x, y) {
+  el(svg,'text',{x, y, 'font-size':15,'font-style':'italic'},num);
+  const w = Math.max(num.length, den.length)*8.2;
+  el(svg,'line',{x1:x-2, y1:y+5, x2:x+w, y2:y+5, stroke:'#232220','stroke-width':1.2});
+  el(svg,'text',{x, y:y+22, 'font-size':15,'font-style':'italic'},den);
+  return w;
+}
+function V() {
+  const v = { b:+$('b').value, h:+$('h').value, H:+$('H').value, fc:+$('fc').value,
+    n:+$('n').value, db:+$('db').value, td:+$('td').value, ts:+$('ts').value, cv:+$('cv').value };
+  v.Ag = v.b*v.h; v.Ast = v.n*Math.PI*v.db*v.db/4; v.rho = v.Ast/v.Ag*100;
+  v.psi = v.db <= 19 ? 0.8 : 1.0;
+  v.ld = Math.ceil(420/(20*Math.sqrt(v.fc))*v.psi*v.db);       // 25.4.2.3
+  v.lap = Math.max(300, Math.ceil(1.3*v.ld));                   // 25.5.5.1 Class B
+  v.tmax = Math.min(16*v.db, 48*v.td, Math.min(v.b, v.h));      // 10.7.6.1.2
+  return v;
+}
+function drawEqs(v) {
+  let s = $('eqRho'); s.innerHTML='';
+  el(s,'text',{x:0,y:26,'font-size':16},'\u03c1 = A');
+  el(s,'text',{x:42,y:31,'font-size':10},'st'); el(s,'text',{x:62,y:26,'font-size':15},'/ A');
+  el(s,'text',{x:92,y:31,'font-size':10},'g');
+  const xr = 112; const w=eqFrac(s, ''+Math.round(v.Ast), ''+v.Ag, xr, 26);
+  el(s,'text',{x:xr+w+14,y:26,'font-size':15},'= ');
+  el(s,'text',{x:xr+w+34,y:26,'font-size':15,'font-weight':'bold',fill:'#1c5d99'}, v.rho.toFixed(2)+' %');
+
+  s = $('eqLap'); s.innerHTML='';
+  el(s,'text',{x:0,y:22,'font-size':15},CHAR.lap);
+  el(s,'text',{x:8,y:27,'font-size':10},'lap,B');
+  el(s,'text',{x:42,y:22,'font-size':15},'= 1.3 * ld = 1.3 * (fy*ps / (20*rt(fc))) * db');
+  el(s,'text',{x:318,y:22,'font-size':15},'= 1.3 * ' + v.ld + ' = ');
+  el(s,'text',{x:420,y:22,'font-size':15,'font-weight':'bold',fill:'#1c5d99'}, v.lap + ' mm');
+  el(s,'text',{x:0,y:52,'font-size':12.5,fill:'#86827a'},
+    'min 300 mm; ps = ' + v.psi + ' for dia ' + v.db + ' (Grade 420, fc = ' + v.fc + ' MPa)');
+
+  s = $('eqTie'); s.innerHTML='';
+  el(s,'text',{x:0,y:26,'font-size':15},'s <= min( 16db = ' + (16*v.db) + ',  48dtie = ' + (48*v.td) + ',  b = ' + v.b + ' ) = ');
+  el(s,'text',{x:430,y:26,'font-size':15,'font-weight':'bold',fill:'#1c5d99'}, v.tmax + ' mm');
+}
+function drawSec(v) {
+  const s = $('sec'); s.innerHTML='';
+  const W=560,H=380, sc=Math.min((H-120)/v.h,(W-160)/v.b);
+  const cx=W/2, cy=(H-50)/2+10, bw=v.b*sc, hh=v.h*sc;
+  el(s,'rect',{x:cx-bw/2,y:cy-hh/2,width:bw,height:hh,fill:'#eceae6',stroke:'#6b675f','stroke-width':1.6});
+  const c=v.cv*sc, r=Math.max(6,v.td*sc*0.6);
+  const sx=cx-bw/2+c, sy=cy-hh/2+c, sw=bw-2*c, sh=hh-2*c;
+  el(s,'rect',{x:sx,y:sy,width:sw,height:sh,fill:'none',stroke:'#a94442','stroke-width':Math.max(2.5,v.td*sc*0.9),rx:r});
+  // 135° lap ticks
+  mmline(s,sx,sy,sx+9,sy-9,'#a94442',2.2); mmline(s,sx+sw,sy,sx+sw-9,sy-9,'#a94442',2.2);
+  const dia=Math.max(8,v.db*sc);
+  // 4 corners (or n bars around the perimeter)
+  const pts = v.n<=4 ? [[sx+r,sy+r],[sx+sw-r,sy+r],[sx+sw-r,sy+sh-r],[sx+r,sy+sh-r]].slice(0,v.n)
+    : Array.from({length:v.n},(_,i)=>{const per=2*(sw+sh)-8*r;const t=i*(per/(v.n-1));
+      let a=t; const segs=[[sx+r,sy+r,sx+sw-r,sy+r],[sx+sw-r,sy+r,sx+sw-r,sy+sh-r],[sx+sw-r,sy+sh-r,sx+r,sy+sh-r],[sx+r,sy+sh-r,sx+r,sy+r]];
+      for(const [x1,y1,x2,y2] of segs){const L=Math.hypot(x2-x1,y2-y1); if(a<=L) return [x1+(x2-x1)*a/L, y1+(y2-y1)*a/L]; a-=L;}
+      return [sx+r,sy+r];});
+  for(const [px,py] of pts) el(s,'circle',{cx:px,cy:py,r:dia/2,fill:'#a94442',stroke:'#7c2f2d','stroke-width':1});
+  el(s,'text',{x:sx+sw/2,y:sy-10,'font-size':12.5,'text-anchor':'middle',fill:'#7c2f2d'},v.n+' \u2300'+v.db+' longitudinal (A'+ "\u209b\u209c" +' = '+Math.round(v.Ast)+' mm\u00b2, \u03c1 = '+v.rho.toFixed(2)+'%)');
+  el(s,'text',{x:sx+sw/2,y:sy+sh+22,'font-size':12,class:'dim','text-anchor':'middle'},'tie \u2300'+v.td+' @ '+v.ts+' (max '+v.tmax+')');
+  el(s,'text',{x:cx-bw/2-8,y:cy+hh/2+22,'font-size':12,class:'dim'},'cover '+v.cv);
+  // vertical dim
+  const dx=cx+bw/2+14; line(s,dx,cy-hh/2,dx,cy+hh/2,1,'#777');
+  el(s,'text',{x:dx+6,y:cy,'font-size':11.5,class:'dim'},v.h+'');
+}
+function drawElev(v) {
+  const s=$('elev'); s.innerHTML='';
+  const W=980,H=360,m={l:70,r:40,t:40};
+  const sc=(H-m.t-90)/v.H;
+  const x0=m.l+40, colW=Math.max(30,(W-260)*0.25);
+  const zBot=m.t, zTop=m.t+v.H*sc;
+  // footing block
+  el(s,'rect',{x:x0-70,y:zBot+6,width:colW+140,height:36,fill:'#e2dfd9',stroke:'#6b675f','stroke-width':1.2});
+  // column
+  el(s,'rect',{x:x0,y:zBot,width:colW,height:v.H*sc,fill:'#eceae6',stroke:'#6b675f','stroke-width':1.5});
+  // slab band at top (the floor this column supports the splice above)
+  const zSlab=zTop-2;
+  el(s,'rect',{x:x0-60,y:zSlab-14,width:colW+120,height:14,fill:'#dcd9d3',stroke:'#6b675f','stroke-width':1});
+  const xc=x0+colW/2;
+  // ties up the height
+  const nT=Math.max(3,Math.floor(v.H/v.ts));
+  for(let i=0;i<=nT;i++){const z=zBot+i*(v.H*sc/nT); line(s,x0+8,z,x0+colW-8,z,1.5,'#8a5f5e');}
+  // longitudinal bars: two visible lines
+  const bx1=x0+10, bx2=x0+colW-10;
+  // base: whole bar lapping starters
+  mmline(s,bx1,zBot+4,bx1,zTop-8,'#a94442',3.2);
+  mmline(s,bx2,zBot+4,bx2,zTop-8,'#a94442',3.2);
+  // STARTERS from the footing (dashed light) up lap
+  mmline(s,bx1-5,zBot+2,bx1-5,zBot+v.lap*sc,'#c98a88',2.4);
+  mmline(s,bx2+5,zBot+2,bx2+5,zBot+v.lap*sc*0.5,'#c98a88',2.4);  // staggered
+  // splice zone shading above the slab? splice above slab = top of THIS story into next:
+  // draw the upper splice pieces (dashed) above zTop
+  mmline(s,bx1,zTop-8,bx1,zTop+v.H*0.25,'#c98a88',2.4);
+  // dims
+  line(s,x0-30,zBot,x0-30,zTop,1,'#777');
+  el(s,'text',{x:x0-38,y:(zBot+zTop)/2,'font-size':12,class:'dim','text-anchor':'end'},'H = '+v.H);
+  // lap dim at base
+  line(s,x0+colW+16,zBot+2,x0+colW+16,zBot+v.lap*sc,1,'#777');
+  el(s,'text',{x:x0+colW+22,y:zBot+v.lap*sc/2,'font-size':11.5,class:'dim'},'\u2113');
+  el(s,'text',{x:x0+colW+29,y:zBot+v.lap*sc/2+4,'font-size':8},'lap,B');
+  el(s,'text',{x:x0+colW+22,y:zBot+v.lap*sc/2+18,'font-size':11.5,class:'dim'},'= '+v.lap);
+  // labels
+  el(s,'text',{x:x0-70,y:zBot+28,'font-size':12,fill:'#7c2f2f'},'starters from footing (dashed) lap the column bars');
+  el(s,'text',{x:x0-60,y:zSlab-20,'font-size':12,fill:'#7c2f2f'},'slab / floor \u2014 the NEXT story splices just above it (COL-200)');
+}
+var APP = { ok: false, paths: [], note: '' };
+function realAppCage(v) {
+  try {
+    var G = window.G, Model = window.Model, ER = window.ElementRebar;
+    if (!G || !Model || !ER) throw new Error('engine modules not loaded');
+    var m = new Model();
+    var H = v.H/1000, b2 = v.b/1000, h2 = v.h/1000;
+    var before = new Set(m.faces.keys());
+    var f0 = m.addFaceFromRings([G.v(0,0,0), G.v(b2,0,0), G.v(b2,h2,0), G.v(0,h2,0)]);
+    m.pushPull(f0, H);
+    var faces = Array.from(m.faces.keys()).filter(function(id){ return !before.has(id) && m.faces.has(id); });
+    for (var fid of faces) m.faces.get(fid).userData = { bimEntityId: 'c1', bimType: 'column' };
+    var ent = { id: 'c1', type: 'column', faces: faces,
+      params: { base: [0,0,0], width: v.b/1000, depth: v.h/1000, height: H } };
+    var fid2 = null, bestZ = -1e9;
+    for (var id2 of faces) { var ff = m.faces.get(id2);
+      var n = G.norm(G.loopNormal(m.pts(ff.loop)));
+      var c = m.faceCentroid(ff);
+      if (n.z > 0.999 && c && c.z > bestZ) { bestZ = c.z; fid2 = id2; } }
+    var q = { type: 'column', column: {
+      tie: { l: v.cv/1000, r: v.cv/1000, t: v.cv/1000, b: v.cv/1000,
+        front: v.cv/1000, dia: v.td/1000, bentAngle: 135, bentFactor: 6,
+        mode: 'spacing', value: v.ts/1000 },
+      main: { dia: v.db/1000, tOffset: v.cv/1000, bOffset: v.cv/1000, type: 'straight' } } };
+    var res = ER.previewElementRebar(m, fid2, q, [ent]);
+    if (res.error) throw new Error(res.error);
+    APP.ok = true; APP.paths = res.paths; APP.note = '';
+  } catch (e) { APP.ok = false; APP.paths = []; APP.note = e.message; }
+  return APP;
+}
+// 3D
+let yaw=-0.6,pitch=0.4,zoom=1,drag=false,lx=0,ly=0;
+function cage(v){
+  const bars=[]; const y0=v.cv+v.td+v.db/2, y1=v.h-v.cv-v.td-v.db/2, z0=v.cv+v.td+v.db/2, z1=v.h-v.cv-v.td-v.db/2;
+  const cols=[[y0,z0],[v.h-y0,z0],[y0,v.h-z0],[v.h-y0,v.h-z0]].map(([a,b2])=>[Math.min(a,v.h-y0),Math.min(b2,v.h-z0)]);
+  const corners=[[y0,z0],[v.h-y0,z0],[v.h-y0,v.h-z0],[y0,v.h-z0]];
+  for(const [y,z] of corners)
+    bars.push({pts:[[0,z,y],[v.H,z,y]],w:v.db,red:1});
+  // splice pieces (upper half, staggered) - two of the four
+  bars.push({pts:[[v.H*0.55,z0,y0],[v.H+300,z0,y0]],w:v.db,red:0});
+  bars.push({pts:[[v.H*0.55+300,v.h-z0,v.h-y0],[v.H+300,v.h-z0,v.h-y0]],w:v.db,red:0});
+  // ties
+  const nT=Math.max(3,Math.floor(v.H/v.ts));
+  for(let i=0;i<=nT;i++){const x=i*v.H/nT;
+    bars.push({pts:[[x,z0,y0],[x,v.h-z0,y0],[x,v.h-z0,v.h-y0],[x,z0,v.h-y0],[x,z0,y0]],w:v.td,stir:1});}
+  return bars;
+}
+function draw3D(){
+  const cv=$('c3d'),ctx=cv.getContext('2d');
+  const v=V();
+  realAppCage(v);
+  let bars, src;
+  if (APP.ok) {
+    bars = APP.paths.map(p => ({ pts: p.pts.map(q => [q.x*1000, q.z*1000, q.y*1000]),
+      w: p.dia*1000, red: p.dia*1000 >= v.db/1000*0.9 ? 1 : 0 }));
+    src = 'cage generated by the APP engine (ElementRebar.previewElementRebar) - '
+      + APP.paths.length + ' bars';
+  } else { bars = cage(v); src = 'schematic fallback - ' + APP.note; }
+  const info = document.getElementById('src3d'); if (info) info.textContent = src;
+  const W=cv.width=cv.clientWidth,H=cv.height=400;
+  ctx.clearRect(0,0,W,H);
+  const cx=W/2,cy=H/2+10;
+  const sc=Math.min(W/(v.H*1.15),H/(v.h*2.6))*zoom;
+  const P=(x,z,y)=>{const x1=x-v.H*0.62,y1=y-v.h/2,z1=z-v.h/2;
+    const ca=Math.cos(yaw),sa=Math.sin(yaw);
+    const X=x1*ca-y1*sa,Y=x1*sa+y1*ca;
+    const yy=Y*0.82+z1*Math.sin(pitch), zz=z1*Math.cos(pitch);
+    return [cx+X*sc,cy-yy*sc];};
+  // column ghost
+  ctx.strokeStyle='#c8c5bf';ctx.lineWidth=1.2;
+  const box=[[0,0,0],[v.H,0,0],[v.H,v.h,0],[0,v.h,0],[0,0,v.h],[v.H,0,v.h],[v.H,v.h,v.h],[0,v.h,v.h]];
+  for(const [a,b2] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]){
+    const pa=P(box[a][0],box[a][2],box[a][1]),pb=P(box[b2][0],box[b2][2],box[b2][1]);
+    ctx.beginPath();ctx.moveTo(pa[0],pa[1]);ctx.lineTo(pb[0],pb[1]);ctx.stroke();}
+  for(const bar of bars){
+    ctx.strokeStyle=bar.red?'#a94442':(bar.stir?'#8a5f5e':'#c98a88');
+    ctx.lineWidth=Math.max(1.4,bar.w*sc*0.5);ctx.lineJoin='round';ctx.beginPath();
+    bar.pts.forEach((p,i)=>{const q=P(p[0],p[1],p[2]);i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]);});ctx.stroke();}
+  ctx.fillStyle='#86827a';ctx.font='12px Consolas';
+  ctx.fillText('drag = rotate   wheel = zoom   (dashed = splice pieces above the floor)',12,H-10);
+}
+{ const c=$('c3d');
+  c.addEventListener('mousedown',e=>{drag=true;lx=e.clientX;ly=e.clientY;});
+  addEventListener('mouseup',()=>drag=false);
+  addEventListener('mousemove',e=>{if(!drag)return;yaw+=(e.clientX-lx)*0.008;pitch=Math.max(-0.2,Math.min(1.2,pitch+(e.clientY-ly)*0.006));lx=e.clientX;ly=e.clientY;draw3D();});
+  c.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(0.4,Math.min(3,zoom*(e.deltaY<0?1.1:0.9)));draw3D();},{passive:false}); }
+function drawSteps(v){
+  var S = [
+    ['Corner bars first',
+     'Four longitudinal bars dia ' + v.db + ' occupy the four corners - every tie bend engages a corner bar. More bars (n = ' + v.n + ') spread between the corners with clear spacing >= max(db, 25 mm).',
+     'ACI 10.7.4 + 25.2.3 + MNL-66 COL-20 (tie type schedule)'],
+    ['Ties every ' + v.ts + ' mm',
+     'Closed ties dia ' + v.td + ' up the whole story, 135-degree laps alternating around the perimeter. They hold every bar and confine the core. Max spacing = min(16db, 48dtie, b) = ' + v.tmax + ' mm.',
+     'ACI 10.7.6 + 25.7.2; spacing cap 10.7.6.1.2'],
+    ['At the foundation: the starters ARE the lower splice piece',
+     'L-dowels from the footing rise ' + v.lap + ' mm (the Class B lap) with their hook in the footing. The story bars run whole from the floor and lap them - never stack a second base lap on top of the starters.',
+     'ACI 25.5.5.1 (Class B = 1.3 ld) + MNL-66 FND-100 (dowels with standard hook)'],
+    ['At every floor above: splice just above the slab',
+     'Each story column bars end; the next story bars start above them with a ' + v.lap + ' mm lap. Alternate bars stagger by half a lap (' + Math.round(v.lap/2) + ' mm). Two extra ties tighten the splice zone.',
+     'MNL-66 COL-200 (splice at slabs/beams, Class B) + ACI 10.7.5'],
+    ['Why a lap of ' + v.lap + ' mm?',
+     'ld = fy*ps/(20*rt(fc)) * db = ' + v.ld + ' mm for dia ' + v.db + ' (ps = ' + v.psi + '). Class B multiplies by 1.3 = ' + v.lap + ' mm, min 300 mm. The 1.3 exists because a splice transfers force bar-to-bar through the concrete - 30 percent longer than anchoring into mass concrete.',
+     'ACI 25.4.2.3 (ld) + 25.5.5.1 (Class B)'],
+    ['Column bars pass BETWEEN the beam bars',
+     'At the joint the beam bars hook AROUND the column cage to its far side - the column bars stay continuous through. That is the beam detail BM-202 viewed from the column side.',
+     'ACI 9.7.7.3 + MNL-66 BM-202'],
+  ];
+  $('steps').innerHTML = S.map(function(r, i){
+    return '<div class="step"><b class="n">' + (i+1) + '</b><b>' + r[0] + '</b><span class="clause">' + r[2] + '</span><br>' + r[1] + '</div>';
+  }).join('');
+}
+function drawChecks(v){
+  const rows=[
+    ['Reinforcement ratio','\u03c1 = '+v.rho.toFixed(2)+'% within 1%\u20138%', v.rho>=1&&v.rho<=8,'ACI 10.6.1'],
+    ['Minimum bars','n = '+v.n+' \u2265 4', v.n>=4,'ACI 10.7.3.1'],
+    ['Tie spacing','s = '+v.ts+' \u2264 '+v.tmax, v.ts<=v.tmax,'ACI 10.7.6.1.2'],
+    ['Lap length','\u2113 = '+v.lap+' = 1.3\u00b7'+v.ld+' \u2265 300', v.lap>=300&&v.lap>=1.3*v.ld,'ACI 25.5.5.1'],
+    ['Clear spacing', Math.round((v.b-2*v.cv-2*v.td-v.n*v.db)/Math.max(1,v.n-1))+' \u2265 max(d'+ "\u1d47" +', 25)', ((v.b-2*v.cv-2*v.td-v.n*v.db)/Math.max(1,v.n-1))>=Math.max(v.db,25),'ACI 25.2.3'],
+  ];
+  $('chk').innerHTML='<tr><th>Check</th><th>Condition</th><th></th><th>Clause</th></tr>'+
+    rows.map(r=>'<tr><td>'+r[0]+'</td><td class="num">'+r[1]+'</td><td class="'+(r[2]?'pass':'fail')+'">'+(r[2]?'PASS':'FAIL')+'</td><td class="num">'+r[3]+'</td></tr>').join('');
+}
+function refresh(){const v=V();drawEqs(v);drawSec(v);drawElev(v);draw3D(v);drawSteps(v);drawChecks(v);}
+document.querySelectorAll('input,select').forEach(i=>i.addEventListener('input',refresh));
+addEventListener('resize',draw3D);
+refresh();
+</script>
+</body>
+</html>
