@@ -6267,7 +6267,7 @@ class App {
   createFaceFromSelectedEdges() {
     const m = this.model, G = window.G;
     if (this.sel.edges.size < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
-    let made = 0, skipped = 0, err = null;
+    let made = 0, skipped = 0, err = null, dropped = 0;
     const ok = this.run('create faces', mm => {
       // COINCIDENT-DUPLICATE DEDUPE: loose faces carry their own copies of
       // the wire they came from, so a box selection catches BOTH the source
@@ -6303,15 +6303,39 @@ class App {
           }
         }
       }
-      const edges = sel.map(e => mm.edges.get(e.id)).filter(Boolean);
-      if (edges.length < 3) { err = 'Select at least 3 edges forming a closed loop'; return true; }
+      const edges0 = sel.map(e => mm.edges.get(e.id)).filter(Boolean);
+      if (edges0.length < 3) { err = 'Select at least 3 edges forming a closed loop'; return true; }
+      // BOX-SELECTION TOLERANCE: a window pick collects extra edges — dangling
+      // lines, crossing wires, T-stems. Shed them instead of refusing: peel
+      // degree-1 tails (no closed loop can use them), then drop odd-odd
+      // chords, until every remaining vertex is even. The closed loop(s)
+      // survive untouched; the extras are ignored.
+      const drop = new Set();
+      for (;;) {
+        const deg = new Map();
+        const bump = (v, k) => deg.set(v, (deg.get(v) || 0) + k);
+        for (const e of edges0) if (!drop.has(e.id)) { bump(e.a, 1); bump(e.b, 1); }
+        let tail = null;
+        const odd = [];
+        for (const [v, d] of deg) { if (d === 1) tail = v; if (d % 2 !== 0) odd.push(v); }
+        if (tail != null) {
+          const e = edges0.find(q => !drop.has(q.id) && (q.a === tail || q.b === tail));
+          if (e) { drop.add(e.id); continue; }
+        }
+        if (!odd.length) break;
+        const oddSet = new Set(odd);
+        const chord = edges0.find(q => !drop.has(q.id) && oddSet.has(q.a) && oddSet.has(q.b));
+        if (chord) { drop.add(chord.id); continue; }
+        const e = edges0.find(q => !drop.has(q.id) && (oddSet.has(q.a) || oddSet.has(q.b)));
+        if (e) drop.add(e.id); else break;
+        if (drop.size >= edges0.length) break;
+      }
+      dropped = drop.size;
+      const edges = edges0.filter(e => !drop.has(e.id));
+      if (edges.length < 3) { err = 'The selected edges do not form a closed loop — box-select the loop (extra loose edges are ignored automatically)'; return true; }
       const adj = new Map();
       const link = (v, rec) => { if (!adj.has(v)) adj.set(v, []); adj.get(v).push(rec); };
       for (const e of edges) { link(e.a, { e, o: e.b }); link(e.b, { e, o: e.a }); }
-      for (const [, ns] of adj) if (ns.length % 2 !== 0) {
-        err = 'The selected edges do not form closed loops — every corner needs an even number of selected edges (2 per loop). Check the selection for a gap or a dangling line';
-        return true;
-      }
       // decompose the edge set into cycles: each directed edge used once; at a
       // junction (two loops sharing a corner) continue with the edge that
       // turns tightest — the same planar rule the room detector walks with
@@ -6425,7 +6449,8 @@ class App {
     if (err) { this.toast(err, true); return; }
     if (made) {
       this.clearSelection();
-      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''} — nested rings deducted as holes; Push/Pull, edit, or delete without touching neighbors`);
+      const extra = dropped ? `, ${dropped} extra edge${dropped > 1 ? 's' : ''} ignored` : '';
+      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''}${extra} — nested rings deducted as holes; Push/Pull, edit, or delete without touching neighbors`);
     } else {
       this.toast('Could not create a face from those loops' + (skipped ? ' — the rings are not planar' : ''), true);
     }
