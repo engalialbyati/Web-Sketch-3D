@@ -311,11 +311,17 @@ class Viewport {
     // segment) instead of the pipe solids - a 3000-bar cage drops from
     // ~250k triangles + 500k edges to ~20k quads with no model edges
     this.rebarRibbonMat = this.heavyMat.clone();
-    // bright rebar orange-red: the old muted #a94442 at 2.5 px read as a
-    // faint haze against concrete (the 'rebar not visible' report)
-    this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0xff5233);
+    // dark steel grey (the classic rebar look) at a readable 3.2 px
+    this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0x3b4046);
     this.rebarRibbonMat.uniforms.uPx.value = 3.2;
     this.rebarRibbonMat.depthWrite = false;
+    // TRANSPARENT list: element ghosts share the transparent face material
+    // and rendered AFTER the ribbons, stacking 55% veils over them — a few
+    // overlapping ghosts and the bar faded out entirely (the camera-angle
+    // disappearing act). With transparent:true and renderOrder 3 the
+    // ribbons draw after EVERY element, so rebar stays on top of ghosts
+    // (depth test still hides bars behind opaque geometry in normal mode).
+    this.rebarRibbonMat.transparent = true;
     this.rebarRibbon = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarRibbonMat);
     this.rebarRibbon.renderOrder = 3;
     this.rebarRibbon.frustumCulled = false;
@@ -324,11 +330,11 @@ class Viewport {
 
     // DETAIL rebar: GPU-INSTANCED hex prisms (the CSI/ETABS approach — any
     // cage size is ONE draw call). Built from the same centerline cache the
-    // ribbons use; lit by the scene's sun+hemisphere; depth-write off +
-    // renderOrder 2 so bars show through X-ray ghost concrete exactly like
-    // the old pipe pass did.
-    this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0xc7432a, roughness: 0.5, metalness: 0.2 });
+    // ribbons use; lit by the scene's sun+hemisphere. transparent list +
+    // renderOrder 2 for the same draw-after-ghosts guarantee as ribbons.
+    this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.5, metalness: 0.35 });
     this.rebarSolidsMat.depthWrite = false;
+    this.rebarSolidsMat.transparent = true;
     this.rebarSolids = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarSolidsMat);
     this.rebarSolids.visible = false;
     this.scene.add(this.rebarSolids);
@@ -809,7 +815,7 @@ class Viewport {
     try { localStorage.setItem('websketch3d.rebarMode', this.rebarMode); } catch (e) { }
   }
   setXray(on) {
-    this.faceUniforms.uAlphaMul.value = on ? 0.55 : 1.0;
+    this.faceUniforms.uAlphaMul.value = on ? 0.28 : 1.0;
     // X-ray must REVEAL interiors: with depth-write on, the ghosted front
     // faces depth-reject everything behind them (reinforcement cages
     // inside concrete vanished). Drop the depth write while x-ray is on -
@@ -820,7 +826,7 @@ class Viewport {
   // Sketch Mode: ghost the model so sketch lines dominate (edges stay crisp)
   setGhost(on) {
     this.invalidate();
-    this.faceUniforms.uAlphaMul.value = on ? 0.22 : (this.xray ? 0.55 : 1.0);
+    this.faceUniforms.uAlphaMul.value = on ? 0.22 : (this.xray ? 0.28 : 1.0);
     this.ghosted = on;
   }
   setShadows(on) {
