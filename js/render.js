@@ -56,7 +56,7 @@ class Viewport {
 
     // ---- camera (z-up, SketchUp home-ish view) ----
     this.cam = { target: G.v(0, 0, 0.0), dist: 16, az: -55 * RAD, el: 28 * RAD, ortho: false, fov: 50 };
-    this.persp = new THREE.PerspectiveCamera(50, 1, 0.02, 4000);
+    this.persp = new THREE.PerspectiveCamera(50, 1, 0.1, 4000);
     this.persp.up.set(0, 0, 1);
     this.ortho = new THREE.OrthographicCamera(-10, 10, 10, -10, -4000, 4000);
     this.ortho.up.set(0, 0, 1);
@@ -257,7 +257,7 @@ class Viewport {
     this.rebarMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.faceMat.clone());
     this.rebarMesh.material.uniforms.uAlphaMul.value = 1.0;
     this.rebarMesh.material.depthWrite = false;
-    this.rebarMesh.renderOrder = 2;
+
     this.scene.add(this.rebarMesh);
 
     this.triangleFace = [];
@@ -309,32 +309,31 @@ class Viewport {
 
     // LIGHT REBAR: billboarded centerline ribbons (one quad per bar
     // segment) instead of the pipe solids - a 3000-bar cage drops from
-    // ~250k triangles + 500k edges to ~20k quads with no model edges
+    // ~250k triangles + 500k edges to ~20k quads with no model edges.
+    // OPAQUE with depth writes: the bars output full alpha anyway, and the
+    // earlier transparent:true + renderOrder trick (drawn after the X-ray
+    // ghosts) disabled depth writes — bars could not occlude EACH OTHER and
+    // background bars painted over foreground ones (buffer order, not Z).
+    // Now the Z buffer owns occlusion; the X-ray ghosts (no depth write)
+    // still blend their thin veil ON TOP, so cages stay visible inside.
     this.rebarRibbonMat = this.heavyMat.clone();
-    // dark steel grey (the classic rebar look) at a readable 3.2 px
     this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0x3b4046);
     this.rebarRibbonMat.uniforms.uPx.value = 3.2;
-    this.rebarRibbonMat.depthWrite = false;
-    // TRANSPARENT list: element ghosts share the transparent face material
-    // and rendered AFTER the ribbons, stacking 55% veils over them — a few
-    // overlapping ghosts and the bar faded out entirely (the camera-angle
-    // disappearing act). With transparent:true and renderOrder 3 the
-    // ribbons draw after EVERY element, so rebar stays on top of ghosts
-    // (depth test still hides bars behind opaque geometry in normal mode).
-    this.rebarRibbonMat.transparent = true;
+    this.rebarRibbonMat.transparent = false;
+    this.rebarRibbonMat.depthTest = true;
+    this.rebarRibbonMat.depthWrite = true;
     this.rebarRibbon = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarRibbonMat);
-    this.rebarRibbon.renderOrder = 3;
     this.rebarRibbon.frustumCulled = false;
     this.rebarRibbon.visible = false;
     this.scene.add(this.rebarRibbon);
 
     // DETAIL rebar: GPU-INSTANCED hex prisms (the CSI/ETABS approach — any
-    // cage size is ONE draw call). Built from the same centerline cache the
-    // ribbons use; lit by the scene's sun+hemisphere. transparent list +
-    // renderOrder 2 for the same draw-after-ghosts guarantee as ribbons.
+    // cage size is ONE draw call). Same opaque + depth-write contract: real
+    // Z occlusion between bars and against all opaque geometry.
     this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0x4a5058, roughness: 0.5, metalness: 0.35 });
-    this.rebarSolidsMat.depthWrite = false;
-    this.rebarSolidsMat.transparent = true;
+    this.rebarSolidsMat.transparent = false;
+    this.rebarSolidsMat.depthTest = true;
+    this.rebarSolidsMat.depthWrite = true;
     this.rebarSolids = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarSolidsMat);
     this.rebarSolids.visible = false;
     this.scene.add(this.rebarSolids);
@@ -686,7 +685,7 @@ class Viewport {
         nm.count = mats.length;
         for (let i = 0; i < mats.length; i++) nm.setMatrixAt(i, mats[i]);
         if (nm.instanceMatrix) nm.instanceMatrix.needsUpdate = true;
-        nm.renderOrder = 2; nm.frustumCulled = false;
+        nm.frustumCulled = false;
         nm.visible = this.rebarMode === 'detail';
         const white = new THREE.Color(0xffffff);
         for (let i = 0; i < mats.length; i++) nm.setColorAt(i, white); // highlight base
@@ -1577,10 +1576,12 @@ class Viewport {
       this.ortho.left = -h * asp; this.ortho.right = h * asp;
       this.ortho.updateProjectionMatrix();
     } else {
-      // close-up zoom: keep the near plane a small fraction of the camera
-      // distance (down to 0.4 mm) so geometry an inch from the lens never
-      // clips away; at normal distances it stays at the usual 2 cm
-      const near = Math.min(0.02, Math.max(0.0004, dist * 0.004));
+      // near plane ~1% of the camera distance, clamped to [0.1, 0.5]: the
+      // old floor of 0.02 mm-scale nears gave a 200,000:1 depth ratio that
+      // starved the 24-bit Z buffer (rebar occlusion artifacts). 0.1 keeps
+      // everything from the lens out visible while preserving depth
+      // precision across the scene.
+      const near = Math.min(0.5, Math.max(0.1, dist * 0.01));
       if (Math.abs(near - this.persp.near) > 1e-9) {
         this.persp.near = near;
         this.persp.updateProjectionMatrix();
