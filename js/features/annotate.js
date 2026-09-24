@@ -176,7 +176,9 @@
       if (!pe || !pe.entity) return;
       const ent = app.bim.getEntityById(pe.entity);
       if (!ent) return;
-      const p = app.inferPoint(ev, null).p;
+      const inf = app.inferPoint(ev, null);
+      const p = inf.p;
+      view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       const txt = tagText(app, { targetId: ent.id, template: TEMPLATES[ent.type] });
       view.stickyLabel(p, txt, '#1d4f9c', 14, -22);
       view.previewLine([p, G.add(p, G.v(0.5, 0.3, 0))], 0x1d4f9c, true);

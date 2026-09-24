@@ -48,6 +48,7 @@
     }
     _pt(ev) {
       const inf = this.app.inferPoint(ev, this.V || null);
+      this.app.view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       return { p: G.v(inf.p.x, inf.p.y, inf.p.z), inf };
     }
     onMove(ev) {
@@ -169,6 +170,7 @@
       view.showSnapDot(null);
       const inf = app.inferPoint(ev, this.pts.length ? this.pts[this.pts.length - 1] : null);
       const p = G.v(inf.p.x, inf.p.y, inf.p.z);
+      view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       if (this.pts.length) view.previewLine([...this.pts, p], 0x2b2b2b, true);
       else view.previewLine([p, G.add(p, G.v(0.01, 0, 0))], 0x2b2b2b, true);
     }
@@ -219,6 +221,7 @@
       view.showSnapDot(null);
       const inf = app.inferPoint(ev, this.A || null);
       const p = G.v(inf.p.x, inf.p.y, inf.p.z);
+      view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       if (this.A) view.previewLine([G.v(...this.A), p], 0xd23c2e, true);
       else view.previewLine([p, G.add(p, G.v(0.5, 0.5, 0))], 0xd23c2e, true);
     }
@@ -249,6 +252,7 @@
       app.view.showSnapDot(null);
       const inf = app.inferPoint(ev, null);
       const p = G.v(inf.p.x, inf.p.y, inf.p.z);
+      app.view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       app.view.previewLine([p, G.add(p, G.v(-1, -1, 0))], 0xd23c2e, true);
     }
     onDown(ev) {

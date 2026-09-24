@@ -19,10 +19,16 @@ function fmtCoord(p) {
   if (!p) return '';
   return `[${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}]`;
 }
-// coordinate readout near the cursor while drawing (below the dimension label)
+// coordinate readout near the cursor while drawing (below the dimension label).
+// Also arms the CAD snap marker for the hovered snap — every tool that
+// reports cursor coords gets the small box + label for endpoints,
+// midpoints, intersections etc., so snapping reads the same in the
+// dimension tool, drawing tools, and everything else.
 function showCursorCoords(view, s, inf, p, dy = 18) {
   if (!s || !p) return;
   view.hudLabel(s.x, s.y + dy, (inf && inf.label ? inf.label + '  ' : '') + fmtCoord(p), '#5a3fa0');
+  if (inf && inf.kind && inf.kind !== 'axis' && inf.kind !== 'free'
+    && typeof view.showSnapDot === 'function') view.showSnapDot(inf.p || p, inf.kind);
 }
 function parseLen(s) {
   if (s == null) return null;
