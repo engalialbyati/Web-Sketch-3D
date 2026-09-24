@@ -6603,6 +6603,36 @@ class App {
     if (p.z == null) return null;
     return this.model.standingZAt(p);
   }
+  // nearest tier-1 snap candidate under the cursor (endpoint / midpoint /
+  // center / intersection) — the REFERENCE feed for axis-locked inference:
+  // the locked operation stays on its axis and only borrows the point's
+  // depth. Shares _inferPointRaw's cached candidates and projections.
+  _nearestSnapCandidate(ev, tol = 9) {
+    if (!ev || ev.clientX == null) return null;
+    const q = this.view.clientToCanvasPixels(ev.clientX, ev.clientY);
+    const cache = this._snapCache;
+    if (!cache || !cache.length) return null;
+    const cam = this.view.activeCamera();
+    const camSig = this.view._cameraSig() + '|z' + (cam.zoom || 0).toFixed(4)
+      + '|' + this.view.canvas.width + 'x' + this.view.canvas.height;
+    if (this._snapProjSig !== camSig || !this._snapProj) {
+      const proj = new Array(cache.length);
+      for (let i = 0; i < proj.length; i++) proj[i] = this.view.worldToScreenPixels(cache[i].p);
+      this._snapProj = proj;
+      this._snapProjSig = camSig;
+    }
+    const proj = this._snapProj;
+    let best = null, bestD = tol;
+    for (let i = 0; i < cache.length; i++) {
+      const k = cache[i].kind;
+      if (k !== 'endpoint' && k !== 'midpoint' && k !== 'center' && k !== 'intersection') continue;
+      const s = proj[i];
+      if (!s.visible) continue;
+      const d = Math.hypot(s.x - q.x, s.y - q.y);
+      if (d < bestD) { bestD = d; best = cache[i]; }
+    }
+    return best;
+  }
   inferPoint(ev, anchor) {
     const inf = this._inferPointRaw(ev, anchor);
     const locks = this.axisLocks;
@@ -6617,7 +6647,34 @@ class App {
         const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
         inf.p = G.rayPlane(ro, rd, pl) || G.constrainToAxes(anchor, inf.p, [...locks]);
       } else {
-        inf.p = G.constrainToAxes(anchor, inf.p, [...locks]);
+        // SINGLE-AXIS LOCK — SketchUp reference inference: a real snap point
+        // (endpoint / midpoint / center / intersection) under the cursor is
+        // a DEPTH REFERENCE ONLY. The line never connects to it: Q_ref
+        // projects orthogonally onto the locked axis and the segment ends
+        // at that projection.
+        const ax = [...locks][0];
+        const u = AXES[ax];
+        inf.axisRef = null;
+        const ref = this._nearestSnapCandidate(ev);
+        if (ref) {
+          inf.p = G.axisProject(anchor, u, ref.p).p;
+          inf.axisRef = { q: G.clone(ref.p), kind: ref.kind, label: ref.label };
+        } else if (ev && ev.clientX != null) {
+          // no reference under the cursor: t from the closest point between
+          // the CURSOR RAY and the locked axis ray (ray-ray distance, not a
+          // ground-plane pick — stays exact at steep camera angles)
+          const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
+          const r = G.sub(ro, anchor);
+          const b = G.dot(rd, u), d1 = G.dot(rd, r), e = G.dot(u, r);
+          const den = 1 - b * b;
+          inf.p = Math.abs(den) > 1e-9
+            ? G.add(anchor, G.mul(u, (e - b * d1) / den))
+            : G.constrainToAxes(anchor, inf.p, [ax]);
+        } else inf.p = G.constrainToAxes(anchor, inf.p, [ax]);
+        inf.kind = 'lock';
+        inf.label = 'locked ' + ax.toUpperCase() + (inf.axisRef ? ' \u2014 aligned to ' + ref.label : '');
+        inf.axisSnapLine = null;
+        return inf;
       }
       inf.kind = 'lock';
       inf.label = 'locked ' + [...locks].join('+').toUpperCase();
