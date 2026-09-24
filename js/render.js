@@ -1346,7 +1346,7 @@ class Viewport {
   }
   showSnapDot(p, kind) {
     if (!p) { this.snapDot.visible = false; return; }
-    const colors = { endpoint: 0x1a7f37, midpoint: 0x0e8385, center: 0xb35900, axis: 0xd23c2e, edge: 0xd23c2e, face: 0x3e66c4, ground: 0x3d9e4e };
+    const colors = { endpoint: 0x1a7f37, midpoint: 0x0e8385, center: 0xb35900, axis: 0xd23c2e, edge: 0xd23c2e, face: 0x3e66c4, ground: 0x3d9e4e, intersection: 0x9c27b0 };
     this.snapDot.material.color.setHex(colors[kind] || 0x1a7f37);
     this.snapDot.geometry.attributes.position.setXYZ(0, p.x, p.y, p.z);
     this.snapDot.geometry.attributes.position.needsUpdate = true;
@@ -1356,7 +1356,7 @@ class Viewport {
     // center — so it stays crisp at any zoom (world-space shapes shrink).
     // Remembered and re-projected every frame so the glyph survives a
     // resting mouse (hudItems alone live only during motion).
-    if (['endpoint', 'midpoint', 'center', 'edge'].includes(kind)) {
+    if (['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(kind)) {
       this._lastSnap = { p: { x: p.x, y: p.y, z: p.z }, kind };
     }
   }
@@ -1367,9 +1367,10 @@ class Viewport {
     const s = this.toScreen(s0.p);
     if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: s0.kind });
   }
-  // one AutoCAD marker frame: endpoint □, midpoint △, center ○, edge ▢(diamond)
+  // one AutoCAD marker frame: endpoint □, midpoint △, center ○, edge ▢(diamond),
+  // intersection ×
   _drawSnapGlyph(ctx, x, y, kind) {
-    const col = { endpoint: '#1a7f37', midpoint: '#1a7f37', center: '#b35900', edge: '#d23c2e' }[kind] || '#475569';
+    const col = { endpoint: '#1a7f37', midpoint: '#1a7f37', center: '#b35900', edge: '#d23c2e', intersection: '#9c27b0' }[kind] || '#475569';
     ctx.strokeStyle = col;
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -1379,6 +1380,9 @@ class Viewport {
       ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath();
     } else if (kind === 'center') {
       ctx.arc(x, y, 6, 0, Math.PI * 2);
+    } else if (kind === 'intersection') { // × — where two edges cross
+      ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5);
+      ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5);
     } else { // edge: nearest-on-line — a small diamond
       ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath();
     }

@@ -128,12 +128,12 @@
 <script src="js/model.js?v=74own"></script>
 <script src="js/db.js?v=5dsgn"></script>
 <script src="js/BimElement.js?v=12"></script>
-<script src="js/render.js?v=60inst"></script>
+<script src="js/render.js?v=61snap"></script>
 <script src="js/assets.js?v=2"></script>
 <script src="js/ifc-import.js?v=2"></script>
 <script src="js/ifc-elements.js?v=2"></script>
 <script src="js/tools/base.js?v=23"></script>
-<script src="js/tools/free.js?v=66rb"></script>
+<script src="js/tools/free.js?v=67snap"></script>
 <script src="js/tools/bim.js?v=65dyn"></script>
 <script src="js/tools/assets.js?v=1"></script>
 <script src="js/tools/script.js?v=3"></script>
@@ -168,7 +168,7 @@
 <script src="js/features/measure-area.js?v=2"></script>
 <script src="js/edit-inplace.js?v=1"></script>
 <script src="js/StructuralManager.js?v=17revert"></script>
-<script src="js/app.js?v=160del"></script>
+<script src="js/app.js?v=162ord"></script>
     <script src="js/families.js?v=2"></script>
     <script src="js/families-loader.js?v=1"></script>
     <script src="js/ui-cad.js?v=24"></script>
@@ -176,5 +176,29 @@
     <script src="js/ui-layers.js?v=5"></script>
 <script src="js/ui-families.js?v=4"></script>
     <script src="js/BlenderKitBrowser.js?v=7"></script>
+<script>
+// CACHE GUARD - the local server sends no cache headers, so browsers
+// heuristic-cache THIS page and keep booting yesterday's scripts (the
+// "had to open another browser" problem; version tags cannot help when the
+// page listing them is itself stale). On every boot we fetch the LIVE
+// index.html with cache:'no-store' (bypasses the HTTP cache by spec) and
+// compare its js/ script tags against what this page actually loaded. Any
+// difference means a newer deploy exists -> replace the URL with a fresh
+// query so the browser re-fetches the page and its new ?v= scripts.
+(function () {
+  var pageSrcs = [].map.call(document.querySelectorAll('script[src]'), function (s) { return s.getAttribute('src'); });
+  fetch(location.pathname, { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (t) {
+      if (!t) return;
+      var live = (t.match(/src="js[/][^"]+"/g) || []).map(function (x) { return x.slice(5, -1); });
+      var stale = live.some(function (src) { return pageSrcs.indexOf(src) < 0; })
+        || pageSrcs.some(function (src) { return src.indexOf('js/') === 0 && live.indexOf(src) < 0; });
+      if (stale && !/[?&]fresh=/.test(location.search))
+        location.replace(location.pathname + '?fresh=' + Date.now());
+    })
+    .catch(function () { /* offline / server gone: keep running what we have */ });
+})();
+</script>
 </body>
 </html>

@@ -962,7 +962,7 @@ class RectTool extends Tool {
       // midpoint triangle, center…) so snapping onto existing geometry is
       // visible before the first click — same feedback as after it
       const inf0 = app.inferPoint(ev, null);
-      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
       return;
     }
     const inf = app.inferPoint(ev, this.p1);
@@ -1111,7 +1111,7 @@ class CircleTool extends Tool {
       view.clearPreview();
       // placing the CENTER: osnap markers show before the first click too
       const inf0 = app.inferPoint(ev, null);
-      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
       return;
     }
     // two-axis lock re-aims the sketch plane through the center (vertical /

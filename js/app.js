@@ -6626,6 +6626,7 @@ class App {
     // grid snap (F9): round the inferred point to the nearest 1 m column —
     // real geometry snaps (endpoints/midpoints/centers) keep priority
     if (this.gridSnap && inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock' && inf.kind !== 'edge'
+      && inf.kind !== 'intersection'
       && inf.kind !== 'gridX' && inf.kind !== 'gridline' && inf.kind !== 'centerline') {
       inf.p = G.v(Math.round(inf.p.x), Math.round(inf.p.y), inf.p.z);
       inf.kind = 'grid';
@@ -6655,6 +6656,75 @@ class App {
         cands.push({ p, kind, label });
       };
       for (const [, p] of model.vertices) addC(p, 'endpoint', 'Endpoint');
+      // EDGE CROSSINGS ('+'): two straight edges passing within ~1 mm of
+      // each other with the contact INTERIOR to both — where a 2 m line
+      // crosses another line at 1 m. Endpoint coincidences are already
+      // Endpoint candidates (added first, the 1 mm dedupe key keeps them),
+      // and near-parallel pairs are skipped (an overlap is not a crossing).
+      // Pairs come from a 1 m spatial hash — O(E) bucketing, not O(E²).
+      {
+        const straight = [];
+        const cells = new Map();
+        for (const e of model.edges.values()) {
+          if (e.curveId) continue; // curves: no analytic crossing here
+          const a = model.vp(e.a), b = model.vp(e.b);
+          if (!a || !b || G.dist(a, b) < 0.05) continue;
+          const id = straight.push({ a, b }) - 1;
+          const x0 = Math.floor(Math.min(a.x, b.x)), x1 = Math.floor(Math.max(a.x, b.x));
+          const y0 = Math.floor(Math.min(a.y, b.y)), y1 = Math.floor(Math.max(a.y, b.y));
+          if (x1 - x0 > 64 || y1 - y0 > 64) continue; // wire-farm guard
+          for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+            const k = gx * 100003 + gy;
+            let arr = cells.get(k);
+            if (!arr) cells.set(k, arr = []);
+            arr.push(id);
+          }
+        }
+        const tried = new Set();
+        let found = 0;
+        for (const arr of cells.values()) {
+          for (let ii = 0; ii < arr.length; ii++) for (let jj = ii + 1; jj < arr.length; jj++) {
+            const i = Math.min(arr[ii], arr[jj]), j = Math.max(arr[ii], arr[jj]);
+            const pk = i * 2654435761 + j;
+            if (tried.has(pk)) continue;
+            tried.add(pk);
+            const s1 = straight[i], s2 = straight[j];
+            // bbox overlap (cheap) before the segment math
+            if (Math.max(s1.a.x, s1.b.x) < Math.min(s2.a.x, s2.b.x) - 1e-9
+              || Math.min(s1.a.x, s1.b.x) > Math.max(s2.a.x, s2.b.x) + 1e-9
+              || Math.max(s1.a.y, s1.b.y) < Math.min(s2.a.y, s2.b.y) - 1e-9
+              || Math.min(s1.a.y, s1.b.y) > Math.max(s2.a.y, s2.b.y) + 1e-9) continue;
+            const d1x = s1.b.x - s1.a.x, d1y = s1.b.y - s1.a.y, d1z = s1.b.z - s1.a.z;
+            const d2x = s2.b.x - s2.a.x, d2y = s2.b.y - s2.a.y, d2z = s2.b.z - s2.a.z;
+            const L1 = Math.hypot(d1x, d1y, d1z), L2 = Math.hypot(d2x, d2y, d2z);
+            if (!(L1 > 0) || !(L2 > 0)) continue;
+            const cx = d1y * d2z - d1z * d2y, cy = d1z * d2x - d1x * d2z, cz = d1x * d2y - d1y * d2x;
+            if (Math.hypot(cx, cy, cz) / (L1 * L2) < 0.01) continue; // parallel
+            // closest points of the two 3D segments: minimize
+            // |r + t·d2 − s·d1|²  (r = s2.a − s1.a) → solve the 2×2 system,
+            // then clamp into the unit square edge by edge
+            const rx = s2.a.x - s1.a.x, ry = s2.a.y - s1.a.y, rz = s2.a.z - s1.a.z;
+            const a11 = L1 * L1, a22 = L2 * L2, a12 = d1x * d2x + d1y * d2y + d1z * d2z;
+            const b1 = -(d1x * rx + d1y * ry + d1z * rz), b2 = d2x * rx + d2y * ry + d2z * rz;
+            const det = a11 * a22 - a12 * a12;
+            if (det < 1e-12 * a11 * a22) continue; // degenerate (guarded anyway)
+            let s = -(b1 * a22 + b2 * a12) / det;
+            let t = -(b2 * a11 + b1 * a12) / det;
+            if (s < 0) { s = 0; t = Math.max(0, Math.min(1, -b2 / a22)); }
+            else if (s > 1) { s = 1; t = Math.max(0, Math.min(1, (a22 - b2) / a22)); }
+            else t = Math.max(0, Math.min(1, t));
+            // interior contact only — endpoint coincidences are Endpoints
+            if (s < 0.02 || s > 0.98 || t < 0.02 || t > 0.98) continue;
+            const p1x = s1.a.x + d1x * s, p1y = s1.a.y + d1y * s, p1z = s1.a.z + d1z * s;
+            const p2x = s2.a.x + d2x * t, p2y = s2.a.y + d2y * t, p2z = s2.a.z + d2z * t;
+            if (Math.hypot(p2x - p1x, p2y - p1y, p2z - p1z) > 0.0015) continue;
+            addC(G.v((p1x + p2x) / 2, (p1y + p2y) / 2, (p1z + p2z) / 2), 'intersection', 'Intersection');
+            if (++found > 4000) { ii = jj = 1e9; } // pathological wire farm
+          }
+          if (found > 4000) break;
+        }
+      }
+
       for (const [, m] of model.curves) if (m.center) addC(m.center, 'center', 'Center');
       // FACE CENTERS: horizontal faces of real elements (column tops,
       // footings, slabs, wall caps) - the off-grid workflow anchor. Loose
