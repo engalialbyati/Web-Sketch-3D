@@ -439,7 +439,14 @@ class SelectTool extends Tool {
           if (ent3) for (const fid of ent3.faces) if (app.model.faces.has(fid)) faces.add(fid);
         }
         picked.faces = faces;
-        picked.edges = new Set();
+        // element-owned edges drop out (their ELEMENT is selected), but FREE
+        // WIRES stay: box-selecting a drawn loop must reach Create Face /
+        // Join / Convert — wiping them left BIM-mode box selection unable
+        // to select wires at all
+        picked.edges = new Set([...picked.edges].filter(id => {
+          const e2 = app.model.edges.get(id);
+          return e2 && !(e2.userData && e2.userData.bimEntityId);
+        }));
       }
       if (this._mod) app.toggleEntities(picked);
       else { app.sel = picked; app.onSelectionChanged(); }
