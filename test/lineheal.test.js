@@ -132,6 +132,6 @@ module.exports = h => {
     self.sel.edges = new Set([...m.edges.keys()]);
     fn();
     eq(m.faces.size, 0, 'no face');
-    ok(toasts.some(t => /gap or a dangling/.test(t)), 'error points at the gap');
+    ok(toasts.some(t => /box-select the loop/.test(t)), 'error points at the gap');
   });
 };

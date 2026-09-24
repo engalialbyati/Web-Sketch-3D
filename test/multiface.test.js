@@ -116,15 +116,15 @@ module.exports = h => {
     for (const f of m.faces.values()) near(m.faceArea(f), 4, 1e-9, 'each is a full square');
   });
 
-  test('odd-degree selection refuses cleanly (dangling edge)', () => {
+  test('box-selection extra (dangling edge) is ignored, the loop still faces', () => {
     const { self, fn, toasts } = stub();
     const m = self.model;
     const ids = tri(m, 0, 0);
     const dangler = m.addEdge(L.G.v(5, 5, 0), L.G.v(6, 5, 0)); // one loose edge
     self.sel.edges = new Set([...ids, dangler.id]);
     fn();
-    eq(m.faces.size, 0, 'nothing created');
-    ok(toasts.some(t => /even number/.test(t)), 'clear error message');
+    eq(m.faces.size, 1, 'the closed loop became a face');
+    ok(toasts.some(t => /1 extra edge ignored/.test(t)), 'reports the ignored extra');
   });
 
   test('single loop still works (backward compatibility)', () => {
