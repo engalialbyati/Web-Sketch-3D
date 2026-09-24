@@ -1439,10 +1439,21 @@ class Model {
     if (!f) return null;
     const r = this.punchOrSplit(f);
     if (!r) {
-      // nothing to divide: drop the face again, keep the drawn wire
+      // nothing to divide: drop the face again — but NEVER the drawn wire.
+      // reapRingEdges took every faceless ring edge, and on open ground the
+      // face was the ring's ONLY face: the rectangle/circle the user just
+      // drew vanished (shapes "couldn't be drawn" off a face). Only SYNTHETIC
+      // edges (born from this face build, no deliberate marker, no owner)
+      // are residue; the tool's polyline survives.
       const loop = [...f.loop];
       this.faces.delete(f.id);
-      this.reapRingEdges(loop);
+      const n = loop.length;
+      for (let i = 0; i < n; i++) {
+        const e = this.findEdge(loop[i], loop[(i + 1) % n]);
+        if (e && !(e.userData && (e.userData.deliberate || e.userData.bimEntityId))
+          && this.facesAdjacentToEdge(e).length === 0) this._delEdge(e.id);
+      }
+      this.gc();
       return null;
     }
     this.version++;
