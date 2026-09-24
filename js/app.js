@@ -2722,6 +2722,13 @@ class App {
 
     const vp = document.getElementById('viewport');
     this.view = new Viewport(vp, this);
+    // display settings restored from the last session (Display Settings dialog)
+    try {
+      const rc = localStorage.getItem('websketch3d.rebarColor');
+      if (rc) { this.view.rebarRibbonMat.uniforms.uColor.value.set(rc); this.view.rebarSolidsMat.color.set(rc); }
+      const xa = parseFloat(localStorage.getItem('websketch3d.xrayAlpha'));
+      if (xa >= 0.05 && xa <= 0.95) this.view.xrayAlpha = xa;
+    } catch (e) { }
     this.bandEl = document.getElementById('selband');
     this.hintEl = document.getElementById('hint');
     this.vcbEl = document.getElementById('vcb');
@@ -4854,6 +4861,7 @@ class App {
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
         ['Rebar: Light / Detailed', 'rebarlight', '', 'rebarLight'],
+        ['Display Settings…', 'displaySettings'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
@@ -5207,6 +5215,7 @@ class App {
         A.toast(A.rebarLight ? 'Rebar: LIGHT display (fast) - centerline lines'
           : 'Rebar: DETAILED display (solid bars, GPU-instanced - instant at any cage size)');
       },
+      displaySettings: () => A.displaySettingsDialog(),
       styleShaded: () => A.setFaceStyle('shaded'),
       styleMono: () => A.setFaceStyle('monochrome'),
       styleWire: () => A.setFaceStyle('wireframe'),
@@ -5877,6 +5886,55 @@ class App {
   }
   confirmDialog(msg, onYes) {
     this.dialog('Confirm', `<p>${msg}</p>`, [['Cancel', null], ['OK', onYes]]);
+  }
+  // Display settings: rebar color + X-ray element transparency, applied
+  // LIVE while the controls move and persisted for the next session.
+  displaySettingsDialog() {
+    const v = this.view;
+    const cur = '#' + v.rebarRibbonMat.uniforms.uColor.value.getHexString();
+    const alpha = Math.round((v.xrayAlpha != null ? v.xrayAlpha : 0.28) * 100);
+    this.dialog('Display Settings', `
+      <div class="ob-lab">Rebar color</div>
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px">
+        <input type="color" id="ds-rebar" value="${cur}" style="width:52px;height:34px;padding:0;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent">
+        <span class="dim" style="font-size:12px">both the light lines and the solid bars</span>
+      </div>
+      <div class="ob-lab">Element transparency (X-Ray)</div>
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 6px">
+        <input type="range" id="ds-alpha" min="5" max="95" step="1" value="${alpha}" style="flex:1">
+        <span id="ds-alphav" style="min-width:42px;text-align:right">${alpha}%</span>
+      </div>
+      <p class="dim" style="margin:0;font-size:12px">How transparent elements become while X-Ray is on — lower shows the rebar better. Toggle X-Ray in the View menu to see it.</p>
+    `, [
+      ['Reset Defaults', () => {
+        this._applyDisplaySettings('#3b4046', 28);
+        try { localStorage.removeItem('websketch3d.rebarColor'); localStorage.removeItem('websketch3d.xrayAlpha'); } catch (e) { }
+        return false; // stay open so the reset is visible on the controls
+      }],
+      ['Done', null],
+    ]);
+    const rebar = document.getElementById('ds-rebar');
+    const range = document.getElementById('ds-alpha');
+    const out = document.getElementById('ds-alphav');
+    rebar.addEventListener('input', () => this._applyDisplaySettings(rebar.value, null));
+    range.addEventListener('input', () => {
+      out.textContent = range.value + '%';
+      this._applyDisplaySettings(null, +range.value);
+    });
+  }
+  _applyDisplaySettings(color, alphaPct) {
+    const v = this.view;
+    if (color) {
+      v.rebarRibbonMat.uniforms.uColor.value.set(color);
+      v.rebarSolidsMat.color.set(color);
+      try { localStorage.setItem('websketch3d.rebarColor', color); } catch (e) { }
+    }
+    if (alphaPct != null) {
+      v.xrayAlpha = Math.max(0.05, Math.min(0.95, alphaPct / 100));
+      if (v.xray) v.faceUniforms.uAlphaMul.value = v.xrayAlpha;
+      v.invalidate();
+      try { localStorage.setItem('websketch3d.xrayAlpha', String(v.xrayAlpha)); } catch (e) { }
+    }
   }
   // Convert selected Free face(s) into any element type — a single face is
   // swept along its normal (typed height); a multi-face selection (a drawn

@@ -815,7 +815,7 @@ class Viewport {
     try { localStorage.setItem('websketch3d.rebarMode', this.rebarMode); } catch (e) { }
   }
   setXray(on) {
-    this.faceUniforms.uAlphaMul.value = on ? 0.28 : 1.0;
+    this.faceUniforms.uAlphaMul.value = on ? (this.xrayAlpha != null ? this.xrayAlpha : 0.28) : 1.0;
     // X-ray must REVEAL interiors: with depth-write on, the ghosted front
     // faces depth-reject everything behind them (reinforcement cages
     // inside concrete vanished). Drop the depth write while x-ray is on -
@@ -826,7 +826,8 @@ class Viewport {
   // Sketch Mode: ghost the model so sketch lines dominate (edges stay crisp)
   setGhost(on) {
     this.invalidate();
-    this.faceUniforms.uAlphaMul.value = on ? 0.22 : (this.xray ? 0.28 : 1.0);
+    this.faceUniforms.uAlphaMul.value = on ? 0.22
+      : (this.xray ? (this.xrayAlpha != null ? this.xrayAlpha : 0.28) : 1.0);
     this.ghosted = on;
   }
   setShadows(on) {
