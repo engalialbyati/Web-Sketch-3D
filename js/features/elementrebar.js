@@ -1118,8 +1118,52 @@
     let sh = Math.min(q.hSpacing || 0.2, sCap);
     if (aBar(q.hDia) / sh < needH) sh = Math.max(0.03, aBar(q.hDia) / needH);
 
-    const off1 = cover + q.vDia / 2;
-    const off2 = t - cover - q.vDia / 2;
+    // CURTAIN OFFSETS FROM THE SOLID, NOT THE PARAMS: the old math
+    // (cover+d/2 and t−cover−d/2) measures from the wall FACES but is
+    // applied from the BASELINE — on a centerline wall (the default) the
+    // far curtain landed t/2 − cover − d/2 ≈ 54 mm OUTSIDE a 200 wall.
+    // Measure the solid's true side planes (n-offsets of its face
+    // vertices) so any locationLine, join miter, or split piece places
+    // both curtains just inside its real faces; centerline is the fallback.
+    let nLo = -t / 2, nHi = t / 2;
+    if (ent.faces && ent.faces.length) {
+      let lo = Infinity, hi = -Infinity, any = false;
+      for (const fid of ent.faces) {
+        const f = m.faces.get(fid);
+        if (!f) continue;
+        for (const ring of m.rings(f)) for (const v of ring) {
+          const q = m.vp(v);
+          if (!q) continue;
+          const o = (q.x - ax) * nx + (q.y - ay) * ny;
+          if (o < lo) lo = o;
+          if (o > hi) hi = o;
+          any = true;
+        }
+      }
+      if (any && hi - lo > 0.04 && hi - lo < t + 0.1) { nLo = lo; nHi = hi; }
+    }
+    // run extent too: framing/FACE-STOP retreats the SOLID from the
+    // baseline ends (the facade walls lose 150 mm to each column) - bars
+    // stationed from the baseline ends sit outside the wall
+    let sLo = 0, sHi = L;
+    if (ent.faces && ent.faces.length) {
+      let lo2 = Infinity, hi2 = -Infinity, any2 = false;
+      for (const fid of ent.faces) {
+        const f = m.faces.get(fid);
+        if (!f) continue;
+        for (const ring of m.rings(f)) for (const v of ring) {
+          const q2 = m.vp(v);
+          if (!q2) continue;
+          const o2 = (q2.x - ax) * ux + (q2.y - ay) * uy;
+          if (o2 < lo2) lo2 = o2;
+          if (o2 > hi2) hi2 = o2;
+          any2 = true;
+        }
+      }
+      if (any2 && hi2 - lo2 > 0.1 && hi2 - lo2 <= L + 0.05) { sLo = Math.max(0, lo2); sHi = Math.min(L, hi2); }
+    }
+    const off1 = nLo + cover + q.vDia / 2;
+    const off2 = nHi - cover - q.vDia / 2;
     const curtains = q.twoCurtains ? [off1, off2] : [off1];
 
     // ---- MNL-66(20) WALL-206/207/208: hosted door/window/opening cuts on
@@ -1159,8 +1203,8 @@
     const boundaryN = q.boundary ? 2 : 0;
     for (let bi = 0; bi < boundaryN; bi++)
       for (const off of curtains)
-        for (const sEnd of [q.cover + q.vDia / 2 + 0.02 + bi * (q.vDia + 0.025),
-          L - q.cover - q.vDia / 2 - 0.02 - bi * (q.vDia + 0.025)]) {
+        for (const sEnd of [sLo + q.cover + q.vDia / 2 + 0.02 + bi * (q.vDia + 0.025),
+          sHi - q.cover - q.vDia / 2 - 0.02 - bi * (q.vDia + 0.025)]) {
           const px = ax + ux * sEnd + nx * off, py = ay + uy * sEnd + ny * off;
           const zb2 = zBot + (q.vOff || 0.05);
           add([G.v(px, py, zb2), G.v(px, py, zTop)], q.vDia,
@@ -1183,10 +1227,10 @@
       const lapD = Math.max(0.3, 1.3 * 47.5 * psiS * q.vDia);
       const legD = Math.max(0.1, 8 * q.vDia);
       const zLeg = zBot - Math.min(0.15, (dowelHost.params.thickness || 0.15) / 3);
-      const nVD = Math.max(2, Math.ceil(L / sv) + 1);
-      const sVD = L / (nVD - 1);
+      const nVD = Math.max(2, Math.ceil((sHi - sLo) / sv) + 1);
+      const sVD = (sHi - sLo) / (nVD - 1);
       for (let i = 0; i < nVD; i++) {
-        const s = i * sVD;
+        const s = sLo + i * sVD;
         for (const off of curtains) {
           const px = ax + ux * s + nx * off, py = ay + uy * s + ny * off;
           const pts = window.Rebar.roundedPath(
@@ -1200,12 +1244,12 @@
 
     // vertical bars along the run — a bar inside an opening splits into the
     // below and above segments (drop anything shorter than 150 mm)
-    const nV = Math.max(2, Math.ceil(L / sv) + 1);
-    const sV = L / (nV - 1);
+    const nV = Math.max(2, Math.ceil((sHi - sLo) / sv) + 1);
+    const sV = (sHi - sLo) / (nV - 1);
     const z0 = zBot + (q.vOff || 0.05);
     for (const off of curtains)
       for (let i = 0; i < nV; i++) {
-        const s = i * sV;
+        const s = sLo + i * sV;
         const px = ax + ux * s + nx * off, py = ay + uy * s + ny * off;
         const segs = [];
         const o = inOpening.s(s);
@@ -1227,8 +1271,8 @@
         const z = z0 + j * sH;
         const segs = [];
         const o = inOpening.z(z);
-        if (!o) segs.push([0, L]);
-        else segs.push([0, o.s0], [o.s1, L]);
+        if (!o) segs.push([sLo, sHi]);
+        else segs.push([sLo, o.s0], [o.s1, sHi]);
         for (const [sa, sb] of segs) {
           if (sb - sa < 0.25) continue;
           add([G.v(ax + ux * sa + nx * off, ay + uy * sa + ny * off, z),
@@ -1244,7 +1288,7 @@
     for (const o of openings) {
       for (const off of curtains) {
         const atS = s => [ax + ux * s + nx * off, ay + uy * s + ny * off];
-        const hs = Math.max(0, o.s0 - DEV), he = Math.min(L, o.s1 + DEV);
+        const hs = Math.max(sLo, o.s0 - DEV), he = Math.min(sHi, o.s1 + DEV);
         for (let k = 0; k < 2; k++) {
           const dh = cover + q.hDia / 2 + k * (q.hDia + clear);
           const zHead = o.z1 - dh, zSill = o.z0 + dh;
@@ -1259,12 +1303,12 @@
             bars++;
           }
         }
-        const vs0 = Math.max(0, o.s0 - cover - q.vDia / 2), vs1 = Math.min(L, o.s1 + cover + q.vDia / 2);
+        const vs0 = Math.max(sLo, o.s0 - cover - q.vDia / 2), vs1 = Math.min(sHi, o.s1 + cover + q.vDia / 2);
         const zv0 = Math.max(z0, o.z0 - DEV), zv1 = Math.min(zTop, o.z1 + DEV);
         for (let k = 0; k < 2; k++) {
           const dv = cover + q.vDia / 2 + k * (q.vDia + clear);
           for (const sv2 of [vs0 - dv, vs1 + dv])
-            if (sv2 > 0.01 && sv2 < L - 0.01) {
+            if (sv2 > sLo + 0.01 && sv2 < sHi - 0.01) {
               add([G.v(...atS(sv2), zv0), G.v(...atS(sv2), zv1)], q.vDia,
                 { shape: 'straight', dir: 'v', role: 'trim-v', count: 2 });
               bars++;
@@ -1280,8 +1324,8 @@
           const dxs = Math.sign(sCorner - sc) || 1, dzs = Math.sign(zCorner - zc) || 1;
           let aS = sCorner - dxs * dHalf, aZ = zCorner - dzs * dHalf;
           let bS = sCorner + dxs * dHalf, bZ = zCorner + dzs * dHalf;
-          aS = Math.max(0.02, Math.min(L - 0.02, aS));
-          bS = Math.max(0.02, Math.min(L - 0.02, bS));
+          aS = Math.max(sLo + 0.02, Math.min(sHi - 0.02, aS));
+          bS = Math.max(sLo + 0.02, Math.min(sHi - 0.02, bS));
           aZ = Math.max(z0, Math.min(zTop, aZ));
           bZ = Math.max(z0, Math.min(zTop, bZ));
           if (Math.hypot(bS - aS, bZ - aZ) < 0.61) continue; // under 24 in: skip
