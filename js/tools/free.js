@@ -736,12 +736,6 @@ class LineTool extends Tool {
       p = G.sub(p, G.mul(lockedPlane.n, d));
     }
     if (this.anchor && app.lockAxis) {
-      if (inf.axisRef) {
-        // axis-locked REFERENCE inference (inferPoint's locked branch) put
-        // p exactly on the axis at the hovered point's depth — the cursor
-        // ray must not overwrite it
-        p = inf.p;
-      } else {
       const ax = AXES[app.lockAxis];
       // VERTICAL LOCKS NEED THE CURSOR RAY: projecting the inferred point
       // (which lands on the ground plane) onto a vertical axis yields ~0
@@ -770,7 +764,6 @@ class LineTool extends Tool {
         app.toast('Top view can\'t aim a vertical line — orbit to a 3D view, or type the length (e.g. 3) + Enter');
       }
       p = G.add(this.anchor, G.mul(ax, t));
-      }
     }
     return { p, inf };
   }
@@ -801,21 +794,12 @@ class LineTool extends Tool {
       } else if (inf.axis && inf.axisSnapLine && !this._dynPt) {
         view.previewLine([this.anchor, inf.axisSnapLine], AXIS_COLOR[inf.axis], true);
       }
-      // AXIS-LOCKED REFERENCE (V + axis): the hovered point is a depth
-      // reference, NOT the endpoint — dashed perpendicular from Q_ref to the
-      // axis, marker + label ON the reference itself
-      if (inf.axisRef) {
-        view.previewLine([inf.axisRef.q, useP], 0xe67e22, true);
-        view.stickyLabel(inf.axisRef.q, 'Aligned to ' + inf.axisRef.label, '#e67e22', 8, -16);
-        view.showSnapDot(inf.axisRef.q, inf.axisRef.kind || 'endpoint');
-      }
       if (app.dyn && app.dyn.open) app.dynFillFromTool();
     } else {
       const s = view.toScreen(p);
       showCursorCoords(view, s, inf, p);
     }
-    if (!inf.axisRef)
-      view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
+    view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
   }
   // ---- AutoCAD dynamic input fields ----
   dynSpec() {
@@ -1468,7 +1452,7 @@ class ArcTool extends Tool {
 // =========================================================== push/pull
 class PushPullTool extends Tool {
   static id = 'pushpull';
-  activate() { this.faceId = null; this.mode = null; this.dist = 0; this.startXY = null; this._rear = null; this.bimSync = null; this._alignRef = null; }
+  activate() { this.faceId = null; this.mode = null; this.dist = 0; this.startXY = null; this._rear = null; this.bimSync = null; }
   cleanup() { super.cleanup(); this.activate(); }
   get hint() {
     return 'Push/Pull: click a face and drag (or click-move-click). Type an exact distance + Enter. Double-click repeats the last distance. Pushing inward snaps to the far face for a clean through-punch.';
@@ -1515,23 +1499,6 @@ class PushPullTool extends Tool {
     if (inf && (inf.kind === 'endpoint' || inf.kind === 'midpoint' || inf.kind === 'center') &&
       Math.abs(G.dot(n, inf.p) - dRear) < 1e-5) this.dist = target;
   }
-  // Axis-locked ALIGNMENT: a hovered real snap point (endpoint / midpoint /
-  // center / intersection) sets the pull depth so the moving face lands
-  // exactly at that reference along the face normal — G.axisProject, the
-  // same projection the line tool uses for V+axis reference inference.
-  _snapAlign(ev) {
-    const app = this.app, f = this._face();
-    if (!f || !app._nearestSnapCandidate) { this._alignRef = null; return; }
-    const ref = app._nearestSnapCandidate(ev);
-    if (!ref) { this._alignRef = null; return; }
-    const n = this._normal(f);
-    const p0 = app.model.vp(f.loop[0]); // a point on the face's plane
-    const pr = G.axisProject(p0, n, ref.p);
-    if (Math.abs(pr.t) < 1e-4) { this._alignRef = null; return; } // on our plane
-    this.dist = pr.t;
-    const c = app.model.faceCentroid(f);
-    this._alignRef = { q: ref.p, at: G.add(c, G.mul(n, pr.t)), label: ref.label };
-  }
   _distFromMouse(ev, f) {
     const app = this.app;
     const c = app.model.faceCentroid(f);
@@ -1551,7 +1518,6 @@ class PushPullTool extends Tool {
       if (this.mode === 'pending' && Math.hypot(q.x - this.startXY.x, q.y - this.startXY.y) > 4) this.mode = 'drag';
       if (this.mode !== 'pending') {
         this.dist = this._distFromMouse(ev, this._face());
-        this._snapAlign(ev); // hovered reference aligns the depth (axisProject)
         this._snapThrough(ev); // may lock this.dist to exactly -T (through)
         this._preview();
       }
@@ -1586,12 +1552,6 @@ class PushPullTool extends Tool {
       const newH = ent ? Math.max(0.05, ent.params.height + this.dist) : null;
       view.stickyLabel(tops[0][0], newH != null ? `${fmtLen(newH)} wall height` : fmtLen(Math.abs(this.dist)), '#333');
       return;
-    }
-    if (this._alignRef) {
-      // dashed perpendicular from the reference to the aligned face plane
-      view.previewLine([this._alignRef.q, this._alignRef.at], 0xe67e22, true);
-      view.stickyLabel(this._alignRef.q, 'Aligned to ' + this._alignRef.label, '#e67e22', 8, -16);
-      view.showSnapDot(this._alignRef.q, 'endpoint');
     }
     view.stickyLabel(tops[0][0], fmtLen(Math.abs(this.dist)) + (snapped ? ' — through' : ''), '#333');
   }

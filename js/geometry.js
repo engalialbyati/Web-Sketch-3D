@@ -48,16 +48,6 @@ const G = {
     return q;
   },
 
-  // Shared axis-lock projection (SketchUp reference inference): project a
-  // reference point Q onto the ray origin + t*u. The line tool uses it to
-  // keep a drawn segment ON the locked axis while a hovered vertex supplies
-  // only depth; push/pull uses it to align a pulled face to a reference
-  // along its normal. Returns { p: the projected point, t: signed distance }.
-  axisProject(origin, u, q) {
-    const t = (q.x - origin.x) * u.x + (q.y - origin.y) * u.y + (q.z - origin.z) * u.z;
-    return { p: { x: origin.x + u.x * t, y: origin.y + u.y * t, z: origin.z + u.z * t }, t };
-  },
-
   rayPlane(ro, rd, plane) {
     const dn = G.dot(rd, plane.n);
     if (Math.abs(dn) < 1e-9) return null;
