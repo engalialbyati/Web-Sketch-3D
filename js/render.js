@@ -1346,7 +1346,7 @@ class Viewport {
   }
   showSnapDot(p, kind) {
     if (!p) { this.snapDot.visible = false; return; }
-    const colors = { endpoint: 0x1a7f37, midpoint: 0x0e8385, center: 0xb35900, axis: 0xd23c2e, edge: 0xd23c2e, face: 0x3e66c4, ground: 0x3d9e4e, intersection: 0x9c27b0 };
+    const colors = { endpoint: 0x1a7f37, midpoint: 0x0e8385, center: 0xb35900, axis: 0xd23c2e, edge: 0xd23c2e, face: 0x3e66c4, ground: 0x3d9e4e, intersection: 0x9c27b0, perpendicular: 0xe67e22 };
     this.snapDot.material.color.setHex(colors[kind] || 0x1a7f37);
     this.snapDot.geometry.attributes.position.setXYZ(0, p.x, p.y, p.z);
     this.snapDot.geometry.attributes.position.needsUpdate = true;
@@ -1356,7 +1356,7 @@ class Viewport {
     // center — so it stays crisp at any zoom (world-space shapes shrink).
     // Remembered and re-projected every frame so the glyph survives a
     // resting mouse (hudItems alone live only during motion).
-    if (['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(kind)) {
+    if (['endpoint', 'midpoint', 'center', 'edge', 'intersection', 'perpendicular'].includes(kind)) {
       this._lastSnap = { p: { x: p.x, y: p.y, z: p.z }, kind };
     }
   }
@@ -1375,8 +1375,8 @@ class Viewport {
   // (arc endpoints etc.) draw the symbol only, so placed points don't spam
   // chips.
   _drawSnapGlyph(ctx, x, y, kind, withLabel) {
-    const col = { endpoint: '#1a7f37', midpoint: '#0e8385', center: '#b35900', edge: '#d23c2e', intersection: '#9c27b0' }[kind] || '#475569';
-    const name = { endpoint: 'Endpoint', midpoint: 'Midpoint', center: 'Center', edge: 'On Line', intersection: 'Intersection' }[kind] || kind;
+    const col = { endpoint: '#1a7f37', midpoint: '#0e8385', center: '#b35900', edge: '#d23c2e', intersection: '#9c27b0', perpendicular: '#e67e22' }[kind] || '#475569';
+    const name = { endpoint: 'Endpoint', midpoint: 'Midpoint', center: 'Center', edge: 'On Line', intersection: 'Intersection', perpendicular: 'Perpendicular' }[kind] || kind;
     ctx.lineWidth = 1.8;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = col;
@@ -1393,6 +1393,14 @@ class Viewport {
       ctx.beginPath();
       ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4);
       ctx.moveTo(x + 4, y - 4); ctx.lineTo(x - 4, y + 4);
+      ctx.stroke();
+    } else if (kind === 'perpendicular') { // ⊥ — stem on a base, corner-marked
+      ctx.rect(x - 5.5, y - 5.5, 11, 11);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, y - 4); ctx.lineTo(x, y + 3.5); // stem
+      ctx.moveTo(x - 4.5, y + 3.5); ctx.lineTo(x + 4.5, y + 3.5); // base
+      ctx.moveTo(x - 3, y + 1); ctx.lineTo(x, y + 1); ctx.lineTo(x, y - 2); // right-angle tick
       ctx.stroke();
     } else { // edge: nearest-on-line — a small diamond
       ctx.moveTo(x, y - 5.5); ctx.lineTo(x + 5.5, y); ctx.lineTo(x, y + 5.5); ctx.lineTo(x - 5.5, y); ctx.closePath();

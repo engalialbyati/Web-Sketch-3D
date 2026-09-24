@@ -6623,10 +6623,41 @@ class App {
       inf.label = 'locked ' + [...locks].join('+').toUpperCase();
       inf.axisSnapLine = null;
     }
+    // PERPENDICULAR INFERENCE: the drawn direction within ~8° of 90° to an
+    // existing straight edge snaps onto the exact perpendicular (draw a line
+    // 90° to a 45° edge — the leg locks perpendicular automatically).
+    // Explicit axis locks and real snap points (endpoint / midpoint /
+    // intersection ...) already returned final intents and stand aside.
+    if (anchor && !locks.size && !inf.axisSnapLine
+      && (inf.kind === 'axis' || inf.kind === 'edge' || inf.kind === 'face'
+        || inf.kind === 'ground' || inf.kind === 'free' || inf.kind === 'perpendicular')) {
+      const d = G.sub(inf.p, anchor);
+      const D = G.len(d);
+      if (D > 0.12 && this._snapEdgeDirs && this._snapEdgeDirs.length) {
+        const dx = d.x / D, dy = d.y / D, dz = d.z / D;
+        let bestE = null, bestC = 0.14; // |cos| < 0.14 ≈ within 8° of 90°
+        for (const ed of this._snapEdgeDirs) {
+          const c = Math.abs(dx * ed.u.x + dy * ed.u.y + dz * ed.u.z);
+          if (c < bestC) { bestC = c; bestE = ed; }
+        }
+        if (bestE) {
+          // strip the edge-direction component: the residual is exactly ⊥
+          const dot = d.x * bestE.u.x + d.y * bestE.u.y + d.z * bestE.u.z;
+          const C = G.v(inf.p.x - bestE.u.x * dot, inf.p.y - bestE.u.y * dot, inf.p.z - bestE.u.z * dot);
+          if (G.len(G.sub(C, anchor)) > 0.08) {
+            inf.p = C;
+            inf.kind = 'perpendicular';
+            inf.label = 'Perpendicular';
+            inf.axis = null;
+            inf.edge = bestE.id;
+          }
+        }
+      }
+    }
     // grid snap (F9): round the inferred point to the nearest 1 m column —
     // real geometry snaps (endpoints/midpoints/centers) keep priority
     if (this.gridSnap && inf.kind !== 'endpoint' && inf.kind !== 'midpoint' && inf.kind !== 'center' && inf.kind !== 'lock' && inf.kind !== 'edge'
-      && inf.kind !== 'intersection'
+      && inf.kind !== 'intersection' && inf.kind !== 'perpendicular'
       && inf.kind !== 'gridX' && inf.kind !== 'gridline' && inf.kind !== 'centerline') {
       inf.p = G.v(Math.round(inf.p.x), Math.round(inf.p.y), inf.p.z);
       inf.kind = 'grid';
@@ -6738,11 +6769,16 @@ class App {
         if (a2 < 0.005 || a2 > 400) continue;
         addC(model.faceCentroid(f), 'center', 'Center');
       }
+      const edirs = [];
       for (const e of model.edges.values()) {
         if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
-        if (a && b) addC(G.mul(G.add(a, b), 0.5), 'midpoint', 'Midpoint');
+        if (!a || !b) continue;
+        addC(G.mul(G.add(a, b), 0.5), 'midpoint', 'Midpoint');
+        // straight-edge DIRECTIONS: the perpendicular-inference constraints
+        if (G.dist(a, b) >= 0.15) edirs.push({ u: G.norm(G.sub(b, a)), id: e.id });
       }
+      this._snapEdgeDirs = edirs;
       this._snapCache = cands;
       this._snapProj = null;
     }
@@ -6877,8 +6913,8 @@ class App {
         const e = G.dot(vec, r);
         const denom = 1 - b * b;
         if (Math.abs(denom) < 1e-9) continue;
-        const s = (e - b * d1) / denom; // meters along the axis
-        if (s <= 0.001) continue;
+        const s = (e - b * d1) / denom; // meters along the axis (BOTH signs —
+        if (Math.abs(s) <= 0.001) continue; // 180°/270° draw toward −X/−Y too)
         const p = G.add(anchor, G.mul(vec, s));
         const sp = this.view.worldToScreenPixels(p);
         if (!sp.visible) continue;

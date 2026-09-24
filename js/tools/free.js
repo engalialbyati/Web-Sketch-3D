@@ -789,6 +789,8 @@ class LineTool extends Tool {
       this.previewEnd = useP;
       if (app.lockAxis) {
         view.previewLine([this.anchor, G.add(this.anchor, G.mul(AXES[app.lockAxis], G.dist(this.anchor, useP)))], AXIS_COLOR[app.lockAxis], true);
+      } else if (inf.kind === 'perpendicular' && !this._dynPt) {
+        view.previewLine([this.anchor, inf.p], 0xe67e22, true); // ⊥ inference guide
       } else if (inf.axis && inf.axisSnapLine && !this._dynPt) {
         view.previewLine([this.anchor, inf.axisSnapLine], AXIS_COLOR[inf.axis], true);
       }
@@ -962,7 +964,7 @@ class RectTool extends Tool {
       // midpoint triangle, center…) so snapping onto existing geometry is
       // visible before the first click — same feedback as after it
       const inf0 = app.inferPoint(ev, null);
-      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection', 'perpendicular'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
       return;
     }
     const inf = app.inferPoint(ev, this.p1);
@@ -1111,7 +1113,7 @@ class CircleTool extends Tool {
       view.clearPreview();
       // placing the CENTER: osnap markers show before the first click too
       const inf0 = app.inferPoint(ev, null);
-      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
+      view.showSnapDot(inf0 && ['endpoint', 'midpoint', 'center', 'edge', 'intersection', 'perpendicular'].includes(inf0.kind) ? inf0.p : null, inf0 ? inf0.kind : null);
       return;
     }
     // two-axis lock re-aims the sketch plane through the center (vertical /
