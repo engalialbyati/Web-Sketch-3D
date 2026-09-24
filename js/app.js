@@ -6754,7 +6754,9 @@ class App {
         const straight = [];
         const cells = new Map();
         for (const e of model.edges.values()) {
-          if (e.curveId) continue; // curves: no analytic crossing here
+          // curve-chained edges (offsets, arcs, circles) are straight CHORD
+          // segments too — their crossings count. Shared-facet endpoints are
+          // excluded later by the interior-contact test (s,t in 0.02..0.98).
           const a = model.vp(e.a), b = model.vp(e.b);
           if (!a || !b || G.dist(a, b) < 0.05) continue;
           const id = straight.push({ a, b }) - 1;
@@ -6828,12 +6830,18 @@ class App {
       }
       const edirs = [];
       for (const e of model.edges.values()) {
-        if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
         if (!a || !b) continue;
-        addC(G.mul(G.add(a, b), 0.5), 'midpoint', 'Midpoint');
-        // straight-edge DIRECTIONS: the perpendicular-inference constraints
-        if (G.dist(a, b) >= 0.15) edirs.push({ u: G.norm(G.sub(b, a)), id: e.id });
+        if (!e.curveId) addC(G.mul(G.add(a, b), 0.5), 'midpoint', 'Midpoint'); // curve chords would spam dots
+        // straight-edge DIRECTIONS: the perpendicular-inference constraints.
+        // Curve chains join only when STRAIGHT (offset lines/polys) — an arc
+        // or circle's chords point everywhere and would fire on any angle.
+        let dirOk = !e.curveId;
+        if (e.curveId) {
+          const cm = model.curves.get(e.curveId);
+          dirOk = cm && (cm.type === 'line' || cm.type === 'poly');
+        }
+        if (dirOk && G.dist(a, b) >= 0.15) edirs.push({ u: G.norm(G.sub(b, a)), id: e.id, curve: e.curveId || 0 });
       }
       this._snapEdgeDirs = edirs;
       this._snapCache = cands;

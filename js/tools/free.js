@@ -2483,18 +2483,40 @@ class EraserTool extends Tool {
 class TrimTool extends Tool {
   static id = 'trim';
   static RED = 0xd23c2e;
-  activate() { this._down = false; this._targets = new Set(); }
-  cleanup() { this._targets.clear(); this._down = false; super.cleanup(); }
-  get hint() { return 'Trim: click an edge to dissolve it — coplanar faces heal into one (collinear corners weld). Drag to sweep edges (red), release to dissolve.'; }
+  activate() { this._down = false; this._targets = new Set(); this._pickAt = new Map(); }
+  cleanup() { this._targets.clear(); this._pickAt.clear(); this._down = false; super.cleanup(); }
+  get hint() { return 'Trim: click a wire to remove the PIECE between intersections (a divided line drops only its clicked segment; isolated wires go whole). Face edges heal into one. Drag to sweep.'; }
   _idsFor(edge) {
     const m = this.app.model;
     return edge.curveId ? m.curveEdges(edge.curveId).map(x => x.id) : [edge.id];
   }
+  // where along the edge (0..1) the pointer sits — the trim picks the piece
+  // containing this parameter
+  _paramAt(ev, edge) {
+    const app = this.app, m = app.model;
+    const a = m.vp(edge.a), b = m.vp(edge.b);
+    if (!a || !b) return 0.5;
+    const { ro, rd } = app.view.clientToWorldRay(ev.clientX, ev.clientY);
+    const d1 = G.sub(b, a);
+    const L = G.len(d1) || 1;
+    d1.x /= L; d1.y /= L; d1.z /= L;
+    const r = G.sub(ro, a);
+    const bb = G.dot(rd, d1);
+    const den = 1 - bb * bb;
+    if (Math.abs(den) < 1e-9) return 0.5;
+    return Math.max(0, Math.min(1, (G.dot(d1, r) - bb * G.dot(rd, r)) / den / L));
+  }
+  _take(ev, pick) {
+    if (!pick) return;
+    this._idsFor(pick.edge).forEach(id => {
+      this._targets.add(id);
+      if (this._targets.size <= 200) this._pickAt.set(id, this._paramAt(ev, pick.edge));
+    });
+  }
   onMove(ev) {
     const app = this.app;
     if (this._down) { // sweeping: accumulate everything the cursor crosses
-      const pick = app.pickEdgeAt(ev, 8);
-      if (pick) this._idsFor(pick.edge).forEach(id => this._targets.add(id));
+      this._take(ev, app.pickEdgeAt(ev, 8));
       app.view.setHoverEdges([...this._targets], TrimTool.RED);
       return;
     }
@@ -2506,9 +2528,32 @@ class TrimTool extends Tool {
     if (ev.button !== 0) return;
     this._down = true;
     this._targets.clear();
-    const pick = this.app.pickEdgeAt(ev, 8);
-    if (pick) this._idsFor(pick.edge).forEach(id => this._targets.add(id));
+    this._pickAt.clear();
+    this._take(ev, this.app.pickEdgeAt(ev, 8));
     this.app.view.setHoverEdges([...this._targets], TrimTool.RED);
+  }
+  // CAD TRIM on a wire: remove only the piece between the two nearest
+  // crossings (or between a crossing and an end). Returns true when the
+  // piece-cut applied; false = caller falls through to whole-edge dissolve.
+  _trimPiece(e, sClick) {
+    const app = this.app, m = app.model;
+    if (m.facesAdjacentToEdge(e).length) return false; // face healing owns it
+    const breaks = m.edgeCrossParams(e);
+    if (!breaks.length) return false; // undivided wire: whole-edge trim
+    let sLo = 0, sHi = 1;
+    for (const s of breaks) {
+      if (s <= sClick) sLo = s;
+      else { sHi = s; break; }
+    }
+    if (sHi - sLo < 1e-4) return true; // nothing meaningful to remove
+    const a = m.vp(e.a), b = m.vp(e.b);
+    const P = s => G.v(a.x + (b.x - a.x) * s, a.y + (b.y - a.y) * s, a.z + (b.z - a.z) * s);
+    const keep = [];
+    if (sLo > 1e-4) keep.push([P(0), P(sLo)]);
+    if (sHi < 1 - 1e-4) keep.push([P(sHi), P(1)]);
+    m.deleteEdgeIds([e.id]);
+    for (const [p1, p2] of keep) m.addPolyline([p1, p2]); // deliberate wires
+    return true;
   }
   onUp(ev) {
     const app = this.app;
@@ -2516,11 +2561,14 @@ class TrimTool extends Tool {
     app.view.setHoverEdges(null, TrimTool.RED);
     if (!this._targets.size) return;
     const tx = app.begin('trim'); // one undo step per gesture
-    let healed = 0, opened = 0, welded = 0, refused = 0;
+    let healed = 0, opened = 0, welded = 0, refused = 0, pieces = 0;
     for (const id of this._targets) {
       const e = app.model.edges.get(id);
       if (!e) continue; // an earlier dissolve in this sweep took it already
       if (bimGuardEdge(app, e)) { refused++; continue; } // parametric cache — not freeform-editable
+      // wires divided by crossings lose only the CLICKED piece (CAD trim);
+      // everything else keeps the whole-edge dissolve semantics
+      if (!e.curveId && this._pickAt.has(id) && this._trimPiece(e, this._pickAt.get(id))) { pieces++; continue; }
       const res = app.model.dissolveEdge(e);
       if (!res.ok) { if (res.reason === 'live-extrude') refused++; continue; }
       if (res.action === 'healed') { healed++; welded += (res.welded || []).length; }
@@ -2530,8 +2578,11 @@ class TrimTool extends Tool {
     app.view.rebuild(); // merged surface is immediately one selectable face
     tx.commit();
     this._targets.clear();
-    if (refused && !healed && !opened)
+    this._pickAt.clear();
+    if (refused && !healed && !opened && !pieces)
       app.toast('Edge carries a live push/pull — collapse it first (double-click the face), then trim', true);
+    else if (pieces && !healed && !opened)
+      app.toast(`Trimmed ${pieces} piece${pieces > 1 ? 's' : ''} — the rest of the line stays (Erase removes whole lines)`);
     else if (healed && opened)
       app.toast(`Trimmed — ${healed} healed, ${opened} face${opened > 1 ? 's' : ''} removed (shell opened)`);
     else if (healed)
@@ -2541,7 +2592,7 @@ class TrimTool extends Tool {
   }
   onKey(ev) {
     if (ev.key === 'Escape' && (this._down || this._targets.size)) { // cancel the sweep
-      this._targets.clear(); this._down = false;
+      this._targets.clear(); this._pickAt.clear(); this._down = false;
       this.app.view.setHoverEdges(null, TrimTool.RED);
       return true;
     }

@@ -311,8 +311,10 @@ class Viewport {
     // segment) instead of the pipe solids - a 3000-bar cage drops from
     // ~250k triangles + 500k edges to ~20k quads with no model edges
     this.rebarRibbonMat = this.heavyMat.clone();
-    this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0xa94442);
-    this.rebarRibbonMat.uniforms.uPx.value = 2.5;
+    // bright rebar orange-red: the old muted #a94442 at 2.5 px read as a
+    // faint haze against concrete (the 'rebar not visible' report)
+    this.rebarRibbonMat.uniforms.uColor.value = new THREE.Color(0xff5233);
+    this.rebarRibbonMat.uniforms.uPx.value = 3.2;
     this.rebarRibbonMat.depthWrite = false;
     this.rebarRibbon = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarRibbonMat);
     this.rebarRibbon.renderOrder = 3;
@@ -325,7 +327,7 @@ class Viewport {
     // ribbons use; lit by the scene's sun+hemisphere; depth-write off +
     // renderOrder 2 so bars show through X-ray ghost concrete exactly like
     // the old pipe pass did.
-    this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0x9a423e, roughness: 0.62, metalness: 0.18 });
+    this.rebarSolidsMat = new THREE.MeshStandardMaterial({ color: 0xc7432a, roughness: 0.5, metalness: 0.2 });
     this.rebarSolidsMat.depthWrite = false;
     this.rebarSolids = new THREE.Mesh(new THREE.BufferGeometry(), this.rebarSolidsMat);
     this.rebarSolids.visible = false;

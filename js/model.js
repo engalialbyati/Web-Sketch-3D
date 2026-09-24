@@ -716,6 +716,62 @@ class Model {
     }
   }
 
+  /** Crossing parameters along straight edge e (values in 0..1) where OTHER
+   *  edges pass within ~1.5 mm with interior contact on both — the CAD trim
+   *  break points. Same closest-point test as the snap builder's crossing
+   *  candidates (full-vector parametrization, s/t in 0..1); shared-endpoint
+   *  contacts are excluded (interior only). */
+  edgeCrossParams(e) {
+    const a = this.vp(e.a), b = this.vp(e.b);
+    if (!a || !b) return [];
+    const d1x = b.x - a.x, d1y = b.y - a.y, d1z = b.z - a.z;
+    const L1 = Math.hypot(d1x, d1y, d1z);
+    if (!(L1 > 1e-6)) return [];
+    const a11 = L1 * L1;
+    const out = [];
+    for (const e2 of this.edges.values()) {
+      if (e2.id === e.id) continue;
+      const c = this.vp(e2.a), d = this.vp(e2.b);
+      if (!c || !d) continue;
+      const d2x = d.x - c.x, d2y = d.y - c.y, d2z = d.z - c.z;
+      const L2 = Math.hypot(d2x, d2y, d2z);
+      if (L2 < 0.05) continue;
+      const rx = c.x - a.x, ry = c.y - a.y, rz = c.z - a.z;
+      const a22 = L2 * L2, a12 = d1x * d2x + d1y * d2y + d1z * d2z;
+      const b1 = -(d1x * rx + d1y * ry + d1z * rz), b2 = d2x * rx + d2y * ry + d2z * rz;
+      const det = a11 * a22 - a12 * a12;
+      if (det < 1e-12 * a11 * a22) continue; // parallel
+      let s = -(b1 * a22 + b2 * a12) / det;
+      let t = -(b2 * a11 + b1 * a12) / det;
+      if (s < 0) { s = 0; t = Math.max(0, Math.min(1, -b2 / a22)); }
+      else if (s > 1) { s = 1; t = Math.max(0, Math.min(1, (a22 - b2) / a22)); }
+      else t = Math.max(0, Math.min(1, t));
+      if (s < 0.001 || s > 0.999 || t < 0.02 || t > 0.98) continue;
+      const px = a.x + d1x * s - (c.x + d2x * t);
+      const py = a.y + d1y * s - (c.y + d2y * t);
+      const pz = a.z + d1z * s - (c.z + d2z * t);
+      if (Math.hypot(px, py, pz) > 0.0015) continue;
+      out.push(s);
+    }
+    // T-JUNCTIONS: another edge's ENDPOINT lying ON this edge is a break
+    // point too (trimming a neighbor left its end exactly on us) — the
+    // interior-only crossing test above cannot see those
+    for (const e2 of this.edges.values()) {
+      if (e2.id === e.id) continue;
+      for (const vid of [e2.a, e2.b]) {
+        const q = this.vp(vid);
+        if (!q) continue;
+        const qx = q.x - a.x, qy = q.y - a.y, qz = q.z - a.z;
+        const s = (qx * d1x + qy * d1y + qz * d1z) / a11;
+        if (s < 0.001 || s > 0.999) continue;
+        const ex = a.x + d1x * s - q.x, ey = a.y + d1y * s - q.y, ez = a.z + d1z * s - q.z;
+        if (Math.hypot(ex, ey, ez) > 0.0015) continue;
+        out.push(s);
+      }
+    }
+    return out.sort((x, y) => x - y);
+  }
+
   // If a new edge closes a coplanar loop, create the face (SketchUp auto-facing).
   autoFace(e) {
     const pa = this.vp(e.a), pb = this.vp(e.b);
