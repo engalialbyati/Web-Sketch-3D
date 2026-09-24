@@ -1365,28 +1365,52 @@ class Viewport {
     const s0 = this._lastSnap;
     if (!s0 || !this.snapDot.visible) return;
     const s = this.toScreen(s0.p);
-    if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: s0.kind });
+    if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: s0.kind, label: 1 });
   }
-  // one AutoCAD marker frame: endpoint □, midpoint △, center ○, edge ▢(diamond),
-  // intersection ×
-  _drawSnapGlyph(ctx, x, y, kind) {
-    const col = { endpoint: '#1a7f37', midpoint: '#1a7f37', center: '#b35900', edge: '#d23c2e', intersection: '#9c27b0' }[kind] || '#475569';
+  // one AutoCAD osnap marker frame: the kind's symbol sits ON the point —
+  // endpoint □, midpoint △, center ○, edge ◇, intersection × — white-filled
+  // with a colored rim so it reads on ANY background (the old 2 px outline
+  // vanished over dark geometry). Live hover markers also carry a small
+  // label box with the snap name, the CAD tooltip look; tool-placed marks
+  // (arc endpoints etc.) draw the symbol only, so placed points don't spam
+  // chips.
+  _drawSnapGlyph(ctx, x, y, kind, withLabel) {
+    const col = { endpoint: '#1a7f37', midpoint: '#0e8385', center: '#b35900', edge: '#d23c2e', intersection: '#9c27b0' }[kind] || '#475569';
+    const name = { endpoint: 'Endpoint', midpoint: 'Midpoint', center: 'Center', edge: 'On Line', intersection: 'Intersection' }[kind] || kind;
+    ctx.lineWidth = 1.8;
+    ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = col;
-    ctx.lineWidth = 2;
     ctx.beginPath();
-    if (kind === 'endpoint') {
-      ctx.rect(x - 5, y - 5, 10, 10);
+    if (kind === 'endpoint') { // the small box
+      ctx.rect(x - 4.5, y - 4.5, 9, 9);
     } else if (kind === 'midpoint') {
-      ctx.moveTo(x, y - 6); ctx.lineTo(x + 6, y + 5); ctx.lineTo(x - 6, y + 5); ctx.closePath();
+      ctx.moveTo(x, y - 5.5); ctx.lineTo(x + 6, y + 4.5); ctx.lineTo(x - 6, y + 4.5); ctx.closePath();
     } else if (kind === 'center') {
-      ctx.arc(x, y, 6, 0, Math.PI * 2);
-    } else if (kind === 'intersection') { // × — where two edges cross
-      ctx.moveTo(x - 5, y - 5); ctx.lineTo(x + 5, y + 5);
-      ctx.moveTo(x + 5, y - 5); ctx.lineTo(x - 5, y + 5);
+      ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+    } else if (kind === 'intersection') { // × — two strokes through a filled box
+      ctx.rect(x - 5, y - 5, 10, 10);
+      ctx.fill(); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4);
+      ctx.moveTo(x + 4, y - 4); ctx.lineTo(x - 4, y + 4);
+      ctx.stroke();
     } else { // edge: nearest-on-line — a small diamond
-      ctx.moveTo(x, y - 5); ctx.lineTo(x + 5, y); ctx.lineTo(x, y + 5); ctx.lineTo(x - 5, y); ctx.closePath();
+      ctx.moveTo(x, y - 5.5); ctx.lineTo(x + 5.5, y); ctx.lineTo(x, y + 5.5); ctx.lineTo(x - 5.5, y); ctx.closePath();
     }
+    ctx.fill();
     ctx.stroke();
+    if (withLabel) {
+      const t = ctx.measureText(name);
+      const bx = x + 10, by = y - 27, bw = t.width + 12, bh = 19;
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 4); else ctx.rect(bx, by, bw, bh);
+      ctx.fillStyle = 'rgba(255,255,255,0.94)';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = col;
+      ctx.fillText(name, bx + 6, by + 13.5);
+    }
   }
   hideSnapDot() { this.snapDot.visible = false; this._lastSnap = null; }
   /** Tool-placed point markers: [{p, kind}] — squares at the arc's placed
@@ -2319,7 +2343,7 @@ class Viewport {
       const s = this.toScreen(mk.p);
       if (isFinite(s.x) && isFinite(s.y)) this.hudGlyphs.push({ sx: s.x, sy: s.y, kind: mk.kind || 'endpoint' });
     }
-    for (const g of this.hudGlyphs) this._drawSnapGlyph(ctx, g.sx, g.sy, g.kind);
+    for (const g of this.hudGlyphs) this._drawSnapGlyph(ctx, g.sx, g.sy, g.kind, g.label);
     this.hudGlyphs = [];
     // persistent labels: re-project the world anchor each frame so they stay
     // visible while the pointer rests and follow the camera
