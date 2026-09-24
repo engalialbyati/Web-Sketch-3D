@@ -2741,6 +2741,10 @@ class App {
     this._initSnapBar();
     // BIM element architecture: unified per-element Groups + catalog mapping
     this._tabHeld = false;      // Tab-held sub-element query mode
+    this._tabDownAt = null;     // Tab tap-vs-hold discrimination
+    this.perpSnapEnabled = true; // perpendicular inference (Tab toggles)
+    try { this.perpSnapEnabled = localStorage.getItem('websketch3d.perpSnap') !== '0'
+      && localStorage.getItem('websketch3d.perpSnap') !== ''; } catch (e) { }
     this._eip = null;           // active EditInPlace session (edit-inplace.js)
     // element registry + persistent store land with their own modules —
     // guarded so the app boots before/without them (no behavior change)
@@ -5609,19 +5613,33 @@ class App {
       }
       // Tab (held) arms the sub-element query mode: hovering an element
       // raycasts down to individual faces/edges with their measurements.
-      // Keyup releases it; focus never leaves the canvas.
+      // A SHORT tap instead toggles the perpendicular inference (keyup
+      // decides: < 250 ms = tap, longer = the held query). Focus never
+      // leaves the canvas.
       if (k === 'Tab') {
         ev.preventDefault();
         this._tabHeld = true;
+        this._tabDownAt = Date.now();
         return;
       }
       // tool shortcuts — scoped to the active mode's ribbon
       const t = this._toolForKey(k === ' ' ? 'space' : k.toLowerCase());
       if (t) { ev.preventDefault(); this.setTool(t); return; }
-      if (k.toLowerCase() === 'z' && !ev.ctrlKey && this.mode === 'free') { ev.preventDefault(); this.setTool('zoom'); return; }
+      if (k.toLowerCase() === 'z' && !ev.ctrlKey && !ev.metaKey && this.mode === 'free') { ev.preventDefault(); this.setTool('zoom'); return; }
     });
     window.addEventListener('keyup', (ev) => {
-      if (ev.key === 'Tab') this._tabHeld = false;
+      if (ev.key === 'Tab') {
+        this._tabHeld = false;
+        if (this._tabDownAt && Date.now() - this._tabDownAt < 250) {
+          this._tabDownAt = null;
+          this.perpSnapEnabled = !this.perpSnapEnabled;
+          try { localStorage.setItem('websketch3d.perpSnap', this.perpSnapEnabled ? '1' : ''); } catch (e) { }
+          if (this._rebarSelPid == null) this.setStatus(''); // clear any stale hint
+          this.toast(this.perpSnapEnabled
+            ? 'Perpendicular snap: ON — drawing near 90° to an edge locks to it (Tab toggles)'
+            : 'Perpendicular snap: OFF (Tab toggles it back on)');
+        }
+      }
     });
   }
 
@@ -6685,29 +6703,46 @@ class App {
     // 90° to a 45° edge — the leg locks perpendicular automatically).
     // Explicit axis locks and real snap points (endpoint / midpoint /
     // intersection ...) already returned final intents and stand aside.
-    if (anchor && !locks.size && !inf.axisSnapLine
+    // Tab toggles the whole feature off.
+    if (anchor && this.perpSnapEnabled !== false && !locks.size && !inf.axisSnapLine
       && (inf.kind === 'axis' || inf.kind === 'edge' || inf.kind === 'face'
         || inf.kind === 'ground' || inf.kind === 'free' || inf.kind === 'perpendicular')) {
       const d = G.sub(inf.p, anchor);
       const D = G.len(d);
       if (D > 0.12 && this._snapEdgeDirs && this._snapEdgeDirs.length) {
         const dx = d.x / D, dy = d.y / D, dz = d.z / D;
-        let bestE = null, bestC = 0.14; // |cos| < 0.14 ≈ within 8° of 90°
+        // candidates within ~8° of 90° IN 3D, closest first — a vertical
+        // edge is 3D-perpendicular to EVERY horizontal draw and used to win
+        // instantly, firing the snap with the mouse nowhere near 90°
+        const cands = [];
         for (const ed of this._snapEdgeDirs) {
           const c = Math.abs(dx * ed.u.x + dy * ed.u.y + dz * ed.u.z);
-          if (c < bestC) { bestC = c; bestE = ed; }
+          if (c < 0.14) cands.push({ c, ed });
         }
-        if (bestE) {
+        cands.sort((a, b) => a.c - b.c);
+        // DEAD-CONSTRAINT gate: an edge NORMAL to the drawing plane can
+        // never correct the drawn direction — a vertical edge against a
+        // horizontal draw is "perpendicular" to every angle and used to
+        // fire the snap with the mouse nowhere near 90°. Only edges with
+        // a real in-plane component constrain anything.
+        let pn = G.v(0, 0, 1); // the horizontal sketch plane (ground default)
+        if (inf.kind === 'face' && inf.face != null) {
+          const ff = this.model.faces.get(inf.face);
+          if (ff) { const nn = G.loopNormal(this.model.pts(ff.loop)); if (!G.isZero(nn)) pn = nn; }
+        }
+        for (const { ed } of cands) {
+          if (Math.abs(ed.u.x * pn.x + ed.u.y * pn.y + ed.u.z * pn.z) > 0.95) continue; // dead in this plane
           // strip the edge-direction component: the residual is exactly ⊥
-          const dot = d.x * bestE.u.x + d.y * bestE.u.y + d.z * bestE.u.z;
-          const C = G.v(inf.p.x - bestE.u.x * dot, inf.p.y - bestE.u.y * dot, inf.p.z - bestE.u.z * dot);
+          const dot = d.x * ed.u.x + d.y * ed.u.y + d.z * ed.u.z;
+          const C = G.v(inf.p.x - ed.u.x * dot, inf.p.y - ed.u.y * dot, inf.p.z - ed.u.z * dot);
           if (G.len(G.sub(C, anchor)) > 0.08) {
             inf.p = C;
             inf.kind = 'perpendicular';
             inf.label = 'Perpendicular';
             inf.axis = null;
-            inf.edge = bestE.id;
+            inf.edge = ed.id;
           }
+          break;
         }
       }
     }
@@ -6841,7 +6876,8 @@ class App {
           const cm = model.curves.get(e.curveId);
           dirOk = cm && (cm.type === 'line' || cm.type === 'poly');
         }
-        if (dirOk && G.dist(a, b) >= 0.15) edirs.push({ u: G.norm(G.sub(b, a)), id: e.id, curve: e.curveId || 0 });
+        if (dirOk && G.dist(a, b) >= 0.15)
+          edirs.push({ u: G.norm(G.sub(b, a)), id: e.id, curve: e.curveId || 0, mid: G.mul(G.add(a, b), 0.5) });
       }
       this._snapEdgeDirs = edirs;
       this._snapCache = cands;
