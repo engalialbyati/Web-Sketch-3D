@@ -1006,11 +1006,17 @@ class RectTool extends Tool {
     const app = this.app;
     const loop = this._build(a, b);
     if (G.loopArea(loop) < 1e-9) { app.toast('Rectangle is flat'); return; }
-    // WIRES ONLY: a rectangle is four drawn edges; the face is created
-    // explicitly (select the edges → right-click → Create Face). The loop is
-    // closed with a repeated first point — an open polyline would commit
-    // only three sides
-    app.run('rectangle', m => m.addPolyline(loop.concat([loop[0]])));
+    // WIRES ONLY by default: a rectangle is four drawn edges; in FREE SPACE
+    // the face is created explicitly (select the edges → right-click →
+    // Create Face). The loop is closed with a repeated first point — an
+    // open polyline would commit only three sides
+    app.run('rectangle', m => {
+      m.addPolyline(loop.concat([loop[0]]));
+      // FACE DIVISION: a rectangle drawn ON a face splits that face — the
+      // rectangle becomes its own face and the host keeps the remainder
+      const r = m.divideFaceWithLoop(loop);
+      if (r === 'punch' || r === 'split') app.setStatus('Face divided — the rectangle is its own face now');
+    });
     this.activate();
     this.status();
   }
@@ -1145,8 +1151,11 @@ class CircleTool extends Tool {
       pts.push(G.add(G.add(this.center, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
     }
     app.run(this.polygon ? 'polygon' : 'circle', m => {
-      // WIRES ONLY — the face is created explicitly via Create Face
+      // WIRES ONLY in free space — the face is created explicitly via
+      // Create Face; drawn ON a face the closed loop DIVIDES it (the
+      // circle/polygon becomes its own face, the host keeps the remainder)
       m.addPolyline(pts, { type: this.polygon ? 'polygon' : 'circle', center: G.clone(this.center), radius: r, normal: G.clone(this.plane.n), sides: this.sides });
+      m.divideFaceWithLoop(pts.slice(0, this.sides)); // drop the closing repeat
     });
     this.activate();
     this.status();

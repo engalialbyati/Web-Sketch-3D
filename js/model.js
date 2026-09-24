@@ -1425,6 +1425,29 @@ class Model {
     if (this.splitFaceWithRing(face)) return 'split';
     return null;
   }
+  /** Divide a face with a drawn closed loop (the CAD "split face"): create
+   *  the loop's face and let punchOrSplit partition the coplanar host — a
+   *  loop strictly inside the host PUNCHES a hole in it (two faces: the
+   *  loop's own + the holed remainder), a boundary-touching loop SPLITS it,
+   *  an overlapping loop partitions both into minimal cells. A loop with no
+   *  coplanar host stays WIRES ONLY (the no-auto-faces contract holds —
+   *  faces appear exactly when they interact with a face). Returns
+   *  'punch' | 'split' | null. */
+  divideFaceWithLoop(pts) {
+    if (!pts || pts.length < 3) return null;
+    const f = this.addFaceFromRings(pts.map(p => G.clone(p)));
+    if (!f) return null;
+    const r = this.punchOrSplit(f);
+    if (!r) {
+      // nothing to divide: drop the face again, keep the drawn wire
+      const loop = [...f.loop];
+      this.faces.delete(f.id);
+      this.reapRingEdges(loop);
+      return null;
+    }
+    this.version++;
+    return r;
+  }
   // Planar arrangement: a drawn shape OVERLAPPING coplanar faces (edges
   // crossing in several runs — e.g. two crossing rectangles) is partitioned
   // into the minimal selectable cells of the shared edge graph. The
