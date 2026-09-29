@@ -254,5 +254,14 @@
 
   window.SolidOps = {
     OPS, RESULT_NAMES, solidReport, groupFaceIds, extractSoup, run,
+    /** Fuse an arbitrary triangle soup — an imported flat-shaded mesh, an
+     *  IFC reference triangulation — into clean polygon faces gathered in a
+     *  NEW group (the importer payoff of the fuse pass). triAttrs
+     *  (per-triangle {color, alpha}) survive as face attributes. */
+    facesFromSoup(model, soup, name) {
+      const fused = SoupFuse.fuse(soup);
+      const g = buildResultGroup(model, name || 'Imported mesh', fused);
+      return g ? { gid: g.id, name: g.name, faces: fused.length } : null;
+    },
   };
 })();

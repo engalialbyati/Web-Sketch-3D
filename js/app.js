@@ -173,6 +173,12 @@ const ICONS = {
   ellipse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path d="M12 12h9" opacity=".5"/></svg>',
   revolve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 12V7m0 5h5" opacity=".6"/><rect x="13" y="10" width="7" height="4" rx="1"/></svg>',
   followme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 16c4 0 6-8 10-8 3.5 0 5 4 8 4"/><path d="M3 16l2.5-3M3 16l3.6 1.2M21 12l-3-1.5M21 12l-2.6 2.4"/></svg>',
+  solidunion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>',
+  solidsubtract: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" stroke-dasharray="2 2"/></svg>',
+  solidtrim: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><path d="M9 2v20" stroke-dasharray="2 2"/></svg>',
+  solidintersect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>',
+  solidsplit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/><path d="M12 6v12" stroke-dasharray="2 2"/></svg>',
+  solidshell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" stroke-dasharray="2 2"/></svg>',
 };
 
 // command aliases contributed by SDK features (command -> tool id)
@@ -341,6 +347,7 @@ const RIBBON_TABS = {
   model: { label: 'Model', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Create', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
+    { title: 'Solids', tools: ['solid-union', 'solid-subtract', 'solid-trim', 'solid-intersect', 'solid-split', 'solid-shell'] },
     { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array'] },
     { title: 'Tools', tools: ['paint', 'eraser'] },
   ] },
@@ -4772,6 +4779,11 @@ class App {
           body.appendChild(lvSel);
           continue;
         }
+        if (id.startsWith('solid-')) {
+          const op = id.slice('solid-'.length);
+          mk(ICONS[id.replace('-', '')] || ICONS.union, `Solid Tools: ${op} — two solid groups (last picked cuts)`, '', '{}', () => this.runSolidOp(op));
+          continue;
+        }
         const t = byId.get(id);
         if (!t) continue;
         const key = t.key ? ` (${t.key === 'Space' ? 'Space' : t.key})` : '';
@@ -4894,6 +4906,7 @@ class App {
         ['Push/Pull', 'toolPushpull', 'P'], ['Offset', 'toolOffset', 'F'],
         ['Scripted Element…', 'openScript', ''],
         ['Materials…', 'materialsDlg', ''],
+        ['Convert Mesh to Faces…', 'meshToFacesDlg', ''],
         ['Render with Blender (day)', 'renderDay', ''],
         ['Render with Blender (night)', 'renderNight', ''],
         ['Import Survey CSV…', 'surveyCsv', ''],
@@ -5105,6 +5118,7 @@ class App {
       solidShell: () => A.runSolidOp('shell'),
       sectionPlanesDlg: () => { if (window.SectionPlanesFeature) SectionPlanesFeature.sectionDialog(A); },
       materialsDlg: () => { if (window.MaterialsFeature) MaterialsFeature.materialsDialog(A); },
+      meshToFacesDlg: () => { if (window.MeshToFaces) MeshToFaces.dialog(A); },
       renderDay: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, false); },
       renderNight: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, true); },
       surveyCsv: () => { if (window.RenderFeature) RenderFeature.importSurveyCsvFile ? RenderFeature.importSurveyCsvFile(A) : A.toast('Use Tools ▸ Import Survey CSV', true); },
@@ -7584,12 +7598,39 @@ class App {
     }
     for (const gid of [target, cutter]) {
       const rep = SolidOps.solidReport(this.model, gid);
-      if (!rep.ok) {
+      if (!rep.ok && !/parametric/.test(rep.reason || '')) {
         this.toast(`"${(this.model.groups.get(gid) || {}).name || 'group'}": ${rep.reason}`, true);
         return;
       }
     }
+    // CONVERT-WITH-WARNING: a boolean on parametric elements detaches them
+    // first (fixed geometry survives, Entity Info parameters and schedules
+    // do not) — the no-detach guard becomes an explicit, informed consent.
+    const bimIds = new Set();
+    for (const gid of [target, cutter])
+      for (const fid of SolidOps.groupFaceIds(this.model, gid)) {
+        const f = this.model.faces.get(fid);
+        const eid = f && f.userData && f.userData.bimEntityId;
+        if (eid != null) bimIds.add(eid);
+      }
+    if (bimIds.size) {
+      const names = [...bimIds].map(id => { const e = this.bim.getEntityById(id); return e ? `${e.type} ${e.id}` : id; });
+      this.dialog('Convert parametric elements?', `<div>
+        <p style="margin-top:0">${op.toUpperCase()} touches <b>${names.join('</b>, <b>')}</b>.</p>
+        <p>The result becomes <b>fixed geometry</b>: Entity Info parameters, hosted
+        relationships and schedules for ${bimIds.size > 1 ? 'these elements' : 'this element'} are
+        lost (the faces survive as a plain solid group). This cannot be undone
+        by editing values later — only Ctrl+Z restores the elements.</p>
+        <p class="dim">The alternative is Edit In Place for freeform edits that keep parameters.</p>
+      </div>`, [['Convert & Run', () => this._execSolidOp(op, target, cutter, kernel, [...bimIds])], ['Cancel', null]]);
+      return;
+    }
+    this._execSolidOp(op, target, cutter, kernel, []);
+  }
+
+  _execSolidOp(op, target, cutter, kernel, detachEntityIds) {
     const res = this.run('solid ' + op, m => {
+      for (const id of detachEntityIds) { try { this.bim.detach(id); } catch (e) { console.warn('[solid] detach failed', id, e); } }
       const r = SolidOps.run(m, op, target, cutter, kernel);
       if (!r.ok) throw new Error(r.error || 'operation failed');
       return r;

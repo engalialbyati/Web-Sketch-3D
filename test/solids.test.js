@@ -150,6 +150,36 @@ module.exports = h => {
     eq(greens, 6, 'six green');
   });
 
+  test('facesFromSoup: a flat-shaded box soup collapses to 6 clean faces (the importer payoff)', () => {
+    const m = fresh();
+    // unit box, every face split into 8 triangles through edge midpoints —
+    // the flat-shaded-import shape: 48 triangles, 8 vertices welded
+    const c = [[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]];
+    const P = c.map(([x,y,z]) => ({ x, y, z }));
+    const idx = p => P.push({ x: p[0], y: p[1], z: p[2] }) - 1;
+    const midOf = (a, b) => idx([(c[a][0]+c[b][0])/2, (c[a][1]+c[b][1])/2, (c[a][2]+c[b][2])/2]);
+    const triangles = [];
+    const mids = new Map();
+    const EM = (a, b) => { const k = a < b ? a+':'+b : b+':'+a; if (!mids.has(k)) mids.set(k, midOf(a, b)); return mids.get(k); };
+    for (const q of [[0,3,2,1],[4,5,6,7],[0,1,5,4],[2,3,7,6],[1,2,6,5],[0,4,7,3]]) {
+      const a = q[0], b = q[1], cc = q[2], d = q[3];
+      const ab = EM(a,b), bc = EM(b,cc), cd = EM(cc,d), da = EM(d,a);
+      // diagonal fan (a→cc) visiting EVERY perimeter vertex: 6 triangles per
+      // quad; each edge midpoint becomes a collinear vertex that must drop
+      triangles.push([a,ab,b],[b,bc,cc],[cc,cd,d],[d,da,a],[a,b,cc],[a,cc,d]);
+    }
+    const soup = { positions: P, triangles, triAttrs: triangles.map(() => ({ color: '#aaccee', alpha: 1 })) };
+    const out = SolidOps.facesFromSoup(m, soup, 'Imported box');
+    ok(out, 'conversion produced a group');
+    eq(out.faces, 6, '36 midpoint-split triangles -> 6 clean faces');
+    const faceIds = SolidOps.groupFaceIds(m, out.gid);
+    eq(faceIds.length, 6, 'six kernel faces in the group');
+    const rep = SolidOps.solidReport(m, out.gid);
+    ok(rep.ok, 'watertight — Make Full / Solid Tools can take it');
+    near(rep.volume, 1, 1e-9, 'unit box volume');
+    ok(m.validate().ok, 'model valid');
+  });
+
   // ---------------------------------------------------------------------
   // Real-kernel integration: Manifold (the same WASM build the app vendors)
   // driving SolidOps.run end to end with exact analytic volumes.

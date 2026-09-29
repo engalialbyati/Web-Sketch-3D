@@ -804,4 +804,18 @@ bar: `union` / `subtract` / `trim` / `intersect` / `split` / `shell`).
   boundary tracing — anything irregular falls back to raw triangles, never
   losing geometry), colors survive per-face, and the result lands watertight
   with its volume in Entity Info.
+- The six tools live on the **Model ribbon (Solids panel)** as well as the
+  Tools menu, the right-click menu, and the command bar.
+- **Booleans on BIM elements run convert-with-warning**: the no-detach
+  guard still refuses silently — but running a solid tool on a selection
+  that touches parametric elements opens an explicit consent dialog
+  (what is lost, what survives, the Edit In Place alternative). *Convert &
+  Run* detaches the elements (geometry survives as fixed faces, parameters
+  and schedules do not) and proceeds; Ctrl+Z still restores everything.
+- The same fuse pass powers **Convert Mesh to Faces…** (Tools menu): a
+  placed BlenderKit import — a flat-shaded building arriving as thousands
+  of coplanar triangles — becomes real kernel faces in a named group
+  (36 midpoint-split triangles → 6 clean quads in the regression test),
+  selectable, paintable, booleanable. The foreign asset stays until you
+  delete it.
 
