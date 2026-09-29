@@ -1,7 +1,7 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser (and desktop)
 
 [![release](https://img.shields.io/badge/release-v0.8.0%20%22Reinforcement%20Detailing%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.8.0)
-[![tests](https://img.shields.io/badge/tests-502%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-523%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -545,7 +545,7 @@ area / 1e-5 length are flagged), unwelded duplicate segments, and a
 V-E+F = 2(S-G); odd or negative characteristics are reported with the
 offending face IDs. Every violation message names entity IDs.
 
-The headless suite (`npm test`, 350 tests) covers the regression flows: L-push
+The headless suite (`npm test`, 523 tests) covers the regression flows: L-push
 cavity culling with exact volumes, four-wall room generation, cross-mode
 detachment (dirty-tracking), hosted door cuts with exact volume and
 watertightness, sketch validation, the draw-primitive geometry, layers and
@@ -658,7 +658,7 @@ mode's ribbon (L = Line in Free, Wall in Precise).
 npm test          # or: node test/run.js
 ```
 
-36 tests cover the model layer: vertex/edge deduplication, face creation,
+62 tests cover the model layer: vertex/edge deduplication, face creation,
 edge splits (including wrap-around cuts), auto-facing, push/pull (box,
 incremental re-push, collapse to zero, inward carve, through-punch with exact
 analytic volumes), face splitting (straddle, holed hosts, pushed hosts, hole
@@ -739,11 +739,37 @@ delegates).
   across its edge, or touching its boundary (an L in a corner trims the host
   and its pull extends the box walls — one watertight solid, no internal
   faces, no coplanar twin quads). Pushing a protrusion into a *separate*
-  solid still overlaps it — no general boolean union yet, and through-punching
-  isn't applied on incremental re-pushes (only on the initial push)
+  solid still overlaps it — use the Solid Tools for cross-solid unions —
+  and through-punching isn't applied on incremental re-pushes (only on the
+  initial push)
 - Grouped geometry is an organizational layer, not an isolation boundary:
   shapes drawn on a grouped face punch/split/push through the group like any
   other face (SketchUp isolates groups fully — a deliberate divergence so wall
   windows always connect)
-- No components/tags, Follow Me, solid-tool booleans, or guides — see
+- No components/tags or guides — see
   Help ▸ SketchUp Feature List in the app for the full planned matrix
+
+## Solid Tools (boolean operations)
+
+All six SketchUp solid operations run on **solid groups** (watertight — the
+Make Full check): **Union, Subtract, Trim, Intersect, Split, Outer Shell**
+(Tools ▸ Solid Tools, the right-click menu on a solid group, or the command
+bar: `union` / `subtract` / `trim` / `intersect` / `split` / `shell`).
+
+- The arithmetic is **Manifold** (Apache-2.0, the boolean kernel of OpenSCAD
+  and Blender), vendored as a ~530 KB WASM module and lazy-loaded on first
+  use — robust on the coincident faces and shared edges real models are full
+  of. It needs the app served over http (or the desktop build); from a
+  double-clicked `file://` page the tools explain and step aside.
+- The result is a fresh group of **fixed geometry** (no parameters), exactly
+  like Convert Faces/Edge to Element: inputs leave, one undo step restores
+  them. Subtract deletes the cutter; Trim keeps it; Split returns the three
+  pieces; Outer Shell drops inner voids. Selection order decides who cuts
+  whom — the **last**-picked group is the cutter (or right-click the cutter
+  and the menu names the target).
+- The kernel's triangle output is fused back into clean polygon faces with
+  holes (`js/soup-fuse.js`: plane bucketing, union-find over shared edges,
+  boundary tracing — anything irregular falls back to raw triangles, never
+  losing geometry), colors survive per-face, and the result lands watertight
+  with its volume in Entity Info.
+

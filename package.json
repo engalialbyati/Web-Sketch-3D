@@ -12,6 +12,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
+    "manifold-3d": "^3.5.4",
     "three-mesh-bvh": "^0.5.6"
   },
   "devDependencies": {

@@ -47,7 +47,7 @@ const FEATURES = [
     ['Erase + coplanar face healing', 'yes'],
     ['Paint Bucket (materials, Alt = sample)', 'yes'],
     ['Follow Me (sweep along path)', 'no'],
-    ['Intersect Faces / boolean Solid Tools', 'no'],
+    ['Intersect Faces / boolean Solid Tools', 'Solid Tools: yes (Manifold kernel)'],
     ['Flip Along axis', 'no'],
   ]],
   ['Selection & editing', [
@@ -4888,6 +4888,9 @@ class App {
         ['Rotate', 'toolRotate', 'Q'], ['Scale', 'toolScale', 'S'],
         ['Push/Pull', 'toolPushpull', 'P'], ['Offset', 'toolOffset', 'F'],
         ['Scripted Element…', 'openScript', ''],
+        ['Union (Solids)', 'solidUnion', ''], ['Subtract (Solids)', 'solidSubtract', ''],
+        ['Trim (Solids)', 'solidTrim', ''], ['Intersect (Solids)', 'solidIntersect', ''],
+        ['Split (Solids)', 'solidSplit', ''], ['Outer Shell (Solids)', 'solidShell', ''],
         ['Resize Wall', 'toolResize', 'W'],
         ['Tape Measure', 'toolTape', 'T'], ['Orbit', 'toolOrbit', 'O'], ['Pan', 'toolPan', 'H'],
       ]],
@@ -5085,6 +5088,12 @@ class App {
       demor5: () => A.loadRevitTestBuilding(),
       demomnl66: () => A.loadMnl66Demo(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
+      solidUnion: () => A.runSolidOp('union'),
+      solidSubtract: () => A.runSolidOp('subtract'),
+      solidTrim: () => A.runSolidOp('trim'),
+      solidIntersect: () => A.runSolidOp('intersect'),
+      solidSplit: () => A.runSolidOp('split'),
+      solidShell: () => A.runSolidOp('shell'),
       save: () => A.saveFile(),
       // hand the authoring spec to an AI: copy to clipboard, save the .md
       // next to the models, or download it as a last resort
@@ -5667,6 +5676,17 @@ class App {
         const ent = this.model.groupEntities(pick.group);
         if (ent.faces.size && this.model.shellOpenEdges([...ent.faces]) === 0)
           items.push(['Make Full (solid)', () => this.makeSolid(pick.group, true)]);
+      }
+      // Solid Tools: the clicked group cuts the OTHER selected solid
+      if (g && g.solid) {
+        const other = this.selectedSolidGids().find(gid => gid !== pick.group
+          && SolidOps.solidReport(this.model, gid).ok);
+        if (other != null) {
+          const oname = (this.model.groups.get(other) || {}).name || 'selection';
+          items.push([`Subtract — this cuts "${oname}"`, () => this.runSolidOp('subtract', { target: other, cutter: pick.group })]);
+          items.push([`Trim — this trims "${oname}"`, () => this.runSolidOp('trim', { target: other, cutter: pick.group })]);
+          items.push([`Union with "${oname}"`, () => this.runSolidOp('union', { target: other, cutter: pick.group })]);
+        }
       }
       items.push(['Ungroup', () => { this.selectGroup(pick.group); this.ungroupSelection(); }]);
       items.push(null);
@@ -7502,6 +7522,61 @@ class App {
     }
     this.run(solid ? 'make solid' : 'make hollow', () => { g.solid = solid; });
     this.toast(solid ? `Group "${g.name}" is now a solid (volume filled)` : `Group "${g.name}" set to hollow`);
+  }
+
+  // ------------------------------------------------------------ solid tools
+  /** Solid groups in selection pick order (Set iteration = click order). */
+  selectedSolidGids() {
+    const out = [];
+    for (const fid of this.sel.faces) {
+      const f = this.model.faces.get(fid);
+      if (f && f.gid && !out.includes(f.gid)) out.push(f.gid);
+    }
+    return out.filter(gid => this.model.groups.get(gid));
+  }
+
+  /**
+   * Run one of SolidOps.OPS on two solid groups. Without explicit
+   * {target, cutter} the FIRST-picked group is the target and the LAST-
+   * picked is the cutter (Ctrl+click adds the cutter, SketchUp's flow).
+   * One transaction = one undo step; result groups take the selection.
+   */
+  async runSolidOp(op, opts = {}) {
+    if (!window.SolidOps) { this.toast('Solid Tools unavailable in this build', true); return; }
+    const kernel = await SolidKernel.get();
+    if (!kernel) { this.toast(SolidKernel.FAIL_REASON, true); return; }
+
+    const solids = this.selectedSolidGids();
+    const target = opts.target != null ? opts.target : solids[0];
+    const cutter = opts.cutter != null ? opts.cutter : solids[solids.length - 1];
+    if (target == null || cutter == null || target === cutter
+      || !this.model.groups.has(target) || !this.model.groups.has(cutter)) {
+      this.toast('Select two solid groups first (a group becomes solid via Make Full / Entity Info)', true);
+      return;
+    }
+    for (const gid of [target, cutter]) {
+      const rep = SolidOps.solidReport(this.model, gid);
+      if (!rep.ok) {
+        this.toast(`"${(this.model.groups.get(gid) || {}).name || 'group'}": ${rep.reason}`, true);
+        return;
+      }
+    }
+    const res = this.run('solid ' + op, m => {
+      const r = SolidOps.run(m, op, target, cutter, kernel);
+      if (!r.ok) throw new Error(r.error || 'operation failed');
+      return r;
+    });
+    if (!res) return; // rolled back and toasted
+    const faces = new Set(), edges = new Set();
+    for (const rg of res.groups) {
+      const ent = this.model.groupEntities(rg.gid);
+      for (const id of ent.faces) faces.add(id);
+      for (const id of ent.edges) edges.add(id);
+    }
+    this.sel = { faces, edges };
+    this.onSelectionChanged();
+    const vols = res.groups.map(g => `${g.volume.toFixed(3)} m³`).join(' + ');
+    this.toast(`${SolidOps.RESULT_NAMES[op]}${res.groups.length > 1 ? ` (${res.groups.length} pieces)` : ''} — ${vols}`);
   }
 
   // ------------------------------------------------------------------ thicken
