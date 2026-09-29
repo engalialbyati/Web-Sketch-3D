@@ -34,6 +34,7 @@ class Model {
     this.groups = new Map();   // gid -> {id, name, solid}
     this.currentGid = 0;       // gid assigned to newly created geometry (group edit mode)
     this.sectionPlanes = [];   // live section cuts: {id, point, normal, enabled} — survives undo/save/load
+    this.materials = new Map(); // named material registry: id -> {id, name, color, alpha, texture}
     this.levels = [            // vertical levels (BIM); survives undo/save/load
       { id: 'lvl_1', name: 'Level 1', elevation: 0.0 },
       { id: 'lvl_2', name: 'Level 2', elevation: 3.0 },
