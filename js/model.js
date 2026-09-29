@@ -3751,6 +3751,7 @@ class Model {
       // looking down). Feeds the IFC writer's IfcMapConversion.
       geo: this.geo ? JSON.parse(JSON.stringify(this.geo)) : null,
       sec: (this.sectionPlanes || []).map(s => ({ id: s.id, enabled: s.enabled !== false, point: { ...s.point }, normal: { ...s.normal } })),
+      mats: [...((this.materials && this.materials.size) ? this.materials.values() : [])].map(mt => ({ id: mt.id, name: mt.name, color: mt.color || null, alpha: mt.alpha == null ? 1 : mt.alpha, texture: mt.texture ? { ...mt.texture } : null })),
       ann: (this.annotations || []).map(a => ({ ...a })),
       views: (this.views || []).map(v => ({ ...v })),
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
@@ -3767,7 +3768,7 @@ class Model {
       f: [...this.faces.values()].map(x => ({
         id: x.id, loop: [...x.loop], holes: (x.holes || []).map(h => [...h]), gid: x.gid || 0,
         userData: x.userData || null,
-        color: x.color, alpha: x.alpha, loose: !!x.loose,
+        color: x.color, alpha: x.alpha, loose: !!x.loose, matId: x.matId || null,
         layerId: x.layerId && x.layerId !== '0' ? x.layerId : null,
         extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
       })),
@@ -3812,6 +3813,7 @@ class Model {
     // georeference: legacy files without `geo` keep whatever is set (or none)
     this.geo = data.geo ? { ...data.geo } : (this.geo || null);
     this.sectionPlanes = Array.isArray(data.sec) ? data.sec.map(s => ({ id: s.id, enabled: s.enabled !== false, point: { ...s.point }, normal: { ...s.normal } })) : (this.sectionPlanes || []);
+    this.materials = new Map((data.mats || []).map(mt => [mt.id, { id: mt.id, name: mt.name, color: mt.color || null, alpha: mt.alpha == null ? 1 : mt.alpha, texture: mt.texture ? { ...mt.texture } : null }]));
     this.annotations = Array.isArray(data.ann) ? data.ann.map(a => ({ ...a })) : [];
     this.views = Array.isArray(data.views) ? data.views.map(v => ({ ...v })) : [];
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({

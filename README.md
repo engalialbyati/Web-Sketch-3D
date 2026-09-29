@@ -746,8 +746,40 @@ delegates).
   shapes drawn on a grouped face punch/split/push through the group like any
   other face (SketchUp isolates groups fully — a deliberate divergence so wall
   windows always connect)
-- No components/tags or guides — see
-  Help ▸ SketchUp Feature List in the app for the full planned matrix
+- No components (shared-definition instances) yet — groups remain the
+  organizational unit; see Help ▸ SketchUp Feature List in the app for the
+  full planned matrix
+
+## Section planes, walkthrough & navigation
+
+- **Section planes** (right-click a face ▸ Add Section Plane here, or View ▸
+  Section Planes…): live cuts with a red section fill, up to four planes,
+  enable/flip/delete in the dialog. Model state rides undo/autosave/files;
+  grid and selection overlays are never clipped.
+- **Walk & Look Around** (View ribbon ▸ Navigate): WASD/arrows at eye
+  height, drag to look, Shift runs, R/F up/down; Esc returns to orbit.
+- **3D mouse** (View ▸ Connect 3D Mouse): 3Dconnexion SpaceMouse over
+  WebHID — translate pans, rotate orbits, push zooms (Chromium/desktop).
+
+## Materials
+
+**Tools ▸ Materials…** — a named registry: paint faces with a material
+(identity, not just color), edit a row and every use re-stamps in one undo
+step, live per-material quantities (faces · m²), procedural textures at
+real-world size (brick / concrete / wood / tiles / grass / metal — planar
+projection per face), and the full **RAL Classic palette (213 colors)** as
+one-click materials.
+
+## Render with Blender & survey import
+
+- **Tools ▸ Render with Blender (day/night)**: the model goes out as glTF
+  with the current camera and the local bridge (`npm run bridge`) runs
+  headless Blender/EEVEE — the PNG comes back in a viewer with Save. Same
+  Blender discovery as the BlenderKit palette (`BLENDER_PATH`).
+- **Tools ▸ Import Survey CSV…**: total-station/GPS points (X,Y,Z[,desc])
+  mapped through the georeference base point (Edit ▸ Georeferencing) into
+  red station markers. Basemap tiles and DEM terrain are the planned next
+  step of the georeferencing roadmap.
 
 ## Solid Tools (boolean operations)
 

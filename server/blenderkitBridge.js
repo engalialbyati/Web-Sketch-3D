@@ -394,6 +394,71 @@ function convertUpload(buf) {
   return uploadInFlight.get(key);
 }
 
+// ---- photorealistic render: POST /api/render?name=model.gltf (+ camera JSON
+// in x-camera) -> runs headless Blender (EEVEE) on the glTF and returns PNG.
+// The camera (position/target/fov from the app's current view) and a sun are
+// set up by the embedded Python; night mode adds area lights instead.
+app.post('/api/render',
+  express.raw({ type: () => true, limit: '200mb' }),
+  (req, res) => {
+    const buf = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!buf || !buf.length) return fail(res, 400, 'empty body — POST the .gltf/.glb as the request body');
+    const night = req.query.night === '1';
+    let cam = {};
+    try { cam = JSON.parse(req.headers['x-camera'] || '{}'); } catch (e) { /* default camera */ }
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ws3d-render-'));
+    const inPath = path.join(tmp, 'scene' + (String(req.query.name || '').endsWith('.glb') ? '.glb' : '.gltf'));
+    const outPath = path.join(tmp, 'render.png');
+    fs.writeFileSync(inPath, buf);
+    const py = `
+import bpy, math
+bpy.ops.wm.read_factory_settings(use_empty=True)
+bpy.ops.import_scene.gltf(filepath=${JSON.stringify(inPath)})
+# glTF node already carries the Z-up -> Y-up rotation
+cam_data = bpy.data.cameras.new('Cam')
+cam = bpy.data.objects.new('Cam', cam_data)
+bpy.data.collections[0].objects.link(cam)
+cx, cy, cz = ${cam.px}, ${cam.py}, ${cam.pz}
+tx, ty, tz = ${cam.tx}, ${cam.ty}, ${cam.tz}
+cam.location = (cx, cz, -cy)
+d = bpy.ops.object
+direction = (tx - cx, tz - cz, -(ty - cy))
+rot_quat = direction.to_track_quat('-Z', 'Y')
+cam.rotation_euler = rot_quat.to_euler()
+cam_data.lens = ${Number(cam.fovmm) > 1 ? Number(cam.fovmm) : 50}
+bpy.context.scene.camera = cam
+bpy.context.scene.render.engine = 'BLENDER_EEVEE_NEXT' if hasattr(bpy.types, 'RenderEngine') and 'BLENDER_EEVEE_NEXT' in dir(bpy.types) else 'BLENDER_EEVEE'
+bpy.context.scene.render.resolution_x = ${Number(cam.w) || 1600}
+bpy.context.scene.render.resolution_y = ${Number(cam.h) || 900}
+bpy.context.scene.render.filepath = ${JSON.stringify(outPath)}
+bpy.context.scene.render.film_transparent = False
+if ${night ? 'True' : 'False'}:
+    for i, x in enumerate((-6, 6)):
+        l = bpy.data.lights.new('L%d' % i, 'AREA'); l.energy = 3000
+        lo = bpy.data.objects.new('L%d' % i, l); bpy.data.collections[0].objects.link(lo)
+        lo.location = (x, 8, 5); lo.rotation_euler = (math.radians(45), 0, math.radians(-30 if x < 0 else 30))
+else:
+    sun = bpy.data.lights.new('Sun', 'SUN'); sun.energy = 3.2
+    so = bpy.data.objects.new('Sun', sun); bpy.data.collections[0].objects.link(so)
+    so.rotation_euler = (math.radians(50), 0, math.radians(35))
+bpy.context.scene.world = bpy.data.worlds.new('W')
+bpy.context.scene.world.color = (0.75, 0.8, 0.88) if not ${night ? 'True' : 'False'} else (0.02, 0.03, 0.06)
+bpy.ops.render.render(write_still=True)
+`;
+    const child = spawn(resolveBlender(), ['-b', '--python-expr', py], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let err = '';
+    child.stderr.on('data', d => { err += d; });
+    const t = setTimeout(() => child.kill(), Number(process.env.BLENDER_TIMEOUT_MS) || 180000);
+    child.on('error', e => { clearTimeout(t); fail(res, 500, 'cannot start Blender: ' + e.message); });
+    child.on('close', code => {
+      clearTimeout(t);
+      if (code !== 0 || !fs.existsSync(outPath))
+        return fail(res, 500, 'Blender render failed (exit ' + code + ')' + (err ? ': ' + err.slice(-600) : ''));
+      res.writeHead(200, { 'Content-Type': 'image/png', 'x-render': 'ok' });
+      res.end(fs.readFileSync(outPath));
+    });
+  });
+
 app.post('/api/convert-upload',
   express.raw({ type: () => true, limit: `${UPLOAD_MAX_BYTES}` }),
   async (req, res) => {
