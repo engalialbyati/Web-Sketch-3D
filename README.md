@@ -1,7 +1,7 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser (and desktop)
 
-[![release](https://img.shields.io/badge/release-v0.7.0%20%22First%20Working%20Product%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0)
-[![tests](https://img.shields.io/badge/tests-350%20passing-brightgreen)]() 
+[![release](https://img.shields.io/badge/release-v0.8.0%20%22Reinforcement%20Detailing%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.8.0)
+[![tests](https://img.shields.io/badge/tests-502%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -25,13 +25,50 @@ models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
 
+### v0.8 — Reinforcement Detailing (MNL-66)
+
+v0.8 grows the modeler into a **reinforcement detailing tool**: the ACI
+Detailing Manual (MNL-66(20)) is implemented as live 3D rebar on the
+parametric elements, verified against the book's own drawings.
+
+- **Whole-element rebar cages**: select any face of a beam / column /
+  foundation / wall / floor and one dialog generates the full cage — beam
+  ties + top/bottom longitudinal rows (+ side skin bars; T/L beams clamp
+  the tie cage to the web), column cages, two-way footing meshes with
+  L-shaped column starters, slab meshes clipped to the slab's real regions
+  (holes split the bars), and ACI 318 seismic tie layouts. Geometry reads
+  the ENTITY's own B-Rep — trimmed, leveled, or imported elements included.
+- **MNL-66(20) phases 1–8**: wall reinforcement (WALL-100A…208), slab
+  corner steel and opening trim bars, beam far-side development at
+  supports (BM-104/204), column splices (COL-200/202), advanced
+  foundations (FND-109/150/161), slab-on-ground perimeter steel
+  (SOG-102/103/105). All **137 detail drawings** from the manual's DXFs are
+  parsed into a reference database with exact bar callouts, dimensions,
+  and geometry — the implementation is cross-checked against the book.
+- **Rebar render engine**: GPU-instanced solid bars (CSI-style), an X-ray
+  pass that shows steel through the concrete, a light display mode for
+  big models, and a Display Settings dialog (rebar color, element
+  transparency, depth handling).
+- **5-story MNL-66 demo** (File menu): a full RC apartment block — T/L
+  beams, strip/combined footings, shear walls, elevator shaft, circular
+  openings, record-only rebar — plus interactive **detailing guides**
+  (beam, column) rendered by the app's own engine.
+- **Drafting upgrades**: CAD-style osnap markers in every tool (filled
+  endpoint squares, midpoints, centers, intersections), perpendicular-
+  to-edge snap with a Tab toggle, axis-locked reference inference for
+  Line and Push/Pull, CAD split-face (a closed shape drawn on a face
+  divides it), and Trim that cuts pieces.
+- **Stability**: autosave never freezes on heavy models, wall openings
+  survive Rebuild-from-Parameters, and the suite grew to **502 passing
+  tests**.
+
 ### v0.7 — First Working Product
 
 v0.7 is the first end-user release, shipped as a Windows installer plus the
 web build. The headline additions:
 
-- **Desktop app**: `WebSketch3D-Setup-0.7.0.exe` on the
-  [release page](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0) —
+- **Desktop app**: `WebSketch3D-Setup-0.8.0.exe` on the
+  [release page](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.8.0) —
   a signed-free NSIS installer (choose folder, Desktop/Start-Menu shortcuts)
   wrapping the full app in an Electron window with the same
   localStorage/IndexedDB persistence as the web build.
@@ -122,8 +159,8 @@ windows — 325 live parametric elements in one click.
 ## Run it
 
 - **Windows installer (recommended)**: grab
-  `WebSketch3D-Setup-0.7.0.exe` from the
-  [v0.7.0 release](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.7.0)
+  `WebSketch3D-Setup-0.8.0.exe` from the
+  [v0.8.0 release](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.8.0)
   — installs a desktop app with Start-Menu/Desktop shortcuts.
 - **From source**: double-click `index.html` (works from `file://`), **or**
 - Serve it: `py -m http.server 8742` → open http://127.0.0.1:8742

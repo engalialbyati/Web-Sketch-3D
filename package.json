@@ -1,8 +1,8 @@
 {
   "name": "websketch3d",
   "private": true,
-  "version": "0.7.0",
-  "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app. First working product.",
+  "version": "0.8.0",
+  "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app with MNL-66 reinforcement detailing.",
   "scripts": {
     "test": "node test/run.js",
     "bridge": "node server/blenderkitBridge.js",
