@@ -33,6 +33,7 @@ class Model {
     this.curves = new Map();
     this.groups = new Map();   // gid -> {id, name, solid}
     this.currentGid = 0;       // gid assigned to newly created geometry (group edit mode)
+    this.sectionPlanes = [];   // live section cuts: {id, point, normal, enabled} — survives undo/save/load
     this.levels = [            // vertical levels (BIM); survives undo/save/load
       { id: 'lvl_1', name: 'Level 1', elevation: 0.0 },
       { id: 'lvl_2', name: 'Level 2', elevation: 3.0 },
@@ -3749,6 +3750,7 @@ class Model {
       // from project north to TRUE north (radians, positive = clockwise
       // looking down). Feeds the IFC writer's IfcMapConversion.
       geo: this.geo ? JSON.parse(JSON.stringify(this.geo)) : null,
+      sec: (this.sectionPlanes || []).map(s => ({ id: s.id, enabled: s.enabled !== false, point: { ...s.point }, normal: { ...s.normal } })),
       ann: (this.annotations || []).map(a => ({ ...a })),
       views: (this.views || []).map(v => ({ ...v })),
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
@@ -3809,6 +3811,7 @@ class Model {
     this.grids = data.grid ? data.grid.map(g => (typeof GridLine === 'function' ? GridLine.fromRecord(g) : null) || { ...g }) : (this.grids || []);
     // georeference: legacy files without `geo` keep whatever is set (or none)
     this.geo = data.geo ? { ...data.geo } : (this.geo || null);
+    this.sectionPlanes = Array.isArray(data.sec) ? data.sec.map(s => ({ id: s.id, enabled: s.enabled !== false, point: { ...s.point }, normal: { ...s.normal } })) : (this.sectionPlanes || []);
     this.annotations = Array.isArray(data.ann) ? data.ann.map(a => ({ ...a })) : [];
     this.views = Array.isArray(data.views) ? data.views.map(v => ({ ...v })) : [];
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({

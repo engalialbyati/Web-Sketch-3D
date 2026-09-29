@@ -210,6 +210,8 @@ const TOOL_DEFS = {
     { id: 'tape', label: 'Tape Measure', key: 'T' },
     { id: 'measurearea', label: 'Measure Area', key: '' }, // same tool as Precise (A is Arc here)
     'sep',
+    { id: 'walk', label: 'Walk', key: '' },
+    { id: 'lookaround', label: 'Look Around', key: '' },
     { id: 'orbit', label: 'Orbit', key: 'O' },
     { id: 'pan', label: 'Pan', key: 'H' },
   ],
@@ -365,7 +367,7 @@ const RIBBON_TABS = {
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Navigate', tools: ['orbit', 'pan', 'zoomext'] },
+    { title: 'Navigate', tools: ['orbit', 'pan', 'zoomext', 'walk', 'lookaround'] },
     { title: 'Palettes', tools: ['layers', 'browser'] },
   ] },
   manage: { label: 'Manage', groups: [
@@ -4862,6 +4864,9 @@ class App {
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
         ['Rebar: Light / Detailed', 'rebarlight', '', 'rebarLight'],
         ['Display Settings…', 'displaySettings'],
+        ['Section Planes…', 'sectionPlanesDlg'],
+        ['Walk', 'toolWalkNav'], ['Look Around', 'toolLookNav'],
+        ['Connect 3D Mouse…', 'connectSpaceMouse'],
         ['Performance HUD', 'togglePerfHud', '', 'perfHudOn'], '-',
         ['Face Style: Shaded', 'styleShaded', '', 'fs:shaded'],
         ['Face Style: Monochrome', 'styleMono', '', 'fs:monochrome'],
@@ -5094,6 +5099,13 @@ class App {
       solidIntersect: () => A.runSolidOp('intersect'),
       solidSplit: () => A.runSolidOp('split'),
       solidShell: () => A.runSolidOp('shell'),
+      sectionPlanesDlg: () => { if (window.SectionPlanesFeature) SectionPlanesFeature.sectionDialog(A); },
+      toolWalkNav: () => A.setTool('walk'),
+      toolLookNav: () => A.setTool('lookaround'),
+      connectSpaceMouse: () => {
+        if (window.SpaceMouseFeature) SpaceMouseFeature.connect(A);
+        else A.toast('3D mouse feature not loaded in this build', true);
+      },
       save: () => A.saveFile(),
       // hand the authoring spec to an AI: copy to clipboard, save the .md
       // next to the models, or download it as a last resort
@@ -5701,6 +5713,14 @@ class App {
       items.push(['Reverse Face', () => { this.run('reverse face', m => { const ff = m.faces.get(pick.face); if (ff) ff.loop.reverse(); }); }]);
       items.push(['Push/Pull', () => this.setTool('pushpull')]);
       items.push(['Resize Wall (W)', () => this.setTool('resize')]);
+      if (window.SectionPlanesFeature) items.push(['Add Section Plane here', () => {
+        const f = this.model.faces.get(pick.face);
+        if (!f) return;
+        const pts = this.model.pts(f.loop);
+        const n = G.loopNormal(pts);
+        if (G.isZero(n)) { this.toast('Cannot cut with a degenerate face', true); return; }
+        SectionPlanesFeature.addPlane(this, { ...pts[0] }, { ...n });
+      }]);
       items.push(null);
       items.push(['Erase Face', () => { this.run('erase face', m => m.deleteFace(pick.face)); }]);
     }

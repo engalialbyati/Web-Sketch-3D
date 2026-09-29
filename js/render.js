@@ -218,6 +218,12 @@ class Viewport {
       uMono: { value: 0.0 },
       fogNear: { value: 120 }, fogFar: { value: 460 },
       fogColor: { value: new THREE.Color(0xe8eef2) }, fogOn: { value: 1.0 },
+      // live section cuts: up to 4 planes (n·x + w < 0 is discarded). Kernel
+      // geometry is world-space baked, so `position` IS the world position.
+      uClip: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(0, 0, 1, 1e9)) },
+      uClipN: { value: 0 },
+      uSectionTint: { value: new THREE.Color(0xc0392b) },
+      uSectionOn: { value: 0.0 },
     };
     this.faceUniforms = uniforms;
     this.faceMat = new THREE.ShaderMaterial({
@@ -225,9 +231,9 @@ class Viewport {
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, // push faces back so edges drawn ON faces stay visible
       vertexShader: `
         attribute vec4 color;
-        varying vec3 vN; varying vec4 vC; varying float vDepth;
+        varying vec3 vN; varying vec4 vC; varying float vDepth; varying vec3 vPos;
         void main(){
-          vN = normal; vC = color;
+          vN = normal; vC = color; vPos = position;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           vDepth = -mv.z;
           gl_Position = projectionMatrix * mv;
@@ -235,12 +241,15 @@ class Viewport {
       fragmentShader: `
         uniform vec3 lightDir; uniform float uAlphaMul; uniform float uMono;
         uniform float fogNear; uniform float fogFar; uniform vec3 fogColor; uniform float fogOn;
-        varying vec3 vN; varying vec4 vC; varying float vDepth;
+        uniform vec4 uClip[4]; uniform int uClipN; uniform vec3 uSectionTint; uniform float uSectionOn;
+        varying vec3 vN; varying vec4 vC; varying float vDepth; varying vec3 vPos;
         void main(){
+          for (int i = 0; i < 4; i++) { if (i >= uClipN) break; if (dot(uClip[i].xyz, vPos) + uClip[i].w < 0.0) discard; }
           vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
           float diff = max(dot(n, lightDir), 0.0);
           float fill = max(dot(n, normalize(vec3(-lightDir.x, -lightDir.y, 0.35))), 0.0) * 0.22;
-          vec3 base = gl_FrontFacing ? vC.rgb : mix(vec3(0.60,0.66,0.74), vC.rgb, 0.22);
+          vec3 backTint = mix(vec3(0.60,0.66,0.74), uSectionTint.rgb, uSectionOn);
+          vec3 base = gl_FrontFacing ? vC.rgb : mix(backTint, vC.rgb, mix(0.22, 0.42, uSectionOn));
           base = mix(base, vec3(0.97,0.97,0.97), uMono);
           vec3 col = base * (0.60 + diff * 0.40 + fill);
           float f = clamp((vDepth - fogNear) / max(fogFar - fogNear, 0.001), 0.0, 1.0) * fogOn;
@@ -1656,6 +1665,76 @@ class Viewport {
       z: P.z + (t.z - P.z) * k,
     };
   }
+  // ----------------------------------------------------------- section planes
+  /** Live section cuts: stamp the clip uniforms on the custom face shader,
+   *  set native clippingPlanes on the built-in materials (edges, styled
+   *  edges, rebar solids), and draw the plane glyphs. UI overlays
+   *  (selection, hover, grid, sky) are never clipped. */
+  applySectionPlanes(planes) {
+    const act = (planes || []).filter(p => p && p.enabled !== false).slice(0, 4);
+    const V3 = (p) => new THREE.Vector3(p.normal.x, p.normal.y, p.normal.z).normalize();
+    const v4 = act.map(p => {
+      const n = V3(p);
+      return new THREE.Vector4(n.x, n.y, n.z, -n.dot(new THREE.Vector3(p.point.x, p.point.y, p.point.z)));
+    });
+    const mats = [this.faceMat, this.rebarMesh && this.rebarMesh.material].filter(Boolean);
+    for (const m of mats) {
+      for (let i = 0; i < 4; i++) {
+        const u = m.uniforms.uClip.value[i];
+        if (i < v4.length) u.copy(v4[i]); else u.set(0, 0, 1, 1e9);
+      }
+      m.uniforms.uClipN.value = v4.length;
+      m.uniforms.uSectionOn.value = v4.length ? 1.0 : 0.0;
+    }
+    const cp = v4.map(v => new THREE.Plane(new THREE.Vector3(v.x, v.y, v.z), v.w));
+    this.renderer.localClippingEnabled = cp.length > 0;
+    for (const m of [this.rebarSolidsMat, this.edgeLines && this.edgeLines.material].filter(Boolean))
+      m.clippingPlanes = cp;
+    for (const ch of (this.styledEdges ? this.styledEdges.children : []))
+      if (ch.material) ch.material.clippingPlanes = cp;
+    this._updateSectionVisuals(planes || []);
+  }
+
+  /** The translucent cut-plane glyphs (plane + border), sized to the model. */
+  _updateSectionVisuals(planes) {
+    if (!this._sectionGroup) {
+      this._sectionGroup = new THREE.Group();
+      this._sectionGroup.name = 'section-planes';
+      this.scene.add(this._sectionGroup);
+    }
+    while (this._sectionGroup.children.length) {
+      const c = this._sectionGroup.children.pop();
+      this._sectionGroup.remove(c);
+    }
+    const bb = this.app && this.app.model && this.app.model.vertices.size
+      ? this.app.model.bbox([...this.app.model.vertices.keys()]) : null;
+    const cx = bb ? (bb.min.x + bb.max.x) / 2 : 0, cy = bb ? (bb.min.y + bb.max.y) / 2 : 0;
+    const cz = bb ? (bb.min.z + bb.max.z) / 2 : 0;
+    let half = 10;
+    if (bb) half = Math.max(2, 1.2 * Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z) / 2);
+    for (const p of planes) {
+      const ln = Math.hypot(p.normal.x, p.normal.y, p.normal.z);
+      if (ln < 1e-9) continue;
+      const n = { x: p.normal.x / ln, y: p.normal.y / ln, z: p.normal.z / ln };
+      const g = new THREE.Group();
+      const quad = new THREE.Mesh(
+        new THREE.PlaneGeometry(half * 2, half * 2),
+        new THREE.MeshBasicMaterial({ color: p.enabled !== false ? 0xc0392b : 0x8a8a92, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false, fog: false }));
+      const border = new THREE.LineSegments(
+        new THREE.EdgesGeometry(quad.geometry),
+        new THREE.LineBasicMaterial({ color: p.enabled !== false ? 0xc0392b : 0x8a8a92, fog: false }));
+      g.add(quad, border);
+      g.position.set(p.point.x, p.point.y, p.point.z);
+      g.lookAt(p.point.x + n.x, p.point.y + n.y, p.point.z + n.z);
+      // keep the glyph centered on the model along its own plane
+      const along = { x: cx - p.point.x, y: cy - p.point.y, z: cz - p.point.z };
+      const d = along.x * n.x + along.y * n.y + along.z * n.z;
+      g.position.x -= n.x * d; g.position.y -= n.y * d; g.position.z -= n.z * d;
+      this._sectionGroup.add(g);
+    }
+    this.requestRender && this.requestRender();
+  }
+
   setStandardView(name) {
     const views = {
       iso: [-55, 28], top: [-90, 89.9], bottom: [-90, -89.9],
