@@ -804,6 +804,18 @@ slicing — no matter where it lands or what later edits touch it. Free
 drawn geometry still punches into assets the way it punches into walls
 (deliberate, so windows keep connecting).
 
+**The online catalogue** (same dialog, below the bundled sets) browses the
+IngeTrazo/Sweet Home 3D library published at ingetrazo.com — ~1,500 models
+of which the **925 CC BY 4.0 / CC0 entries** are shown (585 Free-Art-License
+models are copyleft and hidden, same call as the bundled trees). Search and
+category filters, live thumbnails, one click places the model through the
+same dual-path importer at its catalogue-declared real-world size. It needs
+the local bridge (`npm run bridge`) because the catalogue sends no CORS
+headers; the bridge caches index, thumbnails and model zips under
+`cache/library/`, so everything placed once is available offline. Author
+and license ride along: shown on the card, toasted at placement, and kept
+in the placed object's name.
+
 ## Render with Blender & survey import
 
 - **Tools ▸ Render with Blender (day/night)**: the model goes out as glTF

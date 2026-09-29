@@ -92,19 +92,24 @@
 
   /** Place a fetched component at (x, y). Returns a result descriptor. */
   function place(app, comp, x, y, opts = {}) {
-    const soup = buildSoup(comp);
-    if (!soup.triangles.length) return { ok: false, error: 'no triangles' };
-    if (opts.forceForeign) {
-      return placeForeign(app, comp, soup, x, y);
-    }
+    return placeSoup(app, buildSoup(comp), comp.name, x, y, opts);
+  }
+
+  /** Place any triangle soup (welded indices, per-tri color attrs) through
+   *  the dual path — the shared entry the imported models and the online
+   *  catalogue both use. Light models fuse into kernel geometry inside an
+   *  isolation scope (asset island), dense ones become foreign meshes. */
+  function placeSoup(app, soup, name, x, y, opts = {}) {
+    if (!soup || !soup.triangles || !soup.triangles.length) return { ok: false, error: 'no triangles' };
+    if (opts.forceForeign) return placeForeignSoup(app, soup, name, x, y);
     // probe the fusion cheaply: fusing is O(n) — try, and if it stays dense,
     // fall back to the foreign path (the soup is unchanged by fuse)
     const fused = SoupFuse.fuse({ positions: soup.positions, triangles: soup.triangles.map(t => t.slice()), triAttrs: soup.triAttrs });
-    if (fused.length > KERNEL_FACE_LIMIT) return placeForeign(app, comp, soup, x, y);
+    if (fused.length > KERNEL_FACE_LIMIT) return placeForeignSoup(app, soup, name, x, y);
     let gid = null;
     app.run('place component', m => {
       // isolation: the fused model welds to itself, never into a host element
-      const g = m.isolate(() => SolidOps.facesFromSoup(m, { positions: soup.positions, triangles: soup.triangles, triAttrs: soup.triAttrs }, comp.name));
+      const g = m.isolate(() => SolidOps.facesFromSoup(m, { positions: soup.positions, triangles: soup.triangles, triAttrs: soup.triAttrs }, name));
       if (!g) throw new Error('fusion produced nothing');
       const vids = new Set();
       for (const fid of m.groupEntities(g.gid).faces) {
@@ -119,16 +124,16 @@
       gid = g.gid;
     });
     app.selectGroup(gid);
-    return { ok: true, mode: 'kernel', gid, faces: fused.length, triangles: soup.triangles.length };
+    return { ok: true, mode: 'kernel', gid, faces: fused.length, triangles: soup.triangles.length, name };
   }
 
-  function placeForeign(app, comp, soup, x, y) {
+  function placeForeignSoup(app, soup, name, x, y) {
     const grp = foreignObject(soup);
     grp.position.set(x, y, 0);
     const size = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
-    const rec = app.assets._instantiate('component:' + comp.name, comp.name, 'object', { scene: grp, size: { x: size.x, y: size.y, z: size.z } });
+    const rec = app.assets._instantiate('component:' + name, name, 'object', { scene: grp, size: { x: size.x, y: size.y, z: size.z } });
     app.view.invalidate();
-    return { ok: true, mode: 'foreign', recId: rec.id, triangles: soup.triangles.length };
+    return { ok: true, mode: 'foreign', recId: rec.id, triangles: soup.triangles.length, name };
   }
 
   // ------------------------------------------------------------ dialog hook
@@ -156,5 +161,5 @@
     }));
   }
 
-  window.ComponentsFeature = { MANIFEST, buildSoup, place, dialogSection, wire, KERNEL_FACE_LIMIT };
+  window.ComponentsFeature = { MANIFEST, buildSoup, place, placeSoup, dialogSection, wire, KERNEL_FACE_LIMIT };
 })();

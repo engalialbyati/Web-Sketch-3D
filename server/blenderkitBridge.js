@@ -327,6 +327,47 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
+// ---- IngeTrazo online component library (CORS proxy + disk cache) ----
+// ingetrazo.com/biblioteca publishes the Sweet Home 3D furniture catalogue
+// (~1500 models: index.json, miniaturas/<id>.png, modelos/<id>.zip of
+// OBJ+MTL+textures+license) with no CORS headers, so the browser reaches it
+// only through here. Everything caches under cache/library/ — the second
+// use is offline, matching the desktop tray's promise. The frontend shows
+// only the CC BY / CC0 entries; the license metadata travels in index.json.
+const LIB_BASE = 'https://ingetrazo.com/biblioteca';
+const LIB_CACHE = path.join(CACHE_DIR, 'library');
+const LIB_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i; // catalogue ids — also the path guard
+
+async function libCached(rel) {
+  const dst = path.join(LIB_CACHE, ...rel.split('/').filter(s => s && s !== '.' && s !== '..'));
+  try { return await fsp.readFile(dst); } catch (e) { /* miss */ }
+  const up = await fetch(`${LIB_BASE}/${rel}`, { headers: UA });
+  if (!up.ok) throw new Error(`library HTTP ${up.status}`);
+  const buf = Buffer.from(await up.arrayBuffer());
+  await fsp.mkdir(path.dirname(dst), { recursive: true });
+  await fsp.writeFile(dst, buf);
+  return buf;
+}
+
+app.get('/api/library/index', async (req, res) => {
+  try { res.type('json').send(await libCached('index.json')); }
+  catch (err) { fail(res, 502, `library index failed: ${err.message}`); }
+});
+
+app.get('/api/library/thumb', async (req, res) => {
+  const id = String(req.query.id || '');
+  if (!LIB_ID_RE.test(id)) return fail(res, 400, 'invalid library id');
+  try { res.type('image/png').send(await libCached(`miniaturas/${id}.png`)); }
+  catch (err) { res.status(502).end(); } // a preview is never worth an error page
+});
+
+app.get('/api/library/model', async (req, res) => {
+  const id = String(req.query.id || '');
+  if (!LIB_ID_RE.test(id)) return fail(res, 400, 'invalid library id');
+  try { res.type('application/zip').send(await libCached(`modelos/${id}.zip`)); }
+  catch (err) { fail(res, 502, `library model failed: ${err.message}`); }
+});
+
 app.get('/api/convert', async (req, res) => {
   const id = String(req.query.id || '').trim();
   const name = String(req.query.name || '').trim();

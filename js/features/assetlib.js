@@ -159,14 +159,21 @@
           <span class="dim">Imported models (CC BY / CC0 — credits in assets/components/CREDITS.md):</span><br>
           ${window.ComponentsFeature ? ComponentsFeature.dialogSection() : ''}
         </div>
+        ${window.OnlineLib ? OnlineLib.section() : ''}
         <div style="display:flex;gap:6px;align-items:center">
           Scale <input id="${sizeId}" type="number" value="1" min="0.1" step="0.1" style="width:64px">
           <span class="dim">× real-world size · lands at the view's ground center — Move (M) to place</span>
         </div>
       </div>`, [['Close', null]]);
-    requestAnimationFrame(() => {
+    // wire on the next frame, or a timeout when the tab is backgrounded and
+    // frames never come (rAF stalls in non-rendering tabs) — idempotent
+    let wired = false;
+    const wire = () => {
+      if (wired) return;
+      wired = true;
       const body = document.querySelector('.dialog-body') || document.body;
       if (window.ComponentsFeature) ComponentsFeature.wire(app, body);
+      if (window.OnlineLib) OnlineLib.wire(app, body);
       body.querySelectorAll('[data-asset]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.asset;
         const s = Math.max(0.1, parseFloat((body.querySelector('#' + sizeId) || {}).value) || 1);
@@ -192,7 +199,12 @@
         app.selectGroup(gid);
         app.toast(`${LIB[id].label} placed at (${tgt.x.toFixed(1)}, ${tgt.y.toFixed(1)}) — M to move it`);
       }));
-    });
+    };
+    if (typeof requestAnimationFrame === 'function') {
+      let fired = false;
+      requestAnimationFrame(() => { fired = true; wire(); });
+      setTimeout(() => { if (!fired) wire(); }, 300); // background tab fallback
+    } else setTimeout(wire, 0);
   }
 
   window.AssetLib = { LIB, prism, box, dialog };
