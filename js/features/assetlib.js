@@ -173,13 +173,17 @@
         const tgt = app.view.cam.target;
         let gid = null;
         app.run('place asset', m => {
-          const g = LIB[id].build(m, s);
-          // offset to the view target's ground point so it lands in sight
-          const dx = tgt.x, dy = tgt.y;
+          // isolation: the asset welds to itself, never into a host element
+          const g = m.isolate(() => LIB[id].build(m, s));
+          const dx = tgt.x, dy = tgt.y; // land at the view's ground point
           const vids = new Set();
           for (const fid of m.groupEntities(g.id).faces) {
             const f = m.faces.get(fid);
-            if (f) for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
+            if (!f) continue;
+            // island stamp — the asset is its own element under the
+            // independence contract from the moment it lands
+            (f.userData || (f.userData = {})).assetGid = 'asset:' + g.id;
+            for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
           }
           m.transformVertices([...vids], p => ({ x: p.x + dx, y: p.y + dy, z: p.z }));
           m.touch();

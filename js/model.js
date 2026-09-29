@@ -62,6 +62,7 @@ class Model {
     this._bimHoldDepth = 0;
     this._bimHoldEdges = null;
     this._bimOwner = null; // v0.6: named hold's owning entity id
+    this._iso = null;      // v0.8: active asset-isolation scope (see isolate)
     // preview builds (drag ghosts) set this: their geometry is deleted the
     // moment the preview refreshes, so intersecting it with the model is
     // wasted work — and it was the dominant cost of dragging scripted
@@ -78,6 +79,22 @@ class Model {
   /** Manually signal a mutation for edits that bypass the choke points
    *  (face color/alpha, hidden flags, entity hide/lock, layer visibility). */
   touch() { this.version++; }
+  // v0.8 ASSET INDEPENDENCE — the element-independence contract extended to
+  // placed library assets. An asset builds inside an isolation scope: its
+  // faces weld to EACH OTHER (a prism's caps and sides share vertices) but
+  // never to pre-existing geometry — no T-splits of a host element's edges,
+  // no coordinate dedup onto its vertices, no chaining of foreign vertices
+  // into its rings. After the build, callers stamp the faces
+  // (userData.assetGid) so the merge/intersect gates below treat the asset
+  // as its own island forever: no edge of one element ever connects to
+  // another. isolate() nests; inner scopes are fresh (only the outermost
+  // scope's own vertices weld together).
+  isolate(fn) {
+    const prev = this._iso;
+    this._iso = { verts: new Set(), edges: new Set() };
+    try { return fn(); }
+    finally { this._iso = prev; }
+  }
   // BIM operations bracket their mutations with bimHold = true/false (a
   // depth counter: nested holds release only when the outermost one ends).
   // On final release, edges BORN during the hold and attached to no face
@@ -216,6 +233,24 @@ class Model {
 
   vertexAt(p) {
     const E = Model.WELD_EPS, CELL = E * 2;
+    if (this._iso) { // isolation scope: dedup only against the scope's own
+      for (const id of this._iso.verts) {
+        const v = this.vertices.get(id);
+        if (v && G.dist(v, p) < E) return id;
+      }
+      // coincides with an outsider: mint the scope's own copy — isolation
+      // must not fuse, so two vertices may share coordinates. The vertex is
+      // real (post-scope lookups must find it), so the hash stays built.
+      if (!this._vh) {
+        this._vh = new Map();
+        for (const [id, v] of this.vertices) this._vhAdd(id, v, CELL);
+      }
+      const id = nid();
+      this.vertices.set(id, G.clone(p));
+      this._vhAdd(id, p, CELL);
+      this._iso.verts.add(id);
+      return id;
+    }
     if (!this._vh) {
       this._vh = new Map(); // "cx|cy|cz" -> [vid, ...]
       for (const [id, v] of this.vertices) this._vhAdd(id, v, CELL);
@@ -306,6 +341,7 @@ class Model {
   _addEdge(e) {
     this.edges.set(e.id, e);
     this._edgeIndex.set(edgePairKey(e.a, e.b), e.id);
+    if (this._iso) this._iso.edges.add(e.id); // isolation scope membership
     this.version++;
     return e;
   }
@@ -367,6 +403,9 @@ class Model {
       // over a rectangle must not absorb its lines). Free-mode snapping
       // keeps the classic T-junction weld.
       if (this.bimHold && e.userData && e.userData.deliberate) continue;
+      // isolation scope: only edges BORN inside the scope are snap targets
+      // (the asset welds to itself, never onto a host element's edges)
+      if (this._iso && !this._iso.edges.has(e.id)) continue;
       if (G.distToSeg(p, this.vp(e.a), this.vp(e.b)) < 1e-4) {
         if (G.dist(p, this.vp(e.a)) < G.VEPS) return e.a;
         if (G.dist(p, this.vp(e.b)) < G.VEPS) return e.b;
@@ -541,6 +580,9 @@ class Model {
         const between = [];
         for (const [id, v] of this.vertices) {
           if (id === a || id === b) continue;
+          // isolation scope: chain only through the scope's own vertices —
+          // a foreign vertex on the segment must not enter the asset's ring
+          if (this._iso && !this._iso.verts.has(id)) continue;
           if (G.distToSeg(v, pa, pb) < Model.WELD_EPS &&
             G.dist(v, pa) > Model.WELD_EPS && G.dist(v, pb) > Model.WELD_EPS) between.push({ id, t: G.dot(G.sub(v, pa), G.sub(pb, pa)) });
         }
@@ -2489,12 +2531,12 @@ class Model {
           // rebuild restores its sides). Unstamped (free) geometry keeps
           // the SketchUp union.
           {
-            const myStamp = face.userData && face.userData.bimEntityId;
+            const myStamp = this.islandOf(face);
             let twin = null;
             for (const f2 of this.faces.values()) {
               if (f2.id === face.id) continue;
-              const s2 = f2.userData && f2.userData.bimEntityId;
-              if (myStamp && s2 && s2 !== myStamp) continue; // two elements: never merge
+              const s2 = this.islandOf(f2);
+              if (myStamp && s2 && s2 !== myStamp) continue; // two islands: never merge
               if (this.sameRing(f2.loop, loop)) { twin = f2; break; }
             }
             if (twin) {
@@ -2815,6 +2857,15 @@ class Model {
     return changed;
   }
 
+  // v0.8: the independence key — a BIM element stamp or a placed-asset
+  // stamp. Two faces carrying DIFFERENT islands never merge, never
+  // intersect, never share topology; an island meeting unstamped (free)
+  // geometry keeps the classic SketchUp union (free shapes punch walls).
+  islandOf(f) {
+    const u = f && f.userData;
+    return !u ? null : (u.bimEntityId || u.assetGid || null);
+  }
+
   // Broad-phase pass after geometry changes: slice every face whose AABB
   // overlaps a changed face, so crossing surfaces split automatically.
   // Faces are re-resolved by id every pair (splits REPLACE faces), and the
@@ -2834,9 +2885,8 @@ class Model {
     // drawing (bimHold falsy) keeps the classic behavior.
     const ownerCtx = this.bimOwner();
     const indepSkip = (a, b) => {
-      const sa = a.userData && a.userData.bimEntityId;
-      const sb = b.userData && b.userData.bimEntityId;
-      if (sa && sb) return sa !== sb;         // two elements: never intersect
+      const sa = this.islandOf(a), sb = this.islandOf(b);
+      if (sa && sb) return sa !== sb;         // two islands: never intersect
       if (ownerCtx) {                         // mid-build: fresh faces are the owner's
         const stamped = sa || sb;
         return !!stamped && stamped !== ownerCtx;
@@ -2866,7 +2916,7 @@ class Model {
     const ownerCtx0 = this.bimOwner();
     const indexable = f => {
       if (!ownerCtx0) return true;
-      const s = f.userData && f.userData.bimEntityId;
+      const s = this.islandOf(f);
       return !s || s === ownerCtx0;
     };
     const gridInsert = id => {

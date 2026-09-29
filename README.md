@@ -796,6 +796,14 @@ arrives as a vertex-colored foreign mesh (select, move, paint; convert
 later via Tools ▸ Mesh → Faces). `tools/extract-igz.js` is the
 provenance-preserving extractor, kept so the imports stay reproducible.
 
+**Assets are islands.** Everything the tray places builds inside the
+kernel's isolation scope and carries an asset stamp, extending the
+element-independence contract: an asset welds to itself but never into
+another element — no shared vertices, no T-split edges, no merges, no
+slicing — no matter where it lands or what later edits touch it. Free
+drawn geometry still punches into assets the way it punches into walls
+(deliberate, so windows keep connecting).
+
 ## Render with Blender & survey import
 
 - **Tools ▸ Render with Blender (day/night)**: the model goes out as glTF

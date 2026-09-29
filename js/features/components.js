@@ -103,12 +103,16 @@
     if (fused.length > KERNEL_FACE_LIMIT) return placeForeign(app, comp, soup, x, y);
     let gid = null;
     app.run('place component', m => {
-      const g = SolidOps.facesFromSoup(m, { positions: soup.positions, triangles: soup.triangles, triAttrs: soup.triAttrs }, comp.name);
+      // isolation: the fused model welds to itself, never into a host element
+      const g = m.isolate(() => SolidOps.facesFromSoup(m, { positions: soup.positions, triangles: soup.triangles, triAttrs: soup.triAttrs }, comp.name));
       if (!g) throw new Error('fusion produced nothing');
       const vids = new Set();
       for (const fid of m.groupEntities(g.gid).faces) {
         const f = m.faces.get(fid);
-        if (f) for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
+        if (!f) continue;
+        // island stamp — its own element under the independence contract
+        (f.userData || (f.userData = {})).assetGid = 'asset:' + g.gid;
+        for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
       }
       m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z }));
       m.touch();
