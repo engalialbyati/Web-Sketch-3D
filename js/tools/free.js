@@ -2424,7 +2424,7 @@ class PaintTool extends Tool {
         : [fid];
       for (const id of targets) {
         const ff = m.faces.get(id);
-        if (ff) { ff.color = app.currentMaterial.color; ff.alpha = app.currentMaterial.alpha; }
+        if (ff) { ff.color = app.currentMaterial.color; ff.alpha = app.currentMaterial.alpha; ff.matId = app.currentMaterial.matId || null; }
       }
       m.touch(); // paint is display state — the rebuild gate must see it
     });

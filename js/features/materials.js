@@ -23,8 +23,43 @@
   ];
   const texCache = new Map();
 
-  function canvasTexture(kind) {
-    if (texCache.has(kind)) return texCache.get(kind);
+  // bundled CC0 photo textures (assets/textures — see its SOURCES.md)
+  const BUNDLED = [
+    { file: 'wood_bark.png', label: 'Bark', size: 0.5 },
+    { file: 'wood_bark_olive.png', label: 'Olive bark', size: 0.5 },
+    { file: 'stone_rock.png', label: 'Rock', size: 1.5 },
+    { file: 'stone_moss_wall.png', label: 'Moss wall', size: 1.5 },
+    { file: 'stone_river_pebbles.png', label: 'Pebbles', size: 0.4 },
+    { file: 'grass_lawn.png', label: 'Lawn', size: 0.6 },
+    { file: 'paving_concrete.png', label: 'Paving', size: 0.5 },
+  ];
+  function addBundled(app, b) {
+    fetch('assets/textures/' + b.file)
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+      .then(bl => new Promise(res => { const rd = new FileReader(); rd.onload = () => res(String(rd.result || '')); rd.readAsDataURL(bl); }))
+      .then(src => {
+        app.run('bundled material', mm => {
+          const id = 'mat_' + b.file.replace('.png', '');
+          mm.materials.set(id, { id, name: b.label + ' (CC0)', color: null, alpha: 1, texture: { kind: 'image', src, size: b.size } });
+          mm.touch();
+        });
+        app.toast(`${b.label} added — pick it in the paint tray`);
+        materialsDialog(app); // refresh rows + tray
+      })
+      .catch(e => app.toast('Texture files need the served app or desktop build (file:// cannot fetch them)', true));
+  }
+
+  function canvasTexture(kind, src) {
+    const key = src ? 'img:' + src.length + ':' + (src || '').slice(-48) : kind;
+    if (texCache.has(key)) return texCache.get(key);
+    if (kind === 'image' && src) {
+      const t = new THREE.TextureLoader().load(src, () => {
+        if (window.app && app.view && app.view.invalidate) app.view.invalidate();
+      });
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      texCache.set(key, t);
+      return t;
+    }
     const c = document.createElement('canvas');
     c.width = c.height = 256;
     const x = c.getContext('2d');
@@ -71,7 +106,7 @@
     }
     const t = new THREE.CanvasTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    texCache.set(kind, t);
+    texCache.set(key, t);
     return t;
   }
 
@@ -118,7 +153,7 @@
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
       g.computeVertexNormals();
-      const tm = new THREE.MeshLambertMaterial({ map: canvasTexture(mat.texture.kind), color: mat.color ? mat.color : 0xffffff, transparent: (mat.alpha ?? 1) < 1, opacity: mat.alpha ?? 1, side: THREE.DoubleSide, fog: true });
+      const tm = new THREE.MeshLambertMaterial({ map: canvasTexture(mat.texture.kind, mat.texture.src), color: mat.color ? mat.color : 0xffffff, transparent: (mat.alpha ?? 1) < 1, opacity: mat.alpha ?? 1, side: THREE.DoubleSide, fog: true });
       const mesh = new THREE.Mesh(g, tm);
       mesh.renderOrder = 1;
       app._texturePass.add(mesh);
@@ -138,7 +173,7 @@
       return `<tr>
         <td><input data-mat="${mat.id}" data-f="name" value="${mat.name}" style="width:130px"></td>
         <td><input data-mat="${mat.id}" data-f="color" type="color" value="${mat.color || '#cccccc'}"></td>
-        <td><select data-mat="${mat.id}" data-f="tex"><option value="">—</option>${TEXTURES.map(t => `<option value="${t.kind}" ${mat.texture && mat.texture.kind === t.kind ? 'selected' : ''}>${t.label}</option>`).join('')}</select></td>
+        <td><select data-mat="${mat.id}" data-f="tex"><option value="">—</option>${TEXTURES.map(t => `<option value="${t.kind}" ${mat.texture && mat.texture.kind === t.kind ? 'selected' : ''}>${t.label}</option>`).join('')}<option value="image" ${mat.texture && mat.texture.kind === 'image' ? 'selected' : ''}>Image file…</option></select></td>
         <td><input data-mat="${mat.id}" data-f="size" type="number" step="0.05" min="0.05" value="${mat.texture ? mat.texture.size : 0.5}" style="width:64px"></td>
         <td>${uses.length} faces · ${area.toFixed(2)} m²</td>
         <td><button class="mini-btn" data-paint="${mat.id}">Paint sel.</button> <button class="mini-btn" data-del="${mat.id}">Delete</button></td>
@@ -153,6 +188,10 @@
           <select id="mat-ral">${ralOpts}</select>
           <button class="mini-btn" id="mat-ral-add">Add RAL as Material</button>
         </div>
+        <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center; flex-wrap:wrap">
+          <span class="dim">Bundled photo textures (CC0 · ambientCG):</span>
+          ${BUNDLED.map(b => `<button class="mini-btn" data-bundled="${b.file}" title="${b.label} — ${b.size} m tile">${b.label}</button>`).join('')}
+        </div>
         <table class="prop-table" style="width:100%">
           <tr><th>Name</th><th>Color</th><th>Texture</th><th>Tile (m)</th><th>Use</th><th></th></tr>
           ${rows || '<tr><td colspan="6" class="dim">No named materials yet.</td></tr>'}
@@ -165,6 +204,10 @@
         app.run('new material', mm => { ensureMat(mm, { name: 'Material ' + (mm.materials.size + 1), color: '#b0b0b0' }); mm.touch(); });
         rerender();
       });
+      body.querySelectorAll('[data-bundled]').forEach(btn => btn.addEventListener('click', () => {
+        const b = BUNDLED.find(x => x.file === btn.dataset.bundled);
+        if (b) addBundled(app, b);
+      }));
       body.querySelector('#mat-ral-add')?.addEventListener('click', () => {
         const k = body.querySelector('#mat-ral').value, r = ral[k];
         if (!r) return;
@@ -178,13 +221,41 @@
           if (!mat) return;
           if (f === 'name') mat.name = val;
           else if (f === 'color') mat.color = val;
-          else if (f === 'tex') mat.texture = val ? { kind: val, size: mat.texture ? mat.texture.size : 0.5 } : null;
+          else if (f === 'tex') {
+            if (val === 'image') return; // handled after the file picker below
+            mat.texture = val ? { kind: val, size: mat.texture ? mat.texture.size : 0.5 } : null;
+          }
           else if (f === 'size') mat.texture = mat.texture ? { ...mat.texture, size: Math.max(0.05, parseFloat(val) || 0.5) } : null;
           // edit-and-restamp: every use keeps identity and updates
           for (const face of mm.faces.values()) if (face.matId === id) { face.color = mat.color; face.alpha = mat.alpha; }
           mm.touch();
         });
         rerender();
+      }));
+      body.querySelectorAll('select[data-f="tex"]').forEach(sel => sel.addEventListener('change', () => {
+        if (sel.value !== 'image') return;
+        const id = sel.dataset.mat;
+        const inp = document.createElement('input');
+        inp.type = 'file'; inp.accept = 'image/*';
+        inp.onchange = () => {
+          const file = inp.files && inp.files[0];
+          if (!file) { sel.value = ''; return; }
+          const rd = new FileReader();
+          rd.onload = () => {
+            const src = String(rd.result || '');
+            if (src.length > 1.6e6) app.toast('Image is large (' + (src.length / 1e6).toFixed(1) + ' MB as data) — saves may slow; smaller images are safer', true);
+            app.run('material image', mm => {
+              const mat = mm.materials.get(id);
+              if (!mat) return;
+              const size = mat.texture ? mat.texture.size : 1.0;
+              mat.texture = { kind: 'image', src, size };
+              mm.touch();
+            });
+            rerender();
+          };
+          rd.readAsDataURL(file);
+        };
+        inp.click();
       }));
       body.querySelectorAll('[data-paint]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.paint;
@@ -212,6 +283,11 @@
     commands: ['materials', 'material registry', 'ral'],
     run(app) { materialsDialog(app); },
   });
-  Engine.events.on('model:changed', () => { const app = Engine.app; if (app) rebuildPass(app); });
+  Engine.events.on('model:changed', () => {
+    const app = Engine.app;
+    if (!app) return;
+    rebuildPass(app);
+    if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged();
+  });
   window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass };
 })();

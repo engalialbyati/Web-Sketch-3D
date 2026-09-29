@@ -767,8 +767,24 @@ delegates).
 (identity, not just color), edit a row and every use re-stamps in one undo
 step, live per-material quantities (faces · m²), procedural textures at
 real-world size (brick / concrete / wood / tiles / grass / metal — planar
-projection per face), and the full **RAL Classic palette (213 colors)** as
-one-click materials.
+projection per face), your own **image files** as textures, and the full
+**RAL Classic palette (213 colors)** as one-click materials.
+
+The **paint tray itself is the materials browser**: color swatches, then
+every named material with a live thumbnail (its texture or color), then the
+RAL picker (searchable). Picking arms the paint tool with material identity
+— faces remember which material they wear (`matId`), and the tray refreshes
+as materials come and go. A bundled **CC0 photo-texture library**
+(seven seamless ambientCG maps — bark, rock, moss wall, pebbles, lawn,
+paving — see `assets/textures/SOURCES.md`) installs as image materials in
+one click, at real-world tile sizes.
+
+**Insert ▸ Asset Library…** — a bundled, offline component tray (trees,
+person, car, bench, street light, bollard) generated as REAL kernel
+geometry: closed prisms in named groups, watertight the moment they land —
+selectable, paintable, pushable, booleanable. Real-world sizes with a
+scale control; lands at the view's ground center. BlenderKit (Insert
+ribbon) remains the online library.
 
 ## Render with Blender & survey import
 

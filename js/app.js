@@ -4907,6 +4907,7 @@ class App {
         ['Scripted Element…', 'openScript', ''],
         ['Materials…', 'materialsDlg', ''],
         ['Convert Mesh to Faces…', 'meshToFacesDlg', ''],
+        ['Asset Library…', 'assetLibDlg'],
         ['Render with Blender (day)', 'renderDay', ''],
         ['Render with Blender (night)', 'renderNight', ''],
         ['Import Survey CSV…', 'surveyCsv', ''],
@@ -5119,6 +5120,7 @@ class App {
       sectionPlanesDlg: () => { if (window.SectionPlanesFeature) SectionPlanesFeature.sectionDialog(A); },
       materialsDlg: () => { if (window.MaterialsFeature) MaterialsFeature.materialsDialog(A); },
       meshToFacesDlg: () => { if (window.MeshToFaces) MeshToFaces.dialog(A); },
+      assetLibDlg: () => { if (window.AssetLib) AssetLib.dialog(A); },
       renderDay: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, false); },
       renderNight: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, true); },
       surveyCsv: () => { if (window.RenderFeature) RenderFeature.importSurveyCsvFile ? RenderFeature.importSurveyCsvFile(A) : A.toast('Use Tools ▸ Import Survey CSV', true); },
@@ -5311,6 +5313,7 @@ class App {
   // ------------------------------------------------------------------ materials
   _initSwatches() {
     const wrap = document.getElementById('swatches');
+    wrap.innerHTML = ''; // full rebuild: registry materials come and go
     for (const m of MATERIALS) {
       const d = document.createElement('div');
       d.className = 'swatch';
@@ -5329,7 +5332,90 @@ class App {
       });
       wrap.appendChild(d);
     }
+    // named materials from the registry (with texture thumbnails), then RAL
+    const texCss = {
+      brick: 'repeating-linear-gradient(0deg,#b5b0a4 0 6px,#a44a3a 6px 7px),repeating-linear-gradient(90deg,transparent 0 14px,#b5b0a4 14px 15px)',
+      concrete: 'radial-gradient(#9e9e9a 40%,#b9b9b4)',
+      wood: 'repeating-linear-gradient(95deg,#8d6e63 0 7px,#7a5c50 7px 9px)',
+      tiles: 'linear-gradient(#e8e4da 0 0),repeating-linear-gradient(0deg,transparent 0 12px,#a9a49a 12px 13px),repeating-linear-gradient(90deg,transparent 0 12px,#a9a49a 12px 13px)',
+      grass: 'radial-gradient(#7d9c5a 30%,#6a8a4c)',
+      metal: 'repeating-linear-gradient(15deg,#b9c0c6 0 4px,#cdd4da 4px 8px)',
+    };
+    const addSwatch = (title, bg, onPick, extra = '') => {
+      const d = document.createElement('div');
+      d.className = 'swatch';
+      d.title = title;
+      d.style.background = bg;
+      d.style.backgroundSize = 'cover';
+      if (extra) d.style.boxShadow = extra;
+      d.addEventListener('click', () => {
+        onPick();
+        wrap.querySelectorAll('.swatch').forEach(x => x.classList.remove('active'));
+        d.classList.add('active');
+        if (this.tool && this.tool.id === 'paint') this.setStatus(this.tool.hint);
+      });
+      wrap.appendChild(d);
+      return d;
+    };
+    for (const mat of (this.model.materials ? this.model.materials.values() : [])) {
+      let bg = mat.color || '#cccccc';
+      if (mat.texture) bg = mat.texture.kind === 'image' && mat.texture.src
+        ? `#fff url("${mat.texture.src}") center/cover`
+        : `${texCss[mat.texture.kind] || mat.color}, ${mat.color || '#ccc'}`;
+      addSwatch(`${mat.name}${mat.texture ? ' (' + mat.texture.kind + ')' : ''}`, bg, () => {
+        this.currentMaterial = { name: mat.name, color: mat.color, alpha: mat.alpha, matId: mat.id };
+        this.setStatus(`Material: ${mat.name} — paint with B`);
+      }, 'inset 0 0 0 2px #1f6fd6');
+    }
+    addSwatch('RAL Classic palette (213 colors)…', 'conic-gradient(#b73c25,#bccb30,#1d1f2a,#b73c25)', () => this.ralPaletteDialog(), 'inset 0 0 0 2px #888');
     wrap.firstChild.classList.add('active');
+    this._swatchMatSig = (this.model.materials ? [...this.model.materials.keys()].join(',') : '');
+  }
+
+  /** Rebuild the paint tray when the named-material registry changes. */
+  refreshSwatchesIfMaterialsChanged() {
+    const sig = (this.model.materials ? [...this.model.materials.keys()].join(',') : '');
+    if (sig !== this._swatchMatSig) this._initSwatches();
+  }
+
+  /** Searchable RAL palette: picking creates-or-reuses a named material and
+   *  arms the paint tool with it. */
+  ralPaletteDialog() {
+    const RAL = window.RAL_COLORS || {};
+    const q = '<input id="ral-q" placeholder="Filter by code or name…" style="width:100%;padding:5px 8px;margin-bottom:8px">';
+    this.dialog('RAL Classic — pick a material', `<div>${q}<div id="ral-grid" style="display:flex;flex-wrap:wrap;gap:5px;max-height:46vh;overflow:auto"></div></div>`, [['Close', null]]);
+    const fill = () => {
+      const f = (document.getElementById('ral-q').value || '').toLowerCase();
+      const grid = document.getElementById('ral-grid');
+      grid.innerHTML = '';
+      for (const k of Object.keys(RAL).sort()) {
+        const r = RAL[k];
+        if (f && !(`ral ${k} ${r.name}`.toLowerCase().includes(f))) continue;
+        const d = document.createElement('div');
+        d.className = 'swatch';
+        d.style.width = d.style.height = '34px';
+        d.style.background = r.rgb_hex;
+        d.title = `RAL ${k} — ${r.name}`;
+        d.addEventListener('click', () => {
+          let mat = [...(this.model.materials || new Map()).values()].find(mt => mt.name === `RAL ${k} ${r.name}`);
+          if (!mat) this.run('ral material', mm => {
+            const id = 'mat_ral_' + k;
+            mm.materials.set(id, { id, name: `RAL ${k} ${r.name}`, color: r.rgb_hex, alpha: 1, texture: null });
+            mm.touch();
+            mat = mm.materials.get(id);
+          });
+          this.currentMaterial = { name: mat.name, color: mat.color, alpha: 1, matId: mat.id };
+          this.setStatus(`Material: ${mat.name} — paint with B`);
+          this.toast(`RAL ${k} ${r.name} armed — B to paint`);
+          document.querySelector('.dialog-close, .overlay button') && this.closeDialog && this.closeDialog();
+        });
+        grid.appendChild(d);
+      }
+    };
+    requestAnimationFrame(() => {
+      document.getElementById('ral-q').addEventListener('input', fill);
+      fill();
+    });
   }
   setMaterialFromColor(color, alpha) {
     if (!color) { this.currentMaterial = MATERIALS[0]; return; }
@@ -5730,7 +5816,7 @@ class App {
       const pent = f && this.bim.getEntityForFace(f);
       if (pent && !this._eip) items.push([`Edit In Place — ${pent.type} ${pent.id}`, () => this.enterEditInPlace(pent.id)]);
       items.push([`Paint (${this.currentMaterial.name})`, () => {
-        this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; } m.touch(); });
+        this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; ff.matId = this.currentMaterial.matId || null; } m.touch(); });
       }]);
       items.push(['Reverse Face', () => { this.run('reverse face', m => { const ff = m.faces.get(pick.face); if (ff) ff.loop.reverse(); }); }]);
       items.push(['Push/Pull', () => this.setTool('pushpull')]);
