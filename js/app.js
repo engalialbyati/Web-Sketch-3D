@@ -146,6 +146,7 @@ const ICONS = {
   levels: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h13"/><path d="M3 12h13" stroke-dasharray="3 2.4"/><path d="M3 19h13"/><path d="M20.5 5v14"/><path d="M18.3 7.2l2.2-2.2 2.2 2.2"/><path d="M18.3 16.8l2.2 2.2 2.2-2.2"/></svg>',
   grids: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v18"/><path d="M16 3v18"/><path d="M3 8h18"/><path d="M3 16h18"/><circle cx="8" cy="3" r="1.6"/><circle cx="16" cy="21" r="1.6"/><circle cx="3" cy="16" r="1.6"/><circle cx="21" cy="8" r="1.6"/></svg>',
   browser: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16"/><path d="M9 9.5h12M9 14.5h12M13 4v16" opacity=".65"/></svg>',
+  assetlib: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19l2-9h12l2 9z"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>',
   families: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M7 3h10M8 5h8M8.8 5l-.8 14M15.2 5l.8 14M7.5 21h9M6 5h12"/><path d="M12 5v16" opacity=".5"/></svg>',
   layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3.5l8.5 4.5L12 12.5 3.5 8 12 3.5z"/><path d="M3.5 12.5L12 17l8.5-4.5" opacity=".65"/><path d="M3.5 16.5L12 21l8.5-4.5" opacity=".35"/></svg>',
   blenderkit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/><path d="M17.5 3.5v4M15.5 5.5h4" stroke-width="1.5"/></svg>',
@@ -358,7 +359,7 @@ const RIBBON_TABS = {
     { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
     { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
-    { title: 'Libraries', tools: ['browser', 'families', 'kit'] },
+    { title: 'Libraries', tools: ['browser', 'families', 'assetlib', 'kit'] },
   ] },
   annotate: { label: 'Annotate', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -4765,6 +4766,7 @@ class App {
         if (id === 'layers') { this.btnLayers = mk(ICONS.layers || ICONS.browser, 'Layers — AutoCAD-style layer manager (assign elements, on/off, lock, color, current layer)', 'toggle', '{}', () => this.toggleLayersPanel()); continue; }
         if (id === 'families') { this.btnFamilies = mk(ICONS.families || ICONS.browser, 'Families — parametric design catalog (column styles: classical, regional, modern, structural); size one and place it', 'toggle', '{}', () => this.toggleFamiliesPanel()); continue; }
         if (id === 'kit') { this.btnKit = mk(ICONS.blenderkit, 'BlenderKit Assets — search free models and drop them into the scene (needs the local bridge: npm run bridge; GLB-badged models import without Blender)', 'toggle', '{}', () => this.toggleBlenderKit()); continue; }
+        if (id === 'assetlib') { mk(ICONS.assetlib, 'Asset Library — bundled tray, imported models, and the online catalogue (925 CC BY / CC0 models; the online section needs the local bridge: npm run bridge)', '', '{}', () => this.action('assetLibDlg')); continue; }
         if (id === 'levelsbtn') { mk(ICONS.levels, 'Levels — view / add / edit project levels', '', '{}', () => this.levelsDialog()); continue; }
         if (id === 'gridsbtn') { mk(ICONS.grids, 'Grids — generate / edit the grid system (snap targets)', '', '{}', () => this.gridsDialog()); continue; }
         if (id === 'levelview') {
