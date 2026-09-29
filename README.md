@@ -786,6 +786,16 @@ selectable, paintable, pushable, booleanable. Real-world sizes with a
 scale control; lands at the view's ground center. BlenderKit (Insert
 ribbon) remains the online library.
 
+The tray also ships **six imported component models** (park bench, fountain,
+standing woman, pickup, SUV, sofa — ~35k faces total) extracted from
+IngeTrazo's `.igz` sample library under CC BY 4.0 / CC0 terms (see
+`assets/components/CREDITS.md` for the per-model attribution the licenses
+require). Each lands through the dual-path importer: if the mesh fuses to
+≤ 600 coplanar faces it becomes editable kernel geometry, otherwise it
+arrives as a vertex-colored foreign mesh (select, move, paint; convert
+later via Tools ▸ Mesh → Faces). `tools/extract-igz.js` is the
+provenance-preserving extractor, kept so the imports stay reproducible.
+
 ## Render with Blender & survey import
 
 - **Tools ▸ Render with Blender (day/night)**: the model goes out as glTF

@@ -155,6 +155,10 @@
         scale multiplies them. BlenderKit (Insert ribbon) remains the online
         library.</p>
         <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px">${cards}</div>
+        <div style="margin:6px 0">
+          <span class="dim">Imported models (CC BY / CC0 — credits in assets/components/CREDITS.md):</span><br>
+          ${window.ComponentsFeature ? ComponentsFeature.dialogSection() : ''}
+        </div>
         <div style="display:flex;gap:6px;align-items:center">
           Scale <input id="${sizeId}" type="number" value="1" min="0.1" step="0.1" style="width:64px">
           <span class="dim">× real-world size · lands at the view's ground center — Move (M) to place</span>
@@ -162,6 +166,7 @@
       </div>`, [['Close', null]]);
     requestAnimationFrame(() => {
       const body = document.querySelector('.dialog-body') || document.body;
+      if (window.ComponentsFeature) ComponentsFeature.wire(app, body);
       body.querySelectorAll('[data-asset]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.asset;
         const s = Math.max(0.1, parseFloat((body.querySelector('#' + sizeId) || {}).value) || 1);
