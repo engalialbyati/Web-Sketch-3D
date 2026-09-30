@@ -137,13 +137,18 @@
     if (!f) return [fid];
     const eid = f.userData && f.userData.bimEntityId;
     if (eid) {
+      // hosted openings (doors, windows, wall/floor cuts) NEVER take
+      // material from a drop — neither their reveal/lining faces nor their
+      // frame/leaf: the model keeps its own look and the opening stays
+      // unpainted. Explicit face selection + Paint sel. still works.
+      const ent = entities.find(e => e && e.id === eid);
+      const hosted = ent && ent.params &&
+        (ent.params.hostWallId || ent.params.hostKind === 'face' || ent.params.hostFloorId);
+      if (hosted || f.userData.role === 'lining') return [];
       // LIVE stamp query — the entity's own face list goes stale the
       // moment a hosted cut stamps its reveal faces to the wall without
       // extending ent.faces; the model is the truth. The opening is
-      // deliberately NOT painted: reveal/lining faces (the band the
-      // hosted cut stitches inside a door/window hole, and native
-      // Door/Window linings) keep their neutral look when a material is
-      // dropped on the wall — select them explicitly to paint them.
+      // deliberately NOT painted: lining faces are skipped.
       const out = [...m.faces.keys()].filter(x => {
         const ff = m.faces.get(x);
         return ff.userData && ff.userData.bimEntityId === eid && ff.userData.role !== 'lining';
@@ -175,6 +180,10 @@
     const fid = v.pickFaceAt(v.eventPt(ev));
     if (!fid) { app.toast('Drop the material ON a face (wall, floor, roof…)', true); return false; }
     const targets = paintTargets(m, fid, app.bim ? app.bim.entities : []);
+    if (!targets.length) {
+      app.toast('Doors, windows and openings keep their own look — drop the material on a wall, floor or roof');
+      return false;
+    }
     app.run('paint material', mm => {
       stamp(mm, targets, mat);
       mm.touch();

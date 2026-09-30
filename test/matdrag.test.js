@@ -95,11 +95,27 @@ module.exports = async h => {
     ok(t.every(x => stamped.includes(x)), 'targets stay inside the element');
     for (const fid of revealFaces) ok(!t.includes(fid), 'reveal ' + fid + ' NOT painted');
 
-    // even dropping ON a reveal face resolves to just that face — the
-    // opening never takes the wall's material
+    // even dropping ON a reveal face paints nothing — the opening never
+    // takes the wall's material
     const t2 = MD.paintTargets(m, revealFaces[0], bim.entities);
-    eq(t2.length, 1, 'reveal drop paints itself only');
-    eq(t2[0], revealFaces[0], 'the reveal face, not the wall');
+    eq(t2.length, 0, 'reveal drop resolves to NOTHING');
+  });
+
+  test('paintTargets: native door entities never take drop material', () => {
+    const mk = at => m.addFaceFromRings([G.v(at, at, 0), G.v(at + 0.3, at, 0), G.v(at + 0.3, at + 0.3, 0), G.v(at, at + 0.3, 0)]).id;
+    const lining = mk(20), frame = mk(21), leaf = mk(22);
+    bim.create('door', { hostWallId: wallEnt.id, width: 1, height: 2.1, sillHeight: 0 }, { [lining]: 'lining', [frame]: 'frame', [leaf]: 'leaf' }, []);
+    for (const fid of [lining, frame, leaf]) {
+      const t = MD.paintTargets(m, fid, bim.entities);
+      eq(t.length, 0, 'hosted door face ' + fid + ' takes no material');
+    }
+    // the wall itself still paints (and never reaches the door's faces)
+    const wallFid = [...m.faces.keys()].find(x => {
+      const ff = m.faces.get(x);
+      return ff.userData && ff.userData.bimEntityId === wallEnt.id;
+    });
+    const t = MD.paintTargets(m, wallFid, bim.entities);
+    ok(t.length >= 1 && !t.includes(lining) && !t.includes(frame) && !t.includes(leaf), 'wall paints, door untouched');
   });
 
   test('deleting the hosted element removes its model instance', () => {

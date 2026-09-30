@@ -55,7 +55,7 @@
         let tris = [];
         try { tris = THREE.ShapeUtils.triangulateShape(outer.map(t2), f.holes.map(h => model.pts(h).map(t2))); } catch (e) { tris = []; }
         const all = outer.concat(f.holes.flatMap(h => model.pts(h)));
-        const c = lc || (f.color ? hexToRgb(f.color) : { r: 1, g: 1, b: 1 });
+        const c = (f.color ? hexToRgb(f.color) : null) || lc || { r: 1, g: 1, b: 1 }; // explicit paint beats ByLayer
         const a = f.alpha == null ? 1 : f.alpha;
         for (const t of tris) {
           for (const idx of t) {
@@ -173,7 +173,10 @@
       return ent.faces.map(fid => {
         const f = model.faces.get(fid);
         if (!f) return fid + '>gone';
-        return fid + '>' + ringSig(f.loop) + '#' + f.holes.map(ringSig).join(';');
+        // color/alpha belong in the signature: a repaint is a display
+        // change, and the incremental cache must rebuild the Group for it
+        return fid + '>' + ringSig(f.loop) + '#' + f.holes.map(ringSig).join(';')
+          + '~' + (f.color || '') + ':' + (f.alpha == null ? 1 : f.alpha);
       }).join(',');
     }
 
