@@ -138,12 +138,15 @@
             // The cut's NEW faces — the reveal band lining the opening and
             // any boundary-split pieces — are WALL geometry (the wall recut
             // regenerates them): stamp them to the host so live-stamp reads
-            // (paint drops, element groups, island logic) own the opening.
-            for (const fid of mm.faces.keys()) {
-              if (facesBefore.has(fid)) continue;
+            // (paint drops, element groups, island logic) own the opening,
+            // and record them in the entity's face list so the next
+            // rebuild's delete sweep takes them along with the wall.
+            const fresh = [...mm.faces.keys()].filter(id => !facesBefore.has(id));
+            for (const fid of fresh) {
               const ff = mm.faces.get(fid);
               if (ff) (ff.userData || (ff.userData = {})).bimEntityId = host.ent.id;
             }
+            host.ent.faces = [...new Set([...(host.ent.faces || []), ...fresh])];
           } finally { mm.bimHold = false; }
         });
       } catch (e) { app.toast(String(e.message || e)); return; }

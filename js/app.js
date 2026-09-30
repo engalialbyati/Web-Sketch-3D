@@ -1150,8 +1150,18 @@ class BimEntityManager {
     };
     for (const h of hosted) for (const fid of [...h.faces]) collect(fid);
     for (const fid of [...ent.faces]) collect(fid);
+    // live-stamp sweep: a hosted cut stamps its reveal band to the wall
+    // without the placement-time face list knowing (models placed before
+    // that bookkeeping existed never listed them at all) — take every face
+    // STAMPED to this wall too, or stale reveal quads survive the rebuild
+    // as floating garbage next to the fresh cut
+    const stamped = [];
+    for (const [fid, f2] of m.faces)
+      if (f2.userData && f2.userData.bimEntityId === ent.id) stamped.push(fid);
+    for (const fid of stamped) collect(fid);
     for (const h of hosted) for (const fid of [...h.faces]) m.faces.delete(fid);
     for (const fid of [...ent.faces]) m.faces.delete(fid);
+    for (const fid of stamped) m.faces.delete(fid);
     for (const eid of [...ent.edges]) m.edges.delete(eid);
     m.gc();
     // deleting the wall's recorded edges can also take edges it SHARED with

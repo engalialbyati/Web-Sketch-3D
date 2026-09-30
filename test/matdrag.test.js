@@ -34,6 +34,7 @@ module.exports = async h => {
     if (e && !e.userData) edges.push(e.id);
   }
   const wallEnt = bim.create('wall', JSON.parse(JSON.stringify(p)), roles, [...new Set(edges)]);
+  const creationFaces = wallEnt.faces.length; // before any hosted cut extends it
 
   // place a hosted catalogue door through the REAL tool — its cut stamps
   // the reveal band to the wall
@@ -79,8 +80,8 @@ module.exports = async h => {
       const ff = m.faces.get(x);
       return ff.userData && ff.userData.bimEntityId === wallEnt.id;
     });
-    ok(stamped.length > wallEnt.faces.length,
-      `stamped faces (${stamped.length}) exceed the creation-time list (${wallEnt.faces.length})`);
+    ok(stamped.length > creationFaces,
+      `stamped faces (${stamped.length}) exceed the pre-cut wall faces (${creationFaces})`);
     for (const fid of revealFaces) ok(stamped.includes(fid), 'reveal ' + fid + ' stamped to the wall');
 
     // the drop target set is the wall's own faces: linings excluded

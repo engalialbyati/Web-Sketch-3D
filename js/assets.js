@@ -180,6 +180,19 @@
           const cached = await this._blobGet(assetId);
           if (cached) return this._templateFromBuffer(assetId, name, cached);
         }
+        // Catalogue models (Asset Library, "lib:<id>"): no bridge GLB exists
+        // for these — rebuild the template from the bridge's disk-cached
+        // zip. The index entry supplies the declared size + rotation the
+        // transform needs; both index and zips persist under cache/library,
+        // so a reload restores offline after the first placement.
+        if (assetId.startsWith('lib:') && window.OnlineLib && window.ComponentsFeature && window.THREE) {
+          const id = assetId.slice(4);
+          const idx = await OnlineLib.fetchIndex().catch(() => ({}));
+          const soup = await OnlineLib.fetchModelSoup(idx[id] || { id });
+          const scene = ComponentsFeature.foreignObject(soup);
+          const sz = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
+          return { scene, size: { x: sz.x, y: sz.y, z: sz.z } };
+        }
         const bridge = (window.BLENDERKIT_BRIDGE_URL || 'http://localhost:3001').replace(/\/$/, '');
         const url = `${bridge}/api/convert?id=${encodeURIComponent(assetId)}&name=${encodeURIComponent(name || '')}`;
         const res = await fetch(url);
@@ -224,6 +237,7 @@
     // reflect they render solid black, so instances get a generated studio
     // environment. Scoped to imported materials only.
     applyStudioEnv(root) {
+      if (typeof document === 'undefined') return; // headless suite
       if (!this._envTex) {
         const c = document.createElement('canvas');
         c.width = 64; c.height = 128; // tiny: only broad gradients survive PMREM
@@ -366,8 +380,24 @@
           height: rec.host.height, sillHeight: rec.host.sill,
           depth: rec.host.depth > 0 ? rec.host.depth : ent.params.thickness,
         };
-        const info = HostedCut.cut(G, model, ent.params, spec);
+        // NAMED hold — the cut must open the wall's own freshly stamped
+        // faces: unnamed (or no) hold makes element independence refuse the
+        // punch, the rebuilt wall heals SOLID and the opening is lost
+        const before = new Set(model.faces.keys());
+        const holdPrev = model.bimHold;
+        model.bimHold = wallId;
+        let info;
+        try { info = HostedCut.cut(G, model, ent.params, spec); }
+        finally { model.bimHold = holdPrev; }
         if (info.error) continue; // wall too short now — keep the model where it was
+        // own the fresh reveal band: stamp it to the wall AND record it in
+        // ent.faces so the next rebuild's delete sweep takes it too
+        const fresh = [...model.faces.keys()].filter(x => !before.has(x));
+        for (const fid of fresh) {
+          const ff = model.faces.get(fid);
+          if (ff) (ff.userData || (ff.userData = {})).bimEntityId = wallId;
+        }
+        ent.faces = [...new Set([...(ent.faces || []), ...fresh])];
         this.applyHostedTransform(rec, info);
       }
     }
@@ -469,7 +499,14 @@
             const info = window.BimTools.HostedCut.locate(window.G, ent.params, {
               distanceFromStart: x.h.d, width: x.h.W, height: x.h.H, sillHeight: x.h.si,
             });
-            if (!info.error) { this.applyHostedTransform(rec, info); continue; }
+            // locate() carries no depth — supply the cut depth (host
+            // override or the wall's thickness) or the fit would anchor the
+            // model on the near FACE instead of the mid-plane
+            if (!info.error) {
+              info.depth = x.h.D > 0 ? x.h.D : (ent.params.thickness || 0);
+              this.applyHostedTransform(rec, info);
+              continue;
+            }
           }
         }
         rec.scale = x.s || 1;

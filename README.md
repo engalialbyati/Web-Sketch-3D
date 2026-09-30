@@ -868,7 +868,13 @@ the opening itself so the wall's location line can't push it off; a
 model deeper than the wall gets its depth axis squashed to the cut so
 ornate frames stay INSIDE the opening instead of hanging proud of the
 wall faces). The opening re-cuts and the model repositions
-automatically whenever the host wall is edited. **Free object** keeps the plain click-to-place behavior, and
+automatically whenever the host wall is edited. Placements **survive
+reloads and rebuilds**: the instance list rides the autosave, and
+`lib:` templates are rebuilt on load from the bridge's disk-cached
+catalogue zip (index entry included, so the declared size/rotation
+fit matches the original placement); parametric wall rebuilds re-cut
+under the wall's named hold, re-stamp the reveal band and re-record
+it in the entity's face list so nothing goes stale. **Free object** keeps the plain click-to-place behavior, and
 every other category always places free. The same path fixed two latent
 bugs in the hosted-asset tools: an unnamed `bimHold` made element
 independence refuse the punch (also breaking BlenderKit's
