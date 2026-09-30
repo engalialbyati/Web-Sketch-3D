@@ -529,7 +529,8 @@
       this.changed('restored', null);
     }
     // Never silently lose an instance: a wireframe box keeps its slot visible
-    // until the bridge can serve the file again.
+    // until the bridge can serve the file again. HOSTED placeholders anchor
+    // into their opening (a box at the origin reads as "the door vanished").
     _addPlaceholder(x) {
       const s = 1;
       const geo = new THREE.BoxGeometry(s, s, s);
@@ -538,13 +539,28 @@
       obj.name = 'blenderkit-missing:' + x.a;
       const rec = {
         id: x.i, assetId: x.a, name: (x.n || 'Asset') + ' (offline)', kind: x.k || 'object',
-        object: obj, scale: x.s || 1, size: { x: s, y: s, z: s },
+        object: obj, scale: 1, size: { x: s, y: s, z: s },
         host: x.h ? { wallId: x.h.w, distance: x.h.d, sill: x.h.si, width: x.h.W, height: x.h.H, depth: x.h.D } : null,
         placeholder: true,
       };
       rec.object.userData.blenderkit = { id: rec.id, assetId: rec.a, name: rec.name };
       this.instances.set(rec.id, rec);
       this.ensureRoot().add(obj);
+      if (rec.host) {
+        const ent = this.app.bim && this.app.bim.getEntityById(rec.host.wallId);
+        if (ent && window.BimTools) {
+          const info = window.BimTools.HostedCut.locate(window.G, ent.params, {
+            distanceFromStart: rec.host.distance, width: rec.host.width,
+            height: rec.host.height, sillHeight: rec.host.sill,
+          });
+          if (!info.error) {
+            info.depth = rec.host.depth > 0 ? rec.host.depth : (ent.params.thickness || 0);
+            this.applyHostedTransform(rec, info);
+          }
+        }
+      }
+      const app = this.app;
+      if (app && app.toast) app.toast(`“${x.n || x.a}” could not be re-fetched (bridge reachable?) — placeholder shown in its opening`, true);
     }
   }
 
