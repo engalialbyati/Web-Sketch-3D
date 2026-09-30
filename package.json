@@ -5,6 +5,7 @@
   "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app with MNL-66 reinforcement detailing.",
   "scripts": {
     "test": "node test/run.js",
+    "serve": "node server/staticServer.js",
     "bridge": "node server/blenderkitBridge.js",
     "desktop": "electron .",
     "dist": "electron-builder --win nsis"
