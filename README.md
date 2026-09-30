@@ -868,7 +868,10 @@ the opening itself so the wall's location line can't push it off; a
 model deeper than the wall gets its depth axis squashed to the cut so
 ornate frames stay INSIDE the opening instead of hanging proud of the
 wall faces). The opening re-cuts and the model repositions
-automatically whenever the host wall is edited. Placements **survive
+automatically whenever the host wall is edited, and each placement
+registers a **real door/window element** (listed in the Element
+Browser, re-cut by every rebuild, deleted with its model) carrying the
+model's name and the instance link. Placements **survive
 reloads and rebuilds**: the instance list rides the autosave, and
 `lib:` templates are rebuilt on load from the bridge's disk-cached
 catalogue zip (index entry included, so the declared size/rotation

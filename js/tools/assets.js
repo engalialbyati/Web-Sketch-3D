@@ -123,7 +123,7 @@
         distanceFromStart: dist, width: this.spec.width,
         height: this.spec.height, sillHeight: this.spec.sill, depth,
       };
-      let info = null;
+      let info = null, pend = null;
       try {
         app.transaction.run('place asset ' + this.kind, mm => {
           // v0.6 owner naming (same as HostedInsertionTool): the cut edits
@@ -135,29 +135,50 @@
           try {
             info = window.BimTools.HostedCut.cut(G, mm, hp, spec);
             if (info.error) throw new Error(info.error);
-            // The cut's NEW faces — the reveal band lining the opening and
-            // any boundary-split pieces — are WALL geometry (the wall recut
-            // regenerates them): stamp them to the host so live-stamp reads
-            // (paint drops, element groups, island logic) own the opening,
-            // and record them in the entity's face list so the next
-            // rebuild's delete sweep takes them along with the wall.
-            const fresh = [...mm.faces.keys()].filter(id => !facesBefore.has(id));
-            for (const fid of fresh) {
-              const ff = mm.faces.get(fid);
-              if (ff) (ff.userData || (ff.userData = {})).bimEntityId = host.ent.id;
-            }
-            host.ent.faces = [...new Set([...(host.ent.faces || []), ...fresh])];
           } finally { mm.bimHold = false; }
+          // ELEMENT IDENTITY: the cut's new faces (reveal band + boundary
+          // split pieces) become a real door/window ENTITY exactly like the
+          // built-in tools' output — the Element Browser lists it, rebuilds
+          // re-cut it, deleting it heals the wall, and params link the
+          // hosted model instance (assetInstanceId)
+          const fresh = [...mm.faces.keys()].filter(id => !facesBefore.has(id))
+            .map(id => mm.faces.get(id)).filter(Boolean);
+          const roles = {};
+          for (const f of fresh) roles[f.id] = 'lining';
+          const ownFaceIds = new Set(fresh.map(f => f.id));
+          const elementEdges = [];
+          for (const f of fresh) for (const r of mm.rings(f)) for (let i = 0; i < r.length; i++) {
+            const e = mm.findEdge(r[i], r[(i + 1) % r.length]);
+            if (!e || elementEdges.includes(e.id)) continue;
+            const adj = mm.facesAdjacentToEdge(e);
+            // edges SHARED with the host wall stay the wall's — deleting the
+            // element later must not cascade-delete wall faces (same guard
+            // as HostedInsertionTool)
+            if (adj.length > 0 && adj.every(x => ownFaceIds.has(x.id))) elementEdges.push(e.id);
+          }
+          pend = {
+            kind: this.kind, hostWallId: host.ent.id, distanceFromStart: info.t,
+            sillHeight: spec.sillHeight, width: spec.width, height: spec.height,
+            depth, facing: 1, hand: 1, name: this.assetName,
+            roles, elementEdges,
+          };
         });
       } catch (e) { app.toast(String(e.message || e)); return; }
       // _runTx swallows a failed transaction (toast + rollback, returns
       // undefined) — `info` may hold the cut's error object or nothing at
       // all. Nothing was cut: stop here, never host into a wall that healed.
       if (!info || info.error) { if (info && info.error) app.toast(info.error, true); return; }
-      app.assets.placeHosted(this.assetId, this.assetName, this._tpl, {
+      const rec = app.assets.placeHosted(this.assetId, this.assetName, this._tpl, {
         wallId: host.ent.id, distance: info.t, sill: spec.sillHeight,
         width: spec.width, height: spec.height, depth, kindHint: this.kind,
       }, info);
+      // register the element AFTER the transaction, like the native tools:
+      // bim.create fires opDone, and the entity carries the instance link
+      if (pend) {
+        const { kind, roles, elementEdges, ...entParams } = pend;
+        entParams.assetInstanceId = rec.id;
+        app.bim.create(kind, entParams, roles, elementEdges);
+      }
       app.view.clearPreview();
       app.toast(`${this.assetName} hosted at ${fmtLen(info.t)} from the wall's left edge — click it to select, M to slide along the wall`);
       return true;

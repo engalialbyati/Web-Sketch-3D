@@ -389,9 +389,19 @@
         let info;
         try { info = HostedCut.cut(G, model, ent.params, spec); }
         finally { model.bimHold = holdPrev; }
-        if (info.error) continue; // wall too short now — keep the model where it was
+        if (info.error) {
+          // a paired door/window ENTITY may have just re-cut this same
+          // opening (recutHostedAll cuts entities first) — reposition from
+          // the located rect regardless
+          const loc = HostedCut.locate(G, ent.params, spec);
+          if (loc.error) continue;
+          loc.depth = spec.depth;
+          this.applyHostedTransform(rec, loc);
+          continue;
+        }
         // own the fresh reveal band: stamp it to the wall AND record it in
-        // ent.faces so the next rebuild's delete sweep takes it too
+        // ent.faces so the next rebuild's delete sweep takes it too (only
+        // reached for legacy placements with no hosted entity)
         const fresh = [...model.faces.keys()].filter(x => !before.has(x));
         for (const fid of fresh) {
           const ff = model.faces.get(fid);

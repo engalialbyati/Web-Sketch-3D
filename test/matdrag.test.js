@@ -34,12 +34,13 @@ module.exports = async h => {
     if (e && !e.userData) edges.push(e.id);
   }
   const wallEnt = bim.create('wall', JSON.parse(JSON.stringify(p)), roles, [...new Set(edges)]);
-  const creationFaces = wallEnt.faces.length; // before any hosted cut extends it
 
-  // place a hosted catalogue door through the REAL tool — its cut stamps
-  // the reveal band to the wall
+  // place a hosted catalogue door through the REAL tool — it cuts the
+  // opening AND registers a real door/window entity carrying the instance
+  // link (the Element Browser lists it)
   const size = { x: 1.0, y: 0.08, z: 2.1 };
   const spec = OnlineLib.hostedSpec('door', size);
+  let removedInstanceId = null;
   const app = {
     model: m, bim,
     toast() { }, setStatus() { },
@@ -51,6 +52,7 @@ module.exports = async h => {
       registerTemplate() { },
       loadTemplate: async () => ({ scene: null, size }),
       placeHosted: () => ({ id: 'asset_1' }),
+      remove: id => { removedInstanceId = id; },
     },
     levelManager: {
       levels: m.levels,
@@ -66,13 +68,16 @@ module.exports = async h => {
   ok(tool._placeOne(m, { kind: 'wall', ent: wallEnt }, 2.5), 'hosted door placed through the real tool');
   ok(m.validate().ok, 'wall with opening stays valid');
 
-  const revealFaces = [...m.faces.keys()].filter(id => {
-    const f = m.faces.get(id);
-    return f && f.userData && f.userData.bimEntityId === wallEnt.id && !roles[id];
-  });
-  ok(revealFaces.length >= 4, `cut stamped ${revealFaces.length} reveal faces to the wall`);
-  ok(revealFaces.every(fid => m.faces.get(fid).userData.role === 'lining'),
-    'every reveal face carries the lining role');
+  const doorEnt = bim.entities.find(e => e.type === 'door');
+  ok(doorEnt, 'hosted placement registered a DOOR entity (Element Browser listing)');
+  ok(doorEnt.params.assetInstanceId === 'asset_1', 'entity links its model instance');
+  ok(doorEnt.params.hostWallId === wallEnt.id, 'entity hosted on the wall');
+  eq(doorEnt.params.name, 'Glass door', 'entity carries the model name');
+
+  const revealFaces = [...doorEnt.faces];
+  ok(revealFaces.length >= 4, `cut registered ${revealFaces.length} lining faces on the door entity`);
+  ok(revealFaces.every(fid => { const f = m.faces.get(fid); return f && f.userData && f.userData.bimEntityId === doorEnt.id && f.userData.role === 'lining'; }),
+    'every reveal face is stamped to the door entity with the lining role');
 
   test('paintTargets: dropping on the wall paints the WALL, never the opening', () => {
     ok(MD && MD.paintTargets, 'feature exports paintTargets');
@@ -80,20 +85,26 @@ module.exports = async h => {
       const ff = m.faces.get(x);
       return ff.userData && ff.userData.bimEntityId === wallEnt.id;
     });
-    ok(stamped.length > creationFaces,
-      `stamped faces (${stamped.length}) exceed the pre-cut wall faces (${creationFaces})`);
-    for (const fid of revealFaces) ok(stamped.includes(fid), 'reveal ' + fid + ' stamped to the wall');
+    ok(stamped.length >= 1, `wall owns ${stamped.length} faces`);
+    // the opening belongs to the door entity — nothing reveal-ish is
+    // wall-stamped, so an element-wide paint can never reach it
+    for (const fid of revealFaces) ok(!stamped.includes(fid), 'reveal ' + fid + ' owned by the door, not the wall');
 
-    // the drop target set is the wall's own faces: linings excluded
     const t = MD.paintTargets(m, stamped[0], bim.entities);
     ok(t.length >= 1, 'wall faces resolved');
     ok(t.every(x => stamped.includes(x)), 'targets stay inside the element');
     for (const fid of revealFaces) ok(!t.includes(fid), 'reveal ' + fid + ' NOT painted');
 
-    // even dropping ON a reveal face paints the wall, not the opening
+    // even dropping ON a reveal face resolves to just that face — the
+    // opening never takes the wall's material
     const t2 = MD.paintTargets(m, revealFaces[0], bim.entities);
-    ok(t2.every(x => stamped.includes(x)), 'reveal drop still resolves the element');
-    ok(t2.every(x => !revealFaces.includes(x)), 'and still skips the opening faces');
+    eq(t2.length, 1, 'reveal drop paints itself only');
+    eq(t2[0], revealFaces[0], 'the reveal face, not the wall');
+  });
+
+  test('deleting the hosted element removes its model instance', () => {
+    ok(bim.detach(doorEnt.id), 'element detached');
+    eq(removedInstanceId, 'asset_1', 'the linked asset instance went with it');
   });
 
   test('paintTargets: native door linings are skipped too', () => {

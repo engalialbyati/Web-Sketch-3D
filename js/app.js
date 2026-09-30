@@ -2666,6 +2666,14 @@ class BimEntityManager {
     const i = this.entities.findIndex(e => e.id === id);
     if (i < 0) return false;
     const ent = this.entities[i];
+    // a hosted-asset element drags its model instance along — the THREE
+    // object would keep rendering over the healed wall otherwise
+    if (ent.params && ent.params.assetInstanceId) {
+      const A = window.app;
+      if (A && A.assets && A.assets.remove) {
+        try { A.assets.remove(ent.params.assetInstanceId, { heal: false }); } catch (e) { }
+      }
+    }
     if (this.model && this.model.touch) this.model.touch(); // registry changed: view gate must reopen
     for (const fid of ent.faces) {
       const f = this.model.faces.get(fid);
