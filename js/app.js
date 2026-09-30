@@ -2863,6 +2863,9 @@ class App {
   // reference (levels, BIM entities, anything else with cached .model).
   bindModel(m) {
     this._demoRecipe = null; // model swap drops the recipe; loaders re-set it
+    // a fresh model has no assets — drop the instances or File ▸ New keeps
+    // rendering the previous scene's doors/windows over the empty grid
+    if (this.assets && this.assets.clear) { try { this.assets.clear(); } catch (e) { } }
     this.model = m;
     this.levelManager.model = m;
     this.bim.model = m;
@@ -9574,7 +9577,7 @@ class App {
     if (!this.undoStack.length) { this.toast('Nothing to undo'); return; }
     this.redoStack.push(this.model.serialize());
     this.model.load(this.undoStack.pop());
-    if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
+    if (this.assets) this.assets.restore(this.model.assetListData || []);
     // restored params can disagree with cached catalog types — re-resolve
     if (this.elements && this.elements.invalidateAllTypes) { this.elements.invalidateAllTypes(); this.syncElementsToDb(); }
     if (this.view.clearPins) this.view.clearPins(); // pinned areas belong to the overwritten state
@@ -9604,7 +9607,7 @@ class App {
     if (!this.redoStack.length) { this.toast('Nothing to redo'); return; }
     this.undoStack.push(this.model.serialize());
     this.model.load(this.redoStack.pop());
-    if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
+    if (this.assets) this.assets.restore(this.model.assetListData || []);
     if (this.elements && this.elements.invalidateAllTypes) { this.elements.invalidateAllTypes(); this.syncElementsToDb(); }
     if (this.view.clearPins) this.view.clearPins();
     if (this.activeGroup != null && !this.model.groups.has(this.activeGroup)) this.exitGroup();
@@ -9763,7 +9766,7 @@ class App {
       this.clearSelection();
       if (this.view.clearPins) this.view.clearPins();
       this.view.rebuild();
-      if (this.assets && this.model.assetListData) this.assets.restore(this.model.assetListData);
+      if (this.assets) this.assets.restore(this.model.assetListData || []);
       this.onLevelsChanged(); // datum view layers follow the loaded model
       this.onGridsChanged();
       this.rederiveJunctions(); // junctions re-derived against loaded neighbors
@@ -9961,8 +9964,8 @@ class App {
         // restore hosted/free asset instances BEFORE any self-heal: the
         // wholesale rebuild re-cuts openings only for instances that
         // already exist (their templates load async)
-        const restoring = this.assets && this.model.assetListData
-          ? this.assets.restore(this.model.assetListData) : null;
+        const restoring = this.assets
+          ? this.assets.restore(this.model.assetListData || []) : null;
         const afterRestore = () => {
           // self-healing files: a model that still fails validate after
           // re-derivation is rebuilt wholesale from its parameters

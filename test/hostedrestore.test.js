@@ -58,6 +58,7 @@ module.exports = async h => {
   const appStub = {
     model: m,
     bim: { entities: bim.entities, getEntityById: id => bim.entities.find(e => e.id === id) || null },
+    levelManager: { model: m, levels: m.levels },
     view: { scene: new THREE.Scene(), invalidate() { } },
     assetsChanged() { },
   };
@@ -155,5 +156,21 @@ module.exports = async h => {
     near((box.min.y + box.max.y) / 2, 0, 1e-6, 'model still centered mid-wall');
     near(box.min.z, 0, 1e-6, 'door still bottoms at the floor');
     eq(mgr.instances.size, 1, 'hosted instance survived the rebuild');
+  });
+
+  test('bindModel (File ▸ New): every asset instance is dropped', () => {
+    const mgr = new AssetManager(appStub);
+    mgr.templates.set('lib:doorx', Promise.resolve(tpl));
+    const loc = BimTools.HostedCut.locate(G, p, { distanceFromStart: 2.5, width: 1, height: 2, sillHeight: 0 });
+    loc.depth = 0.2;
+    mgr.placeHosted('lib:doorx', 'Glass door', tpl, {
+      wallId: wallEnt.id, distance: 2.5, sill: 0, width: 1, height: 2, depth: 0.2, kindHint: 'door',
+    }, loc);
+    eq(mgr.instances.size, 1, 'instance placed');
+    appStub.assets = mgr; // bindModel clears through the app facade
+    const fresh = new Model();
+    fresh.bimEntities = [];
+    w.App.prototype.bindModel.call(appStub, fresh);
+    eq(mgr.instances.size, 0, 'fresh model drops the instances');
   });
 };
