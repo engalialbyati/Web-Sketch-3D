@@ -12,7 +12,6 @@
 // basis) and drawn in a dedicated overlay pass over the shaded faces.
 // ---------------------------------------------------------------------------
 (function () {
-  if (!window.Engine) return;
   const TEXTURES = [
     { kind: 'brick', label: 'Brick', size: 0.22 },
     { kind: 'concrete', label: 'Concrete', size: 1.0 },
@@ -33,10 +32,15 @@
     { file: 'grass_lawn.png', label: 'Lawn', size: 0.6 },
     { file: 'paving_concrete.png', label: 'Paving', size: 0.5 },
   ];
-  function addBundled(app, b) {
-    fetch('assets/textures/' + b.file)
+  // fetch a bundled CC0 photo texture as a data URL (click-add and the
+  // drag-and-drop paint path share it)
+  function bundledSrc(b) {
+    return fetch('assets/textures/' + b.file)
       .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
-      .then(bl => new Promise(res => { const rd = new FileReader(); rd.onload = () => res(String(rd.result || '')); rd.readAsDataURL(bl); }))
+      .then(bl => new Promise(res => { const rd = new FileReader(); rd.onload = () => res(String(rd.result || '')); rd.readAsDataURL(bl); }));
+  }
+  function addBundled(app, b) {
+    bundledSrc(b)
       .then(src => {
         app.run('bundled material', mm => {
           const id = 'mat_' + b.file.replace('.png', '');
@@ -118,6 +122,169 @@
     return mat;
   }
 
+  // ---- drag & drop painting --------------------------------------------------
+  // Anything carrying data-drag-mat (tray swatches, dialog rows, online
+  // texture cards) is a drag source; dropping on the viewport paints the
+  // face under the cursor. A BIM face paints its WHOLE element — a wall
+  // takes the material on every face INCLUDING its door/window opening
+  // reveals — and an asset island paints as one unit. Drop = paint the
+  // thing you hit.
+  const MAT_MIME = 'application/x-websketch-material';
+  const attrJSON = obj => JSON.stringify(obj).replace(/"/g, '&quot;');
+
+  function paintTargets(m, fid, entities = []) {
+    const f = m.faces.get(fid);
+    if (!f) return [fid];
+    const eid = f.userData && f.userData.bimEntityId;
+    if (eid) {
+      // LIVE stamp query — the entity's own face list goes stale the
+      // moment a hosted cut stamps its reveal faces to the wall without
+      // extending ent.faces; the model is the truth
+      const out = [...m.faces.keys()].filter(x => {
+        const ff = m.faces.get(x);
+        return ff.userData && ff.userData.bimEntityId === eid;
+      });
+      // native Door/Window elements hosted on this wall contribute their
+      // LINING (reveal) faces, so the opening takes the wall's material —
+      // frame and leaf keep the door's own look
+      for (const e of entities) {
+        if (!e || !e.params || e.params.hostWallId !== eid) continue;
+        for (const x of e.faces) {
+          const ff = m.faces.get(x);
+          if (ff && (!ff.userData || !ff.userData.role || ff.userData.role === 'lining')) out.push(x);
+        }
+      }
+      return out.length ? [...new Set(out)] : [fid];
+    }
+    const gid = f.userData && f.userData.assetGid;
+    if (gid) {
+      return [...m.faces.keys()].filter(x => {
+        const ff = m.faces.get(x);
+        return ff.userData && ff.userData.assetGid === gid;
+      });
+    }
+    return [fid];
+  }
+
+  function stamp(mm, targets, mat) {
+    for (const t of targets) {
+      const ff = mm.faces.get(t);
+      if (!ff) continue;
+      ff.matId = mat && mat.id ? mat.id : null;
+      ff.color = mat ? (mat.color || null) : null;
+      ff.alpha = mat ? (mat.alpha == null ? 1 : mat.alpha) : 1;
+    }
+  }
+
+  function paintDropAt(app, mat, ev) {
+    const v = app.view, m = app.model;
+    const fid = v.pickFaceAt(v.eventPt(ev));
+    if (!fid) { app.toast('Drop the material ON a face (wall, floor, roof…)', true); return false; }
+    const targets = paintTargets(m, fid, app.bim ? app.bim.entities : []);
+    app.run('paint material', mm => {
+      stamp(mm, targets, mat);
+      mm.touch();
+    });
+    rebuildPass(app);
+    const what = targets.length > 1 ? ` — whole element (${targets.length} faces, opening included)` : '';
+    app.toast(`${(mat && mat.name) || 'Material'} painted${what}`);
+    return true;
+  }
+
+  function resolveDrop(app, payload, ev) {
+    const syncTray = () => { if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged(); };
+    if (payload.matId) {
+      const mat = app.model.materials && app.model.materials.get(payload.matId);
+      if (mat) return paintDropAt(app, mat, ev);
+      app.toast('That material no longer exists', true);
+      return;
+    }
+    if (payload.ral) {
+      const { code, hex, name } = payload.ral;
+      const id = 'mat_ral_' + code;
+      app.run('ral material', mm => {
+        if (!mm.materials.has(id)) mm.materials.set(id, { id, name: `RAL ${code} ${name}`, color: hex, alpha: 1, texture: null });
+        mm.touch();
+      });
+      syncTray();
+      return paintDropAt(app, app.model.materials.get(id), ev);
+    }
+    if (payload.ph) {
+      const { id, name, size } = payload.ph;
+      const mid = 'mat_ph_' + id;
+      const existing = app.model.materials && app.model.materials.get(mid);
+      if (existing) return paintDropAt(app, existing, ev);
+      app.toast('Loading ' + name + '…');
+      PHTextures.fetchDiffuseDataUrl(id)
+        .then(src => {
+          app.run('polyhaven material', mm => {
+            if (!mm.materials.has(mid)) mm.materials.set(mid, { id: mid, name: name + ' (CC0 · Poly Haven)', color: null, alpha: 1, texture: { kind: 'image', src, size } });
+            mm.touch();
+          });
+          syncTray();
+          paintDropAt(app, app.model.materials.get(mid), ev);
+        })
+        .catch(e => app.toast('Could not load ' + name + ' — ' + (e.message || e), true));
+      return;
+    }
+    if (payload.bundled) {
+      const b = BUNDLED.find(x => x.file === payload.bundled.file);
+      if (!b) return;
+      const mid = 'mat_' + b.file.replace('.png', '');
+      const existing = app.model.materials && app.model.materials.get(mid);
+      if (existing) return paintDropAt(app, existing, ev);
+      app.toast('Loading ' + b.label + '…');
+      bundledSrc(b)
+        .then(src => {
+          app.run('bundled material', mm => {
+            if (!mm.materials.has(mid)) mm.materials.set(mid, { id: mid, name: b.label + ' (CC0)', color: null, alpha: 1, texture: { kind: 'image', src, size: b.size } });
+            mm.touch();
+          });
+          syncTray();
+          paintDropAt(app, app.model.materials.get(mid), ev);
+        })
+        .catch(e => app.toast('Could not load ' + b.label + ' — ' + (e.message || e), true));
+      return;
+    }
+    // a plain tray color (or the default/eraser swatch) — paint-tool rules:
+    // color rides the face, no registry identity, no texture overlay
+    paintDropAt(app, { id: null, name: payload.name || 'Color', color: payload.color || null, alpha: payload.alpha == null ? 1 : payload.alpha }, ev);
+  }
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('dragstart', ev => {
+      const el = ev.target && ev.target.closest ? ev.target.closest('[data-drag-mat]') : null;
+      if (!el || !el.draggable) return;
+      try {
+        const payload = JSON.parse(el.dataset.dragMat || '{}');
+        ev.dataTransfer.setData(MAT_MIME, JSON.stringify(payload));
+        ev.dataTransfer.setData('text/plain', (payload.name || (payload.ph && payload.ph.name) || 'material'));
+        ev.dataTransfer.effectAllowed = 'copy';
+        document.body.classList.add('mat-drag'); // drop passes the dialog backdrop
+      } catch (e) { /* not ours */ }
+    });
+    document.addEventListener('dragend', () => document.body.classList.remove('mat-drag'));
+    document.addEventListener('dragover', ev => {
+      const types = ev.dataTransfer ? [...(ev.dataTransfer.types || [])] : [];
+      if (!types.includes(MAT_MIME)) return;
+      if (!ev.target || !ev.target.closest || !ev.target.closest('#viewport')) return;
+      ev.preventDefault();
+      ev.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('drop', ev => {
+      document.body.classList.remove('mat-drag');
+      let raw = null;
+      try { raw = ev.dataTransfer && ev.dataTransfer.getData(MAT_MIME); } catch (e) { /* not ours */ }
+      if (!raw) return;
+      if (!ev.target || !ev.target.closest || !ev.target.closest('#viewport')) return;
+      ev.preventDefault();
+      const app = window.app;
+      if (!app || !app.view || !app.model) return;
+      try { resolveDrop(app, JSON.parse(raw), ev); }
+      catch (e) { app.toast('Paint failed — ' + (e.message || e), true); }
+    });
+  }
+
   // ---- texture overlay pass -------------------------------------------------
   function rebuildPass(app) {
     const view = app.view, m = app.model;
@@ -170,7 +337,7 @@
     const rows = [...m.materials.values()].map(mat => {
       const uses = [...m.faces.values()].filter(f => f.matId === mat.id);
       const area = uses.reduce((s, f) => s + (m.faceArea ? m.faceArea(f) : 0), 0);
-      return `<tr>
+      return `<tr draggable="true" data-drag-mat="${attrJSON({ matId: mat.id })}" title="Drag onto a wall/floor in the viewport to paint the whole element">
         <td><input data-mat="${mat.id}" data-f="name" value="${mat.name}" style="width:130px"></td>
         <td><input data-mat="${mat.id}" data-f="color" type="color" value="${mat.color || '#cccccc'}"></td>
         <td><select data-mat="${mat.id}" data-f="tex"><option value="">—</option>${TEXTURES.map(t => `<option value="${t.kind}" ${mat.texture && mat.texture.kind === t.kind ? 'selected' : ''}>${t.label}</option>`).join('')}<option value="image" ${mat.texture && mat.texture.kind === 'image' ? 'selected' : ''}>Image file…</option></select></td>
@@ -190,7 +357,7 @@
         </div>
         <div style="display:flex; gap:8px; margin-bottom:8px; align-items:center; flex-wrap:wrap">
           <span class="dim">Bundled photo textures (CC0 · ambientCG):</span>
-          ${BUNDLED.map(b => `<button class="mini-btn" data-bundled="${b.file}" title="${b.label} — ${b.size} m tile">${b.label}</button>`).join('')}
+          ${BUNDLED.map(b => `<button class="mini-btn" draggable="true" data-drag-mat="${attrJSON({ bundled: { file: b.file } })}" data-bundled="${b.file}" title="${b.label} — ${b.size} m tile · click to add, or drag onto a face to paint">${b.label}</button>`).join('')}
         </div>
         <div id="ph-mount" style="border-top:1px solid #d8d8d8; padding-top:6px; margin-bottom:8px"></div>
         <table class="prop-table" style="width:100%">
@@ -279,17 +446,19 @@
     });
   }
 
-  Engine.features.register({
-    id: 'materials', kind: 'command', label: 'Materials…',
-    icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12l8-8 8 8-8 8z"/><path d="M12 4v16" opacity=".4"/></svg>',
-    commands: ['materials', 'material registry', 'ral'],
-    run(app) { materialsDialog(app); },
-  });
-  Engine.events.on('model:changed', () => {
-    const app = Engine.app;
-    if (!app) return;
-    rebuildPass(app);
-    if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged();
-  });
-  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass };
+  if (window.Engine) {
+    Engine.features.register({
+      id: 'materials', kind: 'command', label: 'Materials…',
+      icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12l8-8 8 8-8 8z"/><path d="M12 4v16" opacity=".4"/></svg>',
+      commands: ['materials', 'material registry', 'ral'],
+      run(app) { materialsDialog(app); },
+    });
+    Engine.events.on('model:changed', () => {
+      const app = Engine.app;
+      if (!app) return;
+      rebuildPass(app);
+      if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged();
+    });
+  }
+  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass, paintTargets, attrJSON, MAT_MIME };
 })();

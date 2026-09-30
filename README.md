@@ -779,6 +779,18 @@ as materials come and go. A bundled **CC0 photo-texture library**
 paving — see `assets/textures/SOURCES.md`) installs as image materials in
 one click, at real-world tile sizes.
 
+**Drag & drop paints.** Every swatch is draggable — tray colors, registry
+materials, RAL palette entries, bundled textures, and the online Poly
+Haven cards — and dropping one on the viewport paints the face under the
+cursor. A BIM face paints its **whole element**: a wall takes the
+material on every face **including its door/window opening reveals**
+(the hosted cut stamps the reveal band to the wall; native door/window
+elements contribute their lining faces but keep their frame and leaf
+look), an asset island paints as one unit, and a free face paints just
+itself. Dragging a Poly Haven card downloads the diffuse on drop,
+registers the material and paints in one gesture; while a material drag
+is live the dialog backdrop lets the drop fall through to the viewport.
+
 **Online textures — Poly Haven** (same dialog, below the bundled row)
 browses the full Poly Haven scan library (~860 CC0 PBR textures — the
 same free source SketchUp's community material browsers tap): search and

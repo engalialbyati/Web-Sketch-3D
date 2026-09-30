@@ -5389,6 +5389,9 @@ class App {
         : col;
       d.style.background = bg;
       if (!m.color) { d.classList.add('default'); d.textContent = '×'; }
+      d.title = m.name + ' — click to arm, drag onto a face to paint';
+      d.draggable = true; // drag & drop paint (plain color, no registry id)
+      d.dataset.dragMat = JSON.stringify({ name: m.name, color: m.color || null, alpha: m.alpha });
       d.addEventListener('click', () => {
         this.currentMaterial = m;
         wrap.querySelectorAll('.swatch').forEach(x => x.classList.remove('active'));
@@ -5406,13 +5409,18 @@ class App {
       grass: 'radial-gradient(#7d9c5a 30%,#6a8a4c)',
       metal: 'repeating-linear-gradient(15deg,#b9c0c6 0 4px,#cdd4da 4px 8px)',
     };
-    const addSwatch = (title, bg, onPick, extra = '') => {
+    const addSwatch = (title, bg, onPick, extra = '', drag = null) => {
       const d = document.createElement('div');
       d.className = 'swatch';
       d.title = title;
       d.style.background = bg;
       d.style.backgroundSize = 'cover';
       if (extra) d.style.boxShadow = extra;
+      if (drag) { // drag & drop paint — the payload rides in the dataset
+        d.draggable = true;
+        d.dataset.dragMat = JSON.stringify(drag);
+        d.title += ' — drag onto a face to paint';
+      }
       d.addEventListener('click', () => {
         onPick();
         wrap.querySelectorAll('.swatch').forEach(x => x.classList.remove('active'));
@@ -5430,7 +5438,7 @@ class App {
       addSwatch(`${mat.name}${mat.texture ? ' (' + mat.texture.kind + ')' : ''}`, bg, () => {
         this.currentMaterial = { name: mat.name, color: mat.color, alpha: mat.alpha, matId: mat.id };
         this.setStatus(`Material: ${mat.name} — paint with B`);
-      }, 'inset 0 0 0 2px #1f6fd6');
+      }, 'inset 0 0 0 2px #1f6fd6', { matId: mat.id });
     }
     addSwatch('RAL Classic palette (213 colors)…', 'conic-gradient(#b73c25,#bccb30,#1d1f2a,#b73c25)', () => this.ralPaletteDialog(), 'inset 0 0 0 2px #888');
     wrap.firstChild.classList.add('active');
@@ -5460,7 +5468,9 @@ class App {
         d.className = 'swatch';
         d.style.width = d.style.height = '34px';
         d.style.background = r.rgb_hex;
-        d.title = `RAL ${k} — ${r.name}`;
+        d.title = `RAL ${k} — ${r.name} · click to arm, drag onto a face to paint`;
+        d.draggable = true; // drop creates-or-reuses the RAL material, then paints
+        d.dataset.dragMat = JSON.stringify({ ral: { code: k, hex: r.rgb_hex, name: r.name } });
         d.addEventListener('click', () => {
           let mat = [...(this.model.materials || new Map()).values()].find(mt => mt.name === `RAL ${k} ${r.name}`);
           if (!mat) this.run('ral material', mm => {

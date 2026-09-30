@@ -132,13 +132,15 @@
         const card = document.createElement('button');
         card.className = 'mini-btn';
         card.style.cssText = 'padding:2px;text-align:center;font-size:10px;line-height:1.25';
-        card.title = `${a.name} — ${specFor(a).size.toFixed(2)} m tile · CC0`;
+        const spec = specFor(a);
+        card.title = `${a.name} — ${spec.size.toFixed(2)} m tile · CC0 · click to add, or drag onto a face to paint`;
+        card.draggable = true; // drop downloads the diffuse, registers, paints
+        card.dataset.dragMat = JSON.stringify({ ph: { id: a.id, name: a.name, size: spec.size } });
         card.innerHTML = `<img src="${a.thumbnail_url}" alt="" loading="lazy"
             style="width:64px;height:64px;object-fit:cover;display:block;margin:0 auto;background:#e8eaed">
           <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.name}</div>`;
         card.addEventListener('click', () => {
           status.textContent = 'Loading ' + a.name + '…';
-          const spec = specFor(a);
           fetchDiffuseDataUrl(a.id)
             .then(src => {
               status.textContent = '';

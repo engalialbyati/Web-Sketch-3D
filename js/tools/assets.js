@@ -131,9 +131,19 @@
           // make element independence refuse the punch ("opening does not
           // sit inside a host face")
           mm.bimHold = host.kind === 'wall' ? host.ent.id : true;
+          const facesBefore = new Set(mm.faces.keys());
           try {
             info = window.BimTools.HostedCut.cut(G, mm, hp, spec);
             if (info.error) throw new Error(info.error);
+            // The cut's NEW faces — the reveal band lining the opening and
+            // any boundary-split pieces — are WALL geometry (the wall recut
+            // regenerates them): stamp them to the host so live-stamp reads
+            // (paint drops, element groups, island logic) own the opening.
+            for (const fid of mm.faces.keys()) {
+              if (facesBefore.has(fid)) continue;
+              const ff = mm.faces.get(fid);
+              if (ff) (ff.userData || (ff.userData = {})).bimEntityId = host.ent.id;
+            }
           } finally { mm.bimHold = false; }
         });
       } catch (e) { app.toast(String(e.message || e)); return; }
