@@ -95,6 +95,22 @@
     return placeSoup(app, buildSoup(comp), comp.name, x, y, opts);
   }
 
+  /** A fused model earns the kernel path only when it builds a CLEAN B-rep.
+   *  Some light fuses are pinched — glass panes sharing an edge, coincident
+   *  shells — rings that visit a vertex twice or 4-fold edges (46 of the
+   *  925 catalogue models are this shape). Placing those as kernel faces
+   *  poisons the model, so the probe builds the fusion once in a throwaway
+   *  model and validates; anything imperfect places as a foreign mesh. */
+  function kernelProbeOk(soup) {
+    const M = (typeof window !== 'undefined' && window.Model) || (typeof Model !== 'undefined' ? Model : null);
+    if (!M) return true; // no probe available — keep the size-only rule
+    try {
+      const probe = new M();
+      const g = SolidOps.facesFromSoup(probe, { positions: soup.positions, triangles: soup.triangles, triAttrs: soup.triAttrs }, 'probe');
+      return !!g && probe.validate().ok;
+    } catch (e) { return false; }
+  }
+
   /** Place any triangle soup (welded indices, per-tri color attrs) through
    *  the dual path — the shared entry the imported models and the online
    *  catalogue both use. Light models fuse into kernel geometry inside an
@@ -105,7 +121,7 @@
     // probe the fusion cheaply: fusing is O(n) — try, and if it stays dense,
     // fall back to the foreign path (the soup is unchanged by fuse)
     const fused = SoupFuse.fuse({ positions: soup.positions, triangles: soup.triangles.map(t => t.slice()), triAttrs: soup.triAttrs });
-    if (fused.length > KERNEL_FACE_LIMIT) return placeForeignSoup(app, soup, name, x, y);
+    if (fused.length > KERNEL_FACE_LIMIT || !kernelProbeOk(soup)) return placeForeignSoup(app, soup, name, x, y);
     let gid = null;
     app.run('place component', m => {
       // isolation: the fused model welds to itself, never into a host element
@@ -169,5 +185,5 @@
     }));
   }
 
-  window.ComponentsFeature = { MANIFEST, buildSoup, place, placeSoup, foreignObject, dialogSection, wire, KERNEL_FACE_LIMIT };
+  window.ComponentsFeature = { MANIFEST, buildSoup, place, placeSoup, kernelProbeOk, foreignObject, dialogSection, wire, KERNEL_FACE_LIMIT };
 })();

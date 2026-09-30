@@ -56,4 +56,39 @@ module.exports = h => {
     near(bb.min.y, 4, 1e-6, 'moved to y=4');
     ok(m.validate().ok, 'valid');
   });
+
+  // a clean welded box soup for the probe tests
+  function boxSoup() {
+    const P = [], T = [];
+    const vid = (x, y, z) => {
+      let i = P.findIndex(p => p.x === x && p.y === y && p.z === z);
+      if (i < 0) { i = P.length; P.push({ x, y, z }); }
+      return i;
+    };
+    const v = [[0,0,0],[1,0,0],[1,1,0],[0,1,0],[0,0,1],[1,0,1],[1,1,1],[0,1,1]].map(p => vid(...p));
+    const quads = [[v[0],v[3],v[2],v[1]],[v[4],v[5],v[6],v[7]],[v[0],v[1],v[5],v[4]],[v[1],v[2],v[6],v[5]],[v[2],v[3],v[7],v[6]],[v[3],v[0],v[4],v[7]]];
+    for (const q of quads) for (const t of [[q[0],q[1],q[2]],[q[0],q[2],q[3]]]) T.push(t);
+    return { positions: P, triangles: T, triAttrs: T.map(() => ({ color: null, alpha: 1 })) };
+  }
+
+  test('kernelProbeOk: a fusion that builds an invalid B-rep is refused', () => {
+    // clean box fuses into a valid solid → kernel-safe
+    ok(CF.kernelProbeOk(boxSoup()), 'clean box is kernel-safe');
+    // sabotage the build the way real pinched models do (glass panes sharing
+    // an edge, coincident shells): a ring that visits a vertex twice fails
+    // validate, and the probe must route such models to the foreign path
+    const real = w.SolidOps.facesFromSoup;
+    w.SolidOps.facesFromSoup = (m, soup, name) => {
+      const g = real(m, soup, name);
+      if (g) {
+        const fid = [...m.groupEntities(g.gid).faces][0];
+        const f = m.faces.get(fid);
+        if (f) f.loop.splice(1, 0, f.loop[0]); // pinch: vertex visited twice
+      }
+      return g;
+    };
+    eq(CF.kernelProbeOk(boxSoup()), false, 'pinched build → not kernel-safe');
+    w.SolidOps.facesFromSoup = real;
+    ok(CF.kernelProbeOk(boxSoup()), 'restored → kernel-safe again');
+  });
 };

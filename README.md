@@ -794,7 +794,9 @@ standing woman, pickup, SUV, sofa — ~35k faces total) extracted from
 IngeTrazo's `.igz` sample library under CC BY 4.0 / CC0 terms (see
 `assets/components/CREDITS.md` for the per-model attribution the licenses
 require). Each lands through the dual-path importer: if the mesh fuses to
-≤ 600 coplanar faces it becomes editable kernel geometry, otherwise it
+≤ 600 coplanar faces **and the fusion builds a clean solid** (probed in a
+throwaway model — pinched fuses like glass panes sharing an edge place as
+meshes instead) it becomes editable kernel geometry, otherwise it
 arrives as a vertex-colored foreign mesh (select, move, paint; convert
 later via Tools ▸ Mesh → Faces). `tools/extract-igz.js` is the
 provenance-preserving extractor, kept so the imports stay reproducible.

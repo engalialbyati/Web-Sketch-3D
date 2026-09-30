@@ -2347,6 +2347,7 @@ class Viewport {
     let best = null, bestD = 11;
     for (const a of anns) {
       const prj = p0 => {
+        if (!p0) return null; // an annotation without an anchor is unpickable — never a crash
         const v = new THREE.Vector3(p0[0], p0[1], p0[2]).project(cam);
         if (v.z > 1) return null;
         return { x: (v.x + 1) / 2 * w, y: (-v.y + 1) / 2 * h };
@@ -2358,6 +2359,19 @@ class Viewport {
         const dx = B.x - A.x, dy = B.y - A.y;
         const t = Math.max(0, Math.min(1, ((s.x - A.x) * dx + (s.y - A.y) * dy) / (dx * dx + dy * dy || 1)));
         const d = Math.hypot(s.x - (A.x + t * dx), s.y - (A.y + t * dy));
+        if (d < bestD) { bestD = d; best = a; }
+      } else if (a.kind === 'cloud' || a.kind === 'region') {
+        // ring annotations carry pts, not an anchor: pick by the nearest
+        // boundary segment (the way the HUD draws them)
+        const pts = (a.pts || []).map(prj).filter(Boolean);
+        if (pts.length < 3) continue;
+        let d = Infinity;
+        for (let i = 0; i < pts.length; i++) {
+          const A = pts[i], B = pts[(i + 1) % pts.length];
+          const dx = B.x - A.x, dy = B.y - A.y;
+          const t = Math.max(0, Math.min(1, ((s.x - A.x) * dx + (s.y - A.y) * dy) / (dx * dx + dy * dy || 1)));
+          d = Math.min(d, Math.hypot(s.x - (A.x + t * dx), s.y - (A.y + t * dy)));
+        }
         if (d < bestD) { bestD = d; best = a; }
       } else {
         const at = prj(a.box || a.at);
