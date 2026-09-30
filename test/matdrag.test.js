@@ -70,36 +70,41 @@ module.exports = async h => {
     return f && f.userData && f.userData.bimEntityId === wallEnt.id && !roles[id];
   });
   ok(revealFaces.length >= 4, `cut stamped ${revealFaces.length} reveal faces to the wall`);
+  ok(revealFaces.every(fid => m.faces.get(fid).userData.role === 'lining'),
+    'every reveal face carries the lining role');
 
-  test('paintTargets: dropping on the wall paints the element INCLUDING the opening', () => {
+  test('paintTargets: dropping on the wall paints the WALL, never the opening', () => {
     ok(MD && MD.paintTargets, 'feature exports paintTargets');
     const stamped = [...m.faces.keys()].filter(x => {
       const ff = m.faces.get(x);
       return ff.userData && ff.userData.bimEntityId === wallEnt.id;
     });
     ok(stamped.length > wallEnt.faces.length,
-      `stamped faces (${stamped.length}) exceed the creation-time list (${wallEnt.faces.length}) — reveals included`);
+      `stamped faces (${stamped.length}) exceed the creation-time list (${wallEnt.faces.length})`);
     for (const fid of revealFaces) ok(stamped.includes(fid), 'reveal ' + fid + ' stamped to the wall');
 
-    // drop on ANY wall face — a reveal face included — resolves to the full
-    // live stamp set, never a subset
-    for (const fid of [stamped[0], revealFaces[0]]) {
-      const t = MD.paintTargets(m, fid, bim.entities);
-      eq(t.length, stamped.length, 'whole element resolved from face ' + fid);
-      ok(t.every(x => stamped.includes(x)), 'targets stay inside the element');
-    }
+    // the drop target set is the wall's own faces: linings excluded
+    const t = MD.paintTargets(m, stamped[0], bim.entities);
+    ok(t.length >= 1, 'wall faces resolved');
+    ok(t.every(x => stamped.includes(x)), 'targets stay inside the element');
+    for (const fid of revealFaces) ok(!t.includes(fid), 'reveal ' + fid + ' NOT painted');
+
+    // even dropping ON a reveal face paints the wall, not the opening
+    const t2 = MD.paintTargets(m, revealFaces[0], bim.entities);
+    ok(t2.every(x => stamped.includes(x)), 'reveal drop still resolves the element');
+    ok(t2.every(x => !revealFaces.includes(x)), 'and still skips the opening faces');
   });
 
-  test('paintTargets: native door entities contribute linings, never frame/leaf', () => {
+  test('paintTargets: native door linings are skipped too', () => {
     const wallFid = [...m.faces.keys()].find(x => {
       const ff = m.faces.get(x);
-      return ff.userData && ff.userData.bimEntityId === wallEnt.id;
+      return ff.userData && ff.userData.bimEntityId === wallEnt.id && ff.userData.role !== 'lining';
     });
     const mk = at => m.addFaceFromRings([G.v(at, at, 0), G.v(at + 0.3, at, 0), G.v(at + 0.3, at + 0.3, 0), G.v(at, at + 0.3, 0)]).id;
     const lining = mk(20), frame = mk(21), leaf = mk(22);
     bim.create('door', { hostWallId: wallEnt.id, width: 1, height: 2.1, sillHeight: 0 }, { [lining]: 'lining', [frame]: 'frame', [leaf]: 'leaf' }, []);
     const t = MD.paintTargets(m, wallFid, bim.entities);
-    ok(t.includes(lining), 'hosted lining (reveal) painted with the wall');
+    ok(!t.includes(lining), 'native lining (reveal) NOT painted with the wall');
     ok(!t.includes(frame), 'door frame keeps its own look');
     ok(!t.includes(leaf), 'door leaf keeps its own look');
   });

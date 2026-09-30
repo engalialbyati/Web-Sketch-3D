@@ -1368,7 +1368,10 @@ class HostedCut {
       if (!f) return { error: 'degenerate opening rect' };
       const r = model.punchOrSplit(f);
       if (r !== 'punch' && r !== 'split') {
-        if (i === 1) { partial = true; continue; } // pocket back cap — keep the face
+        if (i === 1) { // pocket back cap — keep the face; it reads as opening
+          (f.userData || (f.userData = {})).role = 'lining';
+          partial = true; continue;
+        }
         const loop = [...f.loop];
         model.faces.delete(f.id); // the void itself — never a filler face
         model.reapRingEdges(loop); // its border would linger as wire lines
@@ -1379,7 +1382,9 @@ class HostedCut {
       model.reapRingEdges(loop); // its border would linger as wire lines
     }
     // 2) stitch the reveal band between the two openings (sides, head, and
-    //    the threshold at the floor) — welded rings, no internal caps
+    //    the threshold at the floor) — welded rings, no internal caps. The
+    //    band is marked 'lining': element-wide paints (drag-and-drop) skip
+    //    it so a dropped material stays on the WALL, not the opening.
     const mid = G.mul(G.add(rect[0], far[2]), 0.5); // tunnel center
     for (let i = 0; i < rect.length; i++) {
       const a1 = rect[i], b1 = rect[(i + 1) % rect.length];
@@ -1389,7 +1394,8 @@ class HostedCut {
       // orient the reveal into the void so the shell volume stays exact
       const c = G.mul(q.reduce((s, p) => G.add(s, p), G.v(0, 0, 0)), 0.25);
       if (G.dot(G.loopNormal(q), G.sub(mid, c)) < 0) q.reverse();
-      model.addFaceFromRings(q);
+      const rf = model.addFaceFromRings(q);
+      if (rf) (rf.userData || (rf.userData = {})).role = 'lining';
     }
     model.gc();
     return { t: loc.t, center: loc.center, into: loc.into, dir: loc.dir, rect, depth, partial };

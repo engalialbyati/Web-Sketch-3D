@@ -139,22 +139,16 @@
     if (eid) {
       // LIVE stamp query — the entity's own face list goes stale the
       // moment a hosted cut stamps its reveal faces to the wall without
-      // extending ent.faces; the model is the truth
+      // extending ent.faces; the model is the truth. The opening is
+      // deliberately NOT painted: reveal/lining faces (the band the
+      // hosted cut stitches inside a door/window hole, and native
+      // Door/Window linings) keep their neutral look when a material is
+      // dropped on the wall — select them explicitly to paint them.
       const out = [...m.faces.keys()].filter(x => {
         const ff = m.faces.get(x);
-        return ff.userData && ff.userData.bimEntityId === eid;
+        return ff.userData && ff.userData.bimEntityId === eid && ff.userData.role !== 'lining';
       });
-      // native Door/Window elements hosted on this wall contribute their
-      // LINING (reveal) faces, so the opening takes the wall's material —
-      // frame and leaf keep the door's own look
-      for (const e of entities) {
-        if (!e || !e.params || e.params.hostWallId !== eid) continue;
-        for (const x of e.faces) {
-          const ff = m.faces.get(x);
-          if (ff && (!ff.userData || !ff.userData.role || ff.userData.role === 'lining')) out.push(x);
-        }
-      }
-      return out.length ? [...new Set(out)] : [fid];
+      return out.length ? out : [fid];
     }
     const gid = f.userData && f.userData.assetGid;
     if (gid) {
@@ -186,7 +180,7 @@
       mm.touch();
     });
     rebuildPass(app);
-    const what = targets.length > 1 ? ` — whole element (${targets.length} faces, opening included)` : '';
+    const what = targets.length > 1 ? ` — whole element (${targets.length} faces)` : '';
     app.toast(`${(mat && mat.name) || 'Material'} painted${what}`);
     return true;
   }
