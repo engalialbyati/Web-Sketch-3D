@@ -177,27 +177,37 @@
       body.querySelectorAll('[data-asset]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.asset;
         const s = Math.max(0.1, parseFloat((body.querySelector('#' + sizeId) || {}).value) || 1);
-        const tgt = app.view.cam.target;
-        let gid = null;
-        app.run('place asset', m => {
-          // isolation: the asset welds to itself, never into a host element
-          const g = m.isolate(() => LIB[id].build(m, s));
-          const dx = tgt.x, dy = tgt.y; // land at the view's ground point
-          const vids = new Set();
-          for (const fid of m.groupEntities(g.id).faces) {
-            const f = m.faces.get(fid);
-            if (!f) continue;
-            // island stamp — the asset is its own element under the
-            // independence contract from the moment it lands
-            (f.userData || (f.userData = {})).assetGid = 'asset:' + g.id;
-            for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
-          }
-          m.transformVertices([...vids], p => ({ x: p.x + dx, y: p.y + dy, z: p.z }));
-          m.touch();
-          gid = g.id;
+        const a = LIB[id];
+        // footprint stand-ins for the wireframe ghost (real-world sizes × scale)
+        const FOOT = { tree: [0.55, 0.55], conifer: [0.7, 0.7], person: [0.55, 0.4], car: [4.4, 1.8], bench: [1.8, 0.55], lamp: [0.35, 0.35], bollard: [0.25, 0.25] };
+        const [w, d] = (FOOT[id] || [0.6, 0.6]).map(v => v * s);
+        // arm click-to-place: the ghost follows the cursor, the next
+        // viewport click builds the real geometry at that ground point
+        app.armAssetPlacement({
+          label: a.label,
+          size: { w, d, h: (a.h || 1) * s },
+          place: (x, y) => {
+            let gid = null;
+            app.run('place asset', m => {
+              // isolation: the asset welds to itself, never into a host element
+              const g = m.isolate(() => a.build(m, s));
+              const vids = new Set();
+              for (const fid of m.groupEntities(g.id).faces) {
+                const f = m.faces.get(fid);
+                if (!f) continue;
+                // island stamp — the asset is its own element under the
+                // independence contract from the moment it lands
+                (f.userData || (f.userData = {})).assetGid = 'asset:' + g.id;
+                for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
+              }
+              m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z }));
+              m.touch();
+              gid = g.id;
+            });
+            app.selectGroup(gid);
+            app.toast(`${a.label} placed at (${x.toFixed(1)}, ${y.toFixed(1)})`);
+          },
         });
-        app.selectGroup(gid);
-        app.toast(`${LIB[id].label} placed at (${tgt.x.toFixed(1)}, ${tgt.y.toFixed(1)}) — M to move it`);
       }));
     };
     if (typeof requestAnimationFrame === 'function') {

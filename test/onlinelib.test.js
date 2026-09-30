@@ -86,6 +86,14 @@ module.exports = h => {
     eq(OL.filterUsable(models).map(m => m.id).join(','), 'a,b', 'only the two usable');
   });
 
+  test('catEn: the catalogue’s Spanish categories translate to English', () => {
+    eq(OL.catEn('Cocina'), 'Kitchen', 'kitchen');
+    eq(OL.catEn('Cuarto de Baño'), 'Bathroom', 'bathroom');
+    eq(OL.catEn('Puertas y Ventanas'), 'Doors & Windows', 'doors and windows');
+    eq(OL.catEn('Something New'), 'Something New', 'unknown passes through');
+    eq(Object.keys(OL.CAT_EN).length, 12, 'all twelve catalogue categories covered');
+  });
+
   // ---------------------------------------------------------------- zip reader
   /** A minimal STORED-mode zip builder (no compression → no DecompressionStream). */
   function storedZip(entries) {

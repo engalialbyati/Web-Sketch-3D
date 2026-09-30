@@ -783,7 +783,10 @@ one click, at real-world tile sizes.
 person, car, bench, street light, bollard) generated as REAL kernel
 geometry: closed prisms in named groups, watertight the moment they land —
 selectable, paintable, pushable, booleanable. Real-world sizes with a
-scale control; lands at the view's ground center. BlenderKit (Insert
+scale control. Picking a card **arms click-to-place**: the dialog closes,
+a ghost follows the cursor on the ground plane (a wireframe box for tray
+items, the actual mesh for imported/online models), the next viewport
+click inserts the asset at that point, and Esc cancels. BlenderKit (Insert
 ribbon) remains the online library.
 
 The tray also ships **six imported component models** (park bench, fountain,
@@ -808,8 +811,11 @@ drawn geometry still punches into assets the way it punches into walls
 IngeTrazo/Sweet Home 3D library published at ingetrazo.com — ~1,500 models
 of which the **925 CC BY 4.0 / CC0 entries** are shown (585 Free-Art-License
 models are copyleft and hidden, same call as the bundled trees). Search and
-category filters, live thumbnails, one click places the model through the
-same dual-path importer at its catalogue-declared real-world size. It needs
+category filters, live thumbnails, one click arms click-to-place (the
+downloaded mesh itself is the ghost) and the next viewport click places it
+through the same dual-path importer at its catalogue-declared real-world
+size. Names and categories display in English (the catalogue is indexed in
+Spanish; `nombre_en` and a translation table cover it). It needs
 the local bridge (`npm run bridge`) because the catalogue sends no CORS
 headers; the bridge caches index, thumbnails and model zips under
 `cache/library/`, so everything placed once is available offline. Author

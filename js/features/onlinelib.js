@@ -22,6 +22,16 @@
   const BRIDGE = ((typeof window !== 'undefined' && window.BLENDERKIT_BRIDGE_URL) || 'http://localhost:3001').replace(/\/$/, '');
   const USABLE = { 'CC-BY-4.0': 'CC BY 4.0', 'CC0-1.0': 'CC0 1.0' };
   const PAGE = 48;
+  // The catalogue is indexed in Spanish; the UI is English. Model names use
+  // nombre_en when the index carries one; categories translate through this
+  // table (unknown ones pass through untouched).
+  const CAT_EN = {
+    'Cocina': 'Kitchen', 'Cuarto de Baño': 'Bathroom', 'Dormitorio': 'Bedroom',
+    'Escaleras': 'Stairs', 'Exterior': 'Outdoor', 'Iluminación': 'Lighting',
+    'Oficina': 'Office', 'Personajes': 'People', 'Puertas y Ventanas': 'Doors & Windows',
+    'Salón': 'Living room', 'Varios': 'Miscellaneous', 'Vehículos': 'Vehicles',
+  };
+  const catEn = c => CAT_EN[c] || c;
 
   // ------------------------------------------------------------- pure: MTL/OBJ
   /** newmtl name → Kd [r,g,b] (null when the material states no diffuse). */
@@ -229,7 +239,8 @@
   }
 
   function buildGrid(app, host, models) {
-    const cats = [...new Set(models.map(m => m.categoria || 'Varios'))].sort((a, b) => a.localeCompare(b, 'es'));
+    const cats = [...new Set(models.map(m => m.categoria || 'Varios'))]
+      .sort((a, b) => catEn(a).localeCompare(catEn(b)));
     const excluded = Math.max(0, (INDEX.length || models.length) - models.length);
     host.innerHTML = `
       <div style="margin:4px 0 2px">
@@ -238,7 +249,7 @@
       </div>
       <div style="display:flex;gap:6px;align-items:center;margin:4px 0">
         <input id="ol-q" type="search" placeholder="Search ${models.length.toLocaleString()} models…" style="flex:1;min-width:120px">
-        <select id="ol-cat"><option value="">All categories</option>${cats.map(c => `<option>${c}</option>`).join('')}</select>
+        <select id="ol-cat"><option value="">All categories</option>${cats.map(c => `<option value="${c}">${catEn(c)}</option>`).join('')}</select>
       </div>
       <div id="ol-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;max-height:260px;overflow-y:auto;padding:2px"></div>
       <div style="margin:4px 0"><button class="mini-btn" id="ol-more" style="display:none">More…</button>
@@ -270,16 +281,26 @@
           <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</div>
           <div class="dim" style="font-size:9px">${m.autor || ''}</div>`;
         card.addEventListener('click', () => {
-          status.textContent = 'Placing ' + label + '…';
-          const t = app.view.cam.target;
-          placeEntry(app, m, t.x, t.y)
-            .then(r => {
+          status.textContent = 'Loading ' + label + '…';
+          fetchModelSoup(m)
+            .then(soup => {
               status.textContent = '';
-              app.toast(r.mode === 'kernel'
-                ? `${label}: ${r.triangles.toLocaleString()} triangles → ${r.faces} kernel faces — ${r.credit}`
-                : `${label}: dense mesh (${r.triangles.toLocaleString()} triangles) — ${r.credit}`);
+              const credit = (m.autor || 'unknown') + ' · ' + (USABLE[m.licencia] || m.licencia);
+              // arm click-to-place: the downloaded mesh is the ghost, the
+              // next viewport click places it at that ground point
+              app.armAssetPlacement({
+                label,
+                ghost: window.ComponentsFeature ? ComponentsFeature.foreignObject(soup) : null,
+                place: (x, y) => {
+                  const r = ComponentsFeature.placeSoup(app, soup, label + ' (' + credit + ')', x, y);
+                  r.credit = credit;
+                  app.toast(r.mode === 'kernel'
+                    ? `${label}: ${r.triangles.toLocaleString()} triangles → ${r.faces} kernel faces — ${r.credit}`
+                    : `${label}: dense mesh (${r.triangles.toLocaleString()} triangles) — ${r.credit}`);
+                },
+              });
             })
-            .catch(e => { status.textContent = ''; app.toast('Could not place ' + label + ' — ' + (e.message || e), true); });
+            .catch(e => { status.textContent = ''; app.toast('Could not load ' + label + ' — ' + (e.message || e), true); });
         });
         grid.appendChild(card);
       }
@@ -292,6 +313,6 @@
     render(true);
   }
 
-  window.OnlineLib = { USABLE, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, fetchIndex, fetchModelSoup, placeEntry, section, wire };
+  window.OnlineLib = { USABLE, CAT_EN, catEn, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, fetchIndex, fetchModelSoup, placeEntry, section, wire };
   if (typeof window.Engine === 'undefined') return;
 })();

@@ -4834,6 +4834,65 @@ class App {
     this.refreshToolbar();
   }
 
+  // -------------------------------------------------- armed asset placement
+  // Clicking a library card ARMS placement instead of dropping at the view
+  // center: the dialog closes, a ghost follows the cursor on the ground
+  // plane, the next viewport click inserts the asset at that point, Esc
+  // cancels. Features pass either a ready THREE ghost (the actual model
+  // mesh — imported and online models) or a size for a wireframe box
+  // stand-in (the generated tray items).
+  armAssetPlacement(spec) {
+    this.cancelAssetPlacement();
+    if (!spec || typeof spec.place !== 'function') return;
+    let ghost = spec.ghost || null;
+    if (!ghost && spec.size) {
+      const s = spec.size;
+      ghost = new THREE.Mesh(
+        new THREE.BoxGeometry(s.w || 0.6, s.d || 0.6, s.h || 0.6),
+        new THREE.MeshBasicMaterial({ color: 0x1d4f9c, wireframe: true, transparent: true, opacity: 0.85 }));
+      ghost.geometry.translate(0, 0, (s.h || 0.6) / 2); // z-grounded like the asset
+    }
+    if (ghost) {
+      ghost.traverse(o => {
+        if (o.material) {
+          o.material = o.material.clone();
+          o.material.transparent = true;
+          o.material.opacity = Math.min(o.material.opacity == null ? 1 : o.material.opacity, 0.55);
+          o.material.depthWrite = false;
+        }
+      });
+      ghost.position.set(1e5, 1e5, 0); // offscreen until the first pointer move
+      this.view.previewGroup.add(ghost);
+      spec.ghost = ghost;
+    }
+    this._armedAsset = spec;
+    this.closeDialog();
+    this.setStatus(`Placing ${spec.label} — click in the viewport · Esc to cancel`);
+  }
+  cancelAssetPlacement() {
+    const a = this._armedAsset;
+    if (!a) return;
+    if (a.ghost && a.ghost.parent) a.ghost.parent.remove(a.ghost);
+    this._armedAsset = null;
+    this.setStatus('');
+  }
+  _moveArmedAssetGhost(ev) {
+    const a = this._armedAsset;
+    if (!a || !a.ghost) return;
+    const p = this.view.groundAt(this.view.eventPt(ev));
+    if (p) a.ghost.position.set(p.x, p.y, 0);
+  }
+  _placeArmedAsset(ev) {
+    const a = this._armedAsset;
+    if (!a) return;
+    const g = this.view.groundAt(this.view.eventPt(ev));
+    const x = g ? g.x : this.view.cam.target.x;
+    const y = g ? g.y : this.view.cam.target.y;
+    this.cancelAssetPlacement();
+    try { a.place(x, y); }
+    catch (e) { this.toast('Placement failed — ' + (e.message || e), true); }
+  }
+
   // ------------------------------------------------------------------ menus
   _initMenus() {
     const bar = document.getElementById('menubar');
@@ -5441,6 +5500,7 @@ class App {
         return;
       }
       if (ev.button === 0) {
+        if (this._armedAsset) { this._placeArmedAsset(ev); ev.preventDefault(); return; }
         const grip = this._gridGripAt(ev);
         if (grip) { this._gridDrag = grip; ev.preventDefault(); return; }
         this.tool.onDown(ev);
@@ -5456,6 +5516,7 @@ class App {
         return;
       }
       if (this._gridDrag) { this._gridDragMove(ev); return; }
+      if (this._armedAsset) { this._moveArmedAssetGhost(ev); return; }
       this.tool.onMove(ev);
     });
     canvas.addEventListener('pointerup', (ev) => {
@@ -5706,6 +5767,7 @@ class App {
       if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
 
       if (k === 'Escape') {
+        if (this._armedAsset) { this.cancelAssetPlacement(); ev.preventDefault(); return; }
         if (this.selAnn) { this.selAnn = null; this.updateInfo(); this.view.invalidate(); ev.preventDefault(); return; }
         if (this.activeGroup != null) { this.exitGroup(); ev.preventDefault(); return; }
         if (this.tool && this.tool.onKey({ key: 'Escape' })) { ev.preventDefault(); return; }

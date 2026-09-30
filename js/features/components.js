@@ -149,17 +149,25 @@
       fetch('assets/components/' + def.file)
         .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(comp => {
-          const t = app.view.cam.target;
-          const res = place(app, comp, t.x, t.y, { forceForeign: !!def.dense });
           app.setStatus('');
-          if (!res.ok) { app.toast('Could not place ' + def.label, true); return; }
-          app.toast(res.mode === 'kernel'
-            ? `${def.label}: ${res.triangles.toLocaleString()} triangles → ${res.faces} kernel faces (editable solid) — ${def.credit}`
-            : `${def.label}: dense mesh placed as a foreign object (${res.triangles.toLocaleString()} triangles) — ${def.credit}`);
+          // arm click-to-place: the real mesh as the ghost, the next
+          // viewport click places it at that ground point
+          const soup = buildSoup(comp);
+          app.armAssetPlacement({
+            label: def.label,
+            ghost: foreignObject(soup),
+            place: (x, y) => {
+              const res = placeSoup(app, soup, def.label + ' (' + def.credit + ')', x, y, { forceForeign: !!def.dense });
+              if (!res.ok) { app.toast('Could not place ' + def.label, true); return; }
+              app.toast(res.mode === 'kernel'
+                ? `${def.label}: ${res.triangles.toLocaleString()} triangles → ${res.faces} kernel faces (editable solid) — ${def.credit}`
+                : `${def.label}: dense mesh placed as a foreign object (${res.triangles.toLocaleString()} triangles) — ${def.credit}`);
+            },
+          });
         })
         .catch(e => app.toast('Component files need the served app or desktop build — ' + (e.message || e), true));
     }));
   }
 
-  window.ComponentsFeature = { MANIFEST, buildSoup, place, placeSoup, dialogSection, wire, KERNEL_FACE_LIMIT };
+  window.ComponentsFeature = { MANIFEST, buildSoup, place, placeSoup, foreignObject, dialogSection, wire, KERNEL_FACE_LIMIT };
 })();
