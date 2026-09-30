@@ -464,6 +464,27 @@
         case 'door':
         case 'window': {
           const kind = ent.type;
+          // LIBRARY-HOSTED MODELS: their own family under the Door/Window
+          // category, with a type named after the model — the browser row
+          // reads "Glass door", and dragging the type re-arms the asset
+          // tool (the type's defaults carry the asset id)
+          if (p.assetInstanceId && p.assetId) {
+            const famId = 'fam_lib_' + kind;
+            if (!this._catalog.families.some(f => f.id === famId) && db.putFamily) {
+              const catId = kind === 'door' ? 'cat_door' : 'cat_window';
+              await db.putFamily({ id: famId, categoryId: catId, name: 'Library Models' });
+              this._catalog.families.push({ id: famId, categoryId: catId, name: 'Library Models' });
+            }
+            const name = p.name || 'Model';
+            const known = this._catalog.types.find(x => x.familyId === famId && x.name === name);
+            sel = known
+              ? pick(null, famId, known.name, known.defaultParameters)
+              : pick(null, famId, name, {
+                assetId: p.assetId, assetName: name, kind,
+                width: p.width || 1, height: p.height || 2.1, sill: p.sillHeight || 0,
+              });
+            break;
+          }
           const famId = this._familyForHosted(kind);
           const w = p.width || 0.9, h = p.height || 2.1;
           const name = `${Math.round(w * 1000).toString().padStart(4, '0')} x ${Math.round(h * 1000).toString().padStart(4, '0')}`;

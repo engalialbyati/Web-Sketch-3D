@@ -187,9 +187,9 @@
         // so a reload restores offline after the first placement.
         if (assetId.startsWith('lib:') && window.OnlineLib && window.ComponentsFeature && window.THREE) {
           const id = assetId.slice(4);
-          const idx = await OnlineLib.fetchIndex().catch(() => ({}));
-          const soup = await OnlineLib.fetchModelSoup(idx[id] || { id });
-          const scene = ComponentsFeature.foreignObject(soup);
+          const idx = await window.OnlineLib.fetchIndex().catch(() => ({}));
+          const soup = await window.OnlineLib.fetchModelSoup(idx[id] || { id });
+          const scene = window.ComponentsFeature.foreignObject(soup);
           const sz = new THREE.Box3().setFromObject(scene).getSize(new THREE.Vector3());
           return { scene, size: { x: sz.x, y: sz.y, z: sz.z } };
         }

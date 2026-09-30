@@ -160,6 +160,7 @@
             kind: this.kind, hostWallId: host.ent.id, distanceFromStart: info.t,
             sillHeight: spec.sillHeight, width: spec.width, height: spec.height,
             depth, facing: 1, hand: 1, name: this.assetName,
+            assetId: this.assetId,
             roles, elementEdges,
           };
         });

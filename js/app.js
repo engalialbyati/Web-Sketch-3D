@@ -8043,6 +8043,11 @@ class App {
       await this.db.ensureType(famId, rec.name, params);
       rec.kind = kind;
       this.assets.changed('defined', rec);
+      // the browser's cached catalog + open panel must see the new family/
+      // type NOW — without this the defined model is invisible until the
+      // browser is reopened
+      if (this.elements && this.elements.refreshCatalog) { try { await this.elements.refreshCatalog(); } catch (e) { } }
+      if (window.ElementBrowser && ElementBrowser.refresh) { try { await ElementBrowser.refresh(); } catch (e) { } }
       this.onSelectionChanged(); // kind chip in Entity Info refreshes
       this.toast(`“${rec.name}” defined as ${kind === 'object' ? 'an object' : 'a ' + kind} — it is in the Element Browser${kind !== 'object' ? ' (drag it onto a wall)' : ''}`);
     } catch (e) {
