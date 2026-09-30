@@ -850,9 +850,12 @@ the dialog chooses how they land: **door element** (default) or
 placement tool becomes the hosted insertion tool: hover a wall, click to
 pin, slide along it, click again — the kernel punches a **real opening**
 through both wall faces with stitched reveals, and the model is fitted
-inside (uniform scale, centered on the wall's mid-plane). The opening
-re-cuts and the model repositions automatically whenever the host wall
-is edited. **Free object** keeps the plain click-to-place behavior, and
+inside (uniform scale, centered on the wall's mid-plane — anchored to
+the opening itself so the wall's location line can't push it off; a
+model deeper than the wall gets its depth axis squashed to the cut so
+ornate frames stay INSIDE the opening instead of hanging proud of the
+wall faces). The opening re-cuts and the model repositions
+automatically whenever the host wall is edited. **Free object** keeps the plain click-to-place behavior, and
 every other category always places free. The same path fixed two latent
 bugs in the hosted-asset tools: an unnamed `bimHold` made element
 independence refuse the punch (also breaking BlenderKit's

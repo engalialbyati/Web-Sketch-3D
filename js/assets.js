@@ -315,6 +315,12 @@
       const scale = isFinite(fit) && fit > 0 ? fit : 1;
       rec.scale = scale;
       rec.object.scale.setScalar(scale);
+      // Stay INSIDE the wall: after the width/height fit, a model deeper
+      // than the cut (ornate window frames) gets its depth axis squashed
+      // to the cut depth — a slimmer jamb beats a frame hanging proud of
+      // both wall faces. Local Y is the into-axis once rotated below.
+      const cut = info.depth || 0, md = (s.y || 0) * scale;
+      if (cut > 1e-6 && md > cut + 1e-6) rec.object.scale.y *= cut / md;
       rec.object.rotation.set(0, 0, Math.atan2(info.dir.y, info.dir.x));
       // Measure the template in its OWN frame: zero the position (this sets
       // an absolute one) and force-refresh the subtree — setFromObject only
@@ -325,13 +331,22 @@
       rec.object.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(rec.object);
       const c = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
-      const target = new THREE.Vector3()
-        .copy(info.center)
-        .addScaledVector(new THREE.Vector3(info.into.x, info.into.y, 0), (info.depth || 0) / 2);
+      // Anchor to the OPENING, never the baseline: info.center sits on the
+      // wall's LOCATION LINE — for centerline walls that is the mid-plane,
+      // so center + into·depth/2 landed on the far FACE and hung the model
+      // half outside the wall. The rect is always on the near plane, so its
+      // centroid + into·depth/2 is the true mid-plane.
+      const rc = info.rect;
+      const target = new THREE.Vector3(
+        (rc[0].x + rc[1].x + rc[2].x + rc[3].x) / 4,
+        (rc[0].y + rc[1].y + rc[2].y + rc[3].y) / 4,
+        0,
+      );
       // rect[0] is a BOTTOM corner only when the ring faces into the wall —
       // locate() reverses it otherwise, so take the low z of the jamb pair
       // (same reversal guard as HostedCut.frame)
-      target.z = Math.min(info.rect[0].z, info.rect[3].z) + rec.host.height / 2;
+      target.z = Math.min(rc[0].z, rc[3].z) + rec.host.height / 2;
+      target.addScaledVector(new THREE.Vector3(info.into.x, info.into.y, 0), cut / 2);
       rec.object.position.set(target.x - c.x, target.y - c.y, target.z - c.z);
       rec.object.updateMatrixWorld(true);
     }

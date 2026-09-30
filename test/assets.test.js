@@ -109,4 +109,92 @@ module.exports = h => {
     near(c.z, 0.9 + 1, 1e-6, 'height center at sill + opening/2');
     near(box.max.x - box.min.x, 1, 1e-6, 'width fits the opening exactly');
   });
+
+  // A CENTERLINE wall is the default and the case the old math got wrong:
+  // info.center lies on the wall's mid-plane (the location line), so
+  // center + into·depth/2 landed on the far FACE — models hung half
+  // outside the wall (frames proud of the face).
+  test('applyHostedTransform centers on the MID-plane for centerline walls', () => {
+    const mgr = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    const object = new THREE.Group();
+    object.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.175, 2)));
+    const rec = {
+      id: 'asset_t3', assetId: 'x', name: 'T', kind: 'door', object,
+      scale: 1, size: { x: 1, y: 0.175, z: 2 },
+      host: { wallId: 'wall_1', distance: 2.5, sill: 0, width: 1, height: 2, depth: 0.2 },
+    };
+    // wall along +X on the y=0 CENTERLINE, faces at y = ±0.1, rect on the
+    // NEAR plane y = +0.1, into pointing toward the far face (−Y)
+    mgr.applyHostedTransform(rec, {
+      center: { x: 2.5, y: 0, z: 0 }, // on the location line, like locate()
+      into: { x: 0, y: -1, z: 0 },
+      dir: { x: 1, y: 0, z: 0 },
+      rect: [
+        { x: 2, y: 0.1, z: 0 }, { x: 3, y: 0.1, z: 0 },
+        { x: 3, y: 0.1, z: 2 }, { x: 2, y: 0.1, z: 2 },
+      ],
+      depth: 0.2,
+    });
+    const box = new THREE.Box3().setFromObject(rec.object);
+    const c = box.getCenter(new THREE.Vector3());
+    near(c.y, 0, 1e-6, 'depth centered on the wall mid-plane, not the far face');
+    ok(box.min.y >= -0.1 - 1e-6 && box.max.y <= 0.1 + 1e-6, 'shallow model stays inside the 0.2 m wall');
+    near(box.min.z, 0, 1e-6, 'door bottoms at the sill (floor)');
+  });
+
+  test('applyHostedTransform squashes a deeper frame into the wall depth', () => {
+    const mgr = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    // an ornate window: 1.2 wide, 0.45 deep, 1.5 high — deeper than the wall
+    const object = new THREE.Group();
+    object.add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.45, 1.5)));
+    const rec = {
+      id: 'asset_t4', assetId: 'x', name: 'T', kind: 'window', object,
+      scale: 1, size: { x: 1.2, y: 0.45, z: 1.5 },
+      host: { wallId: 'wall_1', distance: 2.5, sill: 0.9, width: 1.2, height: 1.5, depth: 0.2 },
+    };
+    mgr.applyHostedTransform(rec, {
+      center: { x: 2.5, y: 0, z: 0 },
+      into: { x: 0, y: -1, z: 0 },
+      dir: { x: 1, y: 0, z: 0 },
+      rect: [
+        { x: 1.9, y: 0.1, z: 0.9 }, { x: 3.1, y: 0.1, z: 0.9 },
+        { x: 3.1, y: 0.1, z: 2.4 }, { x: 1.9, y: 0.1, z: 2.4 },
+      ],
+      depth: 0.2,
+    });
+    const box = new THREE.Box3().setFromObject(rec.object);
+    ok(box.min.y >= -0.1 - 1e-6 && box.max.y <= 0.1 + 1e-6,
+      `frame depth ${ (box.max.y - box.min.y).toFixed(3) } m squashed into the 0.2 m wall`);
+    near(box.max.y - box.min.y, 0.2, 1e-6, 'depth axis scaled to the cut');
+    near(rec.object.scale.x, 1, 1e-9, 'width/height scale untouched');
+    near(box.max.x - box.min.x, 1.2, 1e-6, 'width still fits the opening');
+    near(box.max.z - box.min.z, 1.5, 1e-6, 'height still fits the opening');
+  });
+
+  test('applyHostedTransform survives a REVERSED opening rect', () => {
+    const mgr = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    const object = new THREE.Group();
+    object.add(new THREE.Mesh(new THREE.BoxGeometry(1, 0.2, 2)));
+    const rec = {
+      id: 'asset_t5', assetId: 'x', name: 'T', kind: 'door', object,
+      scale: 1, size: { x: 1, y: 0.2, z: 2 },
+      host: { wallId: 'wall_1', distance: 0, sill: 0, width: 1, height: 2, depth: 0.2 },
+    };
+    // locate() flips the ring when its normal faces away from into —
+    // rect[0] is then a TOP corner; the centroid and sill must not care
+    mgr.applyHostedTransform(rec, {
+      center: { x: 0, y: 0, z: 0 },
+      into: { x: 0, y: 1, z: 0 },
+      dir: { x: 1, y: 0, z: 0 },
+      rect: [
+        { x: -0.5, y: 0, z: 2 }, { x: 0.5, y: 0, z: 2 },
+        { x: 0.5, y: 0, z: 0 }, { x: -0.5, y: 0, z: 0 },
+      ],
+      depth: 0.2,
+    });
+    const box = new THREE.Box3().setFromObject(rec.object);
+    near(box.min.z, 0, 1e-6, 'sill taken from the low jamb corner');
+    near(box.min.y, 0, 1e-6, 'near plane anchor');
+    near(box.max.y, 0.2, 1e-6, 'mid-plane centered');
+  });
 };
