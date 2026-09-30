@@ -113,4 +113,47 @@ module.exports = async h => {
     near(box.min.z, 0, 1e-6, 'door still bottoms at the floor');
     ok(m.validate().ok, 'model valid after the re-cut');
   });
+
+  test('rebuildFromParams(): hosted openings re-cut, models keep their place', () => {
+    const mgr = new AssetManager(appStub);
+    mgr.templates.set('lib:doorx', Promise.resolve(tpl));
+    const loc = BimTools.HostedCut.locate(G, p, { distanceFromStart: 2.5, width: 1, height: 2, sillHeight: 0 });
+    loc.depth = 0.2;
+    const rec = mgr.placeHosted('lib:doorx', 'Glass door', tpl, {
+      wallId: wallEnt.id, distance: 2.5, sill: 0, width: 1, height: 2, depth: 0.2, kindHint: 'door',
+    }, loc);
+    mgr.recutHosted(wallEnt.id, m); // initial opening (the placement-time cut)
+    const revealsBefore = [...m.faces.keys()].filter(id => {
+      const f = m.faces.get(id);
+      return f && f.userData && f.userData.bimEntityId === wallEnt.id && f.userData.role === 'lining';
+    });
+    ok(revealsBefore.length >= 4, 'opening exists before the rebuild');
+
+    // the app facade rebuildFromParams needs (App methods via the prototype —
+    // the class is exported for exactly this headless use)
+    const app2 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim, assets: mgr,
+      view: { rebuild() { }, invalidate() { }, zoomExtents() { }, clearPins() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (label, fn) => fn(m),
+      levelManager: { levels: m.levels, getElevation: () => 0, getLevel: () => m.levels[0] },
+      structural: new (w.StructuralManager)(() => m.levels, () => m.bimEntities),
+    });
+    mgr.app = app2;
+    const out = app2.rebuildFromParams();
+    ok(out && out.counts && out.counts.wall === 1, 'wall rebuilt from parameters');
+    ok(m.validate().ok, 'model valid after the wholesale rebuild');
+
+    const revealsAfter = [...m.faces.keys()].filter(id => {
+      const f = m.faces.get(id);
+      return f && f.userData && f.userData.bimEntityId === wallEnt.id && f.userData.role === 'lining';
+    });
+    ok(revealsAfter.length >= 4,
+      `opening re-cut (${revealsAfter.length} reveals) — walls must not heal solid over a hosted asset`);
+    ok(wallEnt.faces.some(fid => revealsAfter.includes(fid)), 'fresh reveals recorded in the entity face list');
+    const box = new THREE.Box3().setFromObject(rec.object);
+    near((box.min.y + box.max.y) / 2, 0, 1e-6, 'model still centered mid-wall');
+    near(box.min.z, 0, 1e-6, 'door still bottoms at the floor');
+    eq(mgr.instances.size, 1, 'hosted instance survived the rebuild');
+  });
 };

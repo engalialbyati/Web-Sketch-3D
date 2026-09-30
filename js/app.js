@@ -3039,9 +3039,17 @@ class App {
       // (other entities' geometry AND unclaimed Free Drawing faces/edges)
       // stays: a stray drawn line must survive a parametric rebuild
       const wipeFaces = new Set(), wipeEdges = new Set();
+      // hosted elements (door/window/openings) regenerate WITH their host
+      // wall — take their faces too, or stale linings overlap the fresh cut
+      const wallIds = new Set(this.bim.entities.filter(canRebuild).map(e => e.id));
       for (const e of this.bim.entities) {
-        if (!canRebuild(e)) continue;
+        const hostedOnWall = !!(e.params && e.params.hostWallId && wallIds.has(e.params.hostWallId));
+        if (!canRebuild(e) && !hostedOnWall) continue;
         for (const fid of e.faces) wipeFaces.add(fid);
+        // live-stamp sweep: a hosted cut's reveal band rides the wall's
+        // STAMP, and older placements never listed it in e.faces
+        if (canRebuild(e)) for (const [fid, f] of mm.faces)
+          if (f.userData && f.userData.bimEntityId === e.id) wipeFaces.add(fid);
         for (const eid of e.edges) wipeEdges.add(eid);
       }
       for (const [fid, f] of [...mm.faces]) if (wipeFaces.has(fid)) mm.faces.delete(fid);
@@ -3171,6 +3179,42 @@ class App {
       return { counts, skipped, valid: v.ok };
     };
 
+    // HOSTED RE-CUT: the wipe took the hosted openings (their reveal bands
+    // ride the host wall's face list/stamp) — regenerate every door, window
+    // and hosted ASSET on its wall at its parametric position, or the walls
+    // heal SOLID and every opening is lost. Mirrors _rebuildWallCore.
+    const recutHostedAll = mm => {
+      if (!window.BimTools || !window.BimTools.HostedCut) return;
+      for (const ent of this.bim.entities) {
+        if (ent.type !== 'wall' || !ent.params || !ent.params.base) continue;
+        for (const h of this.bim.entities) {
+          if (!h.params || h.params.hostWallId !== ent.id) continue;
+          const spec = {
+            distanceFromStart: h.params.distanceFromStart, width: h.params.width,
+            height: h.params.height, sillHeight: h.params.sillHeight,
+            depth: h.params.depth > 0 ? h.params.depth : ent.params.thickness,
+          };
+          const hb = new Set(mm.faces.keys());
+          const prev = mm.bimHold;
+          mm.bimHold = ent.id; // the cut opens the wall's own stamped faces
+          let info;
+          try { info = window.BimTools.HostedCut.cut(G, mm, ent.params, spec); }
+          finally { mm.bimHold = prev; }
+          if (!info || info.error) { h.faces = []; continue; }
+          const frames = h.type === 'opening' ? [] : window.BimTools.HostedCut.frame(G, mm, info, spec, h.type, { facing: h.params.facing, hand: h.params.hand });
+          h.faces = [...mm.faces.keys()].filter(x => !hb.has(x));
+          for (const fid of h.faces) {
+            const f = mm.faces.get(fid);
+            const isLeaf = h.type === 'door' && frames.length && fid === frames[frames.length - 1].id;
+            f.userData = { bimEntityId: h.id, bimType: h.type, role: frames.some(x => x.id === fid) ? (isLeaf ? 'leaf' : 'frame') : 'lining' };
+          }
+        }
+        // hosted ASSETS (catalogue/BlenderKit models) — recutHosted handles
+        // its own named hold, reveal stamping and ent.faces bookkeeping
+        if (this.assets && this.assets.recutHosted) this.assets.recutHosted(ent.id, mm);
+      }
+    };
+
     if (defs.length < 40) {
       // synchronous: interactive edits on ordinary models
       this.run('rebuild from parameters', mm => {
@@ -3182,6 +3226,7 @@ class App {
           // earlier walls' faces — re-stamp or the empty-faces reap would
           // detach every welded neighbor ('rebuild from parameters loses walls')
           this.bim._restampWallFaces();
+          recutHostedAll(mm);
         } finally { mm.bimHold = false; }
       });
       return finish();
@@ -3210,6 +3255,7 @@ class App {
         return;
       }
       try { this.bim._restampWallFaces(); } catch (e) { }
+      try { recutHostedAll(mm); } catch (e) { }
       mm.bimHold = false;
       try { tx.commit(); } catch (e) { /* rollback already handled by the guard */ }
       this._rebuilding = false;
@@ -9904,15 +9950,24 @@ class App {
         this.onLevelsChanged();
         this.onGridsChanged();
         this.rederiveJunctions(); // pre-fix geometry self-heals on open
-        // self-healing files: a model that still fails validate after
-        // re-derivation is rebuilt wholesale from its parameters
-        if (!this.model.validate().ok) {
-          this.rebuildFromParams();
-          this.toast('Model had invalid geometry — rebuilt from parameters');
-        }
-        this.view.zoomExtents();
-        this.updateInfo();
-        this.toast('Restored autosaved model — File ▸ New for a fresh start');
+        // restore hosted/free asset instances BEFORE any self-heal: the
+        // wholesale rebuild re-cuts openings only for instances that
+        // already exist (their templates load async)
+        const restoring = this.assets && this.model.assetListData
+          ? this.assets.restore(this.model.assetListData) : null;
+        const afterRestore = () => {
+          // self-healing files: a model that still fails validate after
+          // re-derivation is rebuilt wholesale from its parameters
+          if (!this.model.validate().ok) {
+            this.rebuildFromParams();
+            this.toast('Model had invalid geometry — rebuilt from parameters');
+          }
+          this.view.zoomExtents();
+          this.updateInfo();
+          this.toast('Restored autosaved model — File ▸ New for a fresh start');
+        };
+        if (restoring && restoring.then) restoring.then(afterRestore, afterRestore);
+        else afterRestore();
       }
     } catch (e) { }
   }
@@ -9958,6 +10013,10 @@ function vpCursor(toolId) {
           : toolId === 'pan' ? 'move'
             : 'default';
 }
+
+// exported for the headless suite (class declarations never attach to the
+// sandbox global) — the live instance is window.app, built on DOM ready
+window.App = App;
 
 window.addEventListener('DOMContentLoaded', () => {
   try { window.app = new App(); }
