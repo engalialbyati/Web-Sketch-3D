@@ -32,6 +32,16 @@
     'Salón': 'Living room', 'Varios': 'Miscellaneous', 'Vehículos': 'Vehicles',
   };
   const catEn = c => CAT_EN[c] || c;
+  // The Doors & Windows category inserts as hosted ELEMENTS: the model's own
+  // rectangular border sizes the opening (width × height, cm-rounded,
+  // clamped sane), the model fits inside it, and the wall gets a real cut.
+  const DW_CATEGORY = 'Puertas y Ventanas';
+  /** Opening spec from a model's bbox for a hosted insert. Pure. */
+  function hostedSpec(mode, size) {
+    const width = Math.max(0.3, Math.min(5, Math.round((size.x || 1) * 100) / 100));
+    const height = Math.max(0.3, Math.min(5, Math.round((size.z || 1) * 100) / 100));
+    return { width, height, sill: mode === 'window' ? 0.9 : 0 };
+  }
 
   // ------------------------------------------------------------- pure: MTL/OBJ
   /** newmtl name → Kd [r,g,b] (null when the material states no diffuse). */
@@ -250,6 +260,11 @@
       <div style="display:flex;gap:6px;align-items:center;margin:4px 0">
         <input id="ol-q" type="search" placeholder="Search ${models.length.toLocaleString()} models…" style="flex:1;min-width:120px">
         <select id="ol-cat"><option value="">All categories</option>${cats.map(c => `<option value="${c}">${catEn(c)}</option>`).join('')}</select>
+        <select id="ol-mode" title="How the Doors &amp; Windows category inserts">
+          <option value="door">Doors &amp; Windows: door element (cuts opening)</option>
+          <option value="window">window element (cuts opening)</option>
+          <option value="free">free object (no opening)</option>
+        </select>
       </div>
       <div id="ol-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;max-height:260px;overflow-y:auto;padding:2px"></div>
       <div style="margin:4px 0"><button class="mini-btn" id="ol-more" style="display:none">More…</button>
@@ -282,12 +297,37 @@
           <div class="dim" style="font-size:9px">${m.autor || ''}</div>`;
         card.addEventListener('click', () => {
           status.textContent = 'Loading ' + label + '…';
+          const mode = m.categoria === DW_CATEGORY
+            ? ((host.querySelector('#ol-mode') || {}).value || 'door') : 'free';
           fetchModelSoup(m)
             .then(soup => {
               status.textContent = '';
               const credit = (m.autor || 'unknown') + ' · ' + (USABLE[m.licencia] || m.licencia);
-              // arm click-to-place: the downloaded mesh is the ghost, the
-              // next viewport click places it at that ground point
+              if (mode !== 'free' && window.ComponentsFeature && window.THREE) {
+                // HOSTED ELEMENT: the model becomes a door/window insertion —
+                // the wall gets a real opening sized to the model's own
+                // rectangular border, re-cut when the wall changes, the model
+                // fitted inside (same machinery as the Door/Window tools)
+                const grp = ComponentsFeature.foreignObject(soup);
+                const sz = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
+                const size = { x: sz.x, y: sz.y, z: sz.z };
+                const spec = hostedSpec(mode, size);
+                const aid = 'lib:' + m.id;
+                app.assets.registerTemplate(aid, { scene: grp, size });
+                if (app.mode !== 'bim') app.setMode('bim');
+                app.bimOptions.assetId = aid;
+                app.bimOptions.assetName = label;
+                app.bimOptions.hosted = app.bimOptions.hosted || {};
+                app.bimOptions.hosted.width = spec.width;
+                app.bimOptions.hosted.height = spec.height;
+                app.bimOptions.hosted.sill = spec.sill;
+                app.closeDialog();
+                app.setTool(mode === 'window' ? 'assetwindow' : 'assetdoor');
+                app.toast(`${label} (${credit}) — hover a WALL, click to pin, slide along it, click again to cut the ${spec.width.toFixed(2)}×${spec.height.toFixed(2)} m opening (type w×h[×sill] to resize)`);
+                return;
+              }
+              // free object: arm click-to-place — the downloaded mesh is the
+              // ghost, the next viewport click places it at that ground point
               app.armAssetPlacement({
                 label,
                 ghost: window.ComponentsFeature ? ComponentsFeature.foreignObject(soup) : null,
@@ -313,6 +353,6 @@
     render(true);
   }
 
-  window.OnlineLib = { USABLE, CAT_EN, catEn, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, fetchIndex, fetchModelSoup, placeEntry, section, wire };
+  window.OnlineLib = { USABLE, CAT_EN, catEn, DW_CATEGORY, hostedSpec, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, fetchIndex, fetchModelSoup, placeEntry, section, wire };
   if (typeof window.Engine === 'undefined') return;
 })();

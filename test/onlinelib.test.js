@@ -94,6 +94,22 @@ module.exports = h => {
     eq(Object.keys(OL.CAT_EN).length, 12, 'all twelve catalogue categories covered');
   });
 
+  test('hostedSpec: the model’s border sizes the opening, clamped and rounded', () => {
+    const door = OL.hostedSpec('door', { x: 0.951, y: 0.08, z: 2.049 });
+    eq(door.width, 0.95, 'width cm-rounded from bbox x');
+    eq(door.height, 2.05, 'height cm-rounded from bbox z');
+    eq(door.sill, 0, 'door sits on the floor');
+    const win = OL.hostedSpec('window', { x: 1.2, y: 0.1, z: 1.4 });
+    near(win.sill, 0.9, 1e-9, 'window default sill 0.9');
+    eq(win.height, 1.4, 'window height from bbox');
+    const huge = OL.hostedSpec('door', { x: 9, y: 1, z: 12 });
+    eq(huge.width, 5, 'width clamped to 5 m');
+    eq(huge.height, 5, 'height clamped to 5 m');
+    const tiny = OL.hostedSpec('door', { x: 0.01, y: 0.01, z: 0.01 });
+    eq(tiny.width, 0.3, 'width floored at 0.3 m');
+    eq(tiny.height, 0.3, 'height floored at 0.3 m');
+  });
+
   // ---------------------------------------------------------------- zip reader
   /** A minimal STORED-mode zip builder (no compression → no DecompressionStream). */
   function storedZip(entries) {

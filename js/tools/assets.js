@@ -73,7 +73,9 @@
   }
 
   // --------------------------------------------------------- hosted on wall
-  class AssetHostedTool extends BimTools.HostedInsertionTool {
+  // window.BimTools (not bare BimTools): the class body evaluates at load
+  // time, and the headless suite loads this file without a browser global
+  class AssetHostedTool extends window.BimTools.HostedInsertionTool {
     constructor(app, kind) {
       super(app, kind);
       this.assetId = null;
@@ -95,7 +97,7 @@
         .catch(e => this.app.toast(`Asset unavailable: ${e.message}`, true));
     }
     get hint() {
-      const k = BimTools.HostedInsertionTool.kinds[this.kind];
+      const k = window.BimTools.HostedInsertionTool.kinds[this.kind];
       return k.label + ' (downloaded model): hover a WALL, click to pin, drag to slide, click again to cut the opening and host the model. Type w×h[×sill] to size the opening.';
     }
     // downloaded models host on BIM walls only — free faces have no
@@ -122,13 +124,21 @@
       let info = null;
       try {
         app.transaction.run('place asset ' + this.kind, mm => {
-          mm.bimHold = true; // the cut edits stamped faces on purpose
+          // v0.6 owner naming (same as HostedInsertionTool): the cut edits
+          // the HOST wall's stamped faces on purpose — an unnamed hold would
+          // make element independence refuse the punch ("opening does not
+          // sit inside a host face")
+          mm.bimHold = host.kind === 'wall' ? host.ent.id : true;
           try {
-            info = BimTools.HostedCut.cut(G, mm, hp, spec);
+            info = window.BimTools.HostedCut.cut(G, mm, hp, spec);
             if (info.error) throw new Error(info.error);
           } finally { mm.bimHold = false; }
         });
       } catch (e) { app.toast(String(e.message || e)); return; }
+      // _runTx swallows a failed transaction (toast + rollback, returns
+      // undefined) — `info` may hold the cut's error object or nothing at
+      // all. Nothing was cut: stop here, never host into a wall that healed.
+      if (!info || info.error) { if (info && info.error) app.toast(info.error, true); return; }
       app.assets.placeHosted(this.assetId, this.assetName, this._tpl, {
         wallId: host.ent.id, distance: info.t, sill: spec.sillHeight,
         width: spec.width, height: spec.height, depth, kindHint: this.kind,

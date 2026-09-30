@@ -824,6 +824,24 @@ headers; the bridge caches index, thumbnails and model zips under
 and license ride along: shown on the card, toasted at placement, and kept
 in the placed object's name.
 
+**Doors & Windows insert as hosted elements.** Catalogue models in the
+Doors & Windows category have a rectangular border, so a mode select in
+the dialog chooses how they land: **door element** (default) or
+**window element** — the model is sized from its own bounding border
+(cm-rounded, clamped 0.3–5 m; windows default to a 0.9 m sill) and the
+placement tool becomes the hosted insertion tool: hover a wall, click to
+pin, slide along it, click again — the kernel punches a **real opening**
+through both wall faces with stitched reveals, and the model is fitted
+inside (uniform scale, centered on the wall's mid-plane). The opening
+re-cuts and the model repositions automatically whenever the host wall
+is edited. **Free object** keeps the plain click-to-place behavior, and
+every other category always places free. The same path fixed two latent
+bugs in the hosted-asset tools: an unnamed `bimHold` made element
+independence refuse the punch (also breaking BlenderKit's
+define-as-door/window flow), and the fit transform measured the model
+through stale world matrices / assumed un-reversed opening rings, which
+could float a model a full opening-height above its hole.
+
 ## Render with Blender & survey import
 
 - **Tools ▸ Render with Blender (day/night)**: the model goes out as glTF

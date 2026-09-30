@@ -194,6 +194,16 @@
       return p;
     }
 
+    // An in-memory template (Asset Library catalogue soups — no bridge GLB):
+    // register it under its own assetId so the placement tools find it in
+    // loadTemplate's cache. After a reload the cache is gone and restore
+    // falls back to the placeholder — the kernel opening lives in the wall's
+    // faces, so the hole survives regardless.
+    registerTemplate(assetId, tpl) {
+      if (!assetId || !tpl || !tpl.scene) return;
+      this.templates.set(assetId, Promise.resolve(tpl));
+    }
+
     // File ▸ Open .blend… — the app already converted the upload to GLB;
     // this registers it as an instance with everything that brings
     // (select/move/define-as/persist) and caches the GLB for reloads.
@@ -306,13 +316,22 @@
       rec.scale = scale;
       rec.object.scale.setScalar(scale);
       rec.object.rotation.set(0, 0, Math.atan2(info.dir.y, info.dir.x));
-      // template bbox in its own (identity) frame — clone shares it
+      // Measure the template in its OWN frame: zero the position (this sets
+      // an absolute one) and force-refresh the subtree — setFromObject only
+      // updates the root's matrix, so freshly cloned children would measure
+      // through stale identity world-matrices and offset the fit by a whole
+      // model height.
+      rec.object.position.set(0, 0, 0);
+      rec.object.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(rec.object);
       const c = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
       const target = new THREE.Vector3()
         .copy(info.center)
         .addScaledVector(new THREE.Vector3(info.into.x, info.into.y, 0), (info.depth || 0) / 2);
-      target.z = info.rect[0].z + rec.host.height / 2;
+      // rect[0] is a BOTTOM corner only when the ring faces into the wall —
+      // locate() reverses it otherwise, so take the low z of the jamb pair
+      // (same reversal guard as HostedCut.frame)
+      target.z = Math.min(info.rect[0].z, info.rect[3].z) + rec.host.height / 2;
       rec.object.position.set(target.x - c.x, target.y - c.y, target.z - c.z);
       rec.object.updateMatrixWorld(true);
     }
