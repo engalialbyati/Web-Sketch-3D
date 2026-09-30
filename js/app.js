@@ -4879,17 +4879,21 @@ class App {
   _moveArmedAssetGhost(ev) {
     const a = this._armedAsset;
     if (!a || !a.ghost) return;
-    const p = this.view.groundAt(this.view.eventPt(ev));
-    if (p) a.ghost.position.set(p.x, p.y, 0);
+    // surface, not bare ground: over a face the ghost rides that face's
+    // elevation; elsewhere it sits at the active level's floor height
+    const p = this.view.surfaceAt(this.view.eventPt(ev));
+    if (p) a.ghost.position.set(p.x, p.y, p.z);
   }
   _placeArmedAsset(ev) {
     const a = this._armedAsset;
     if (!a) return;
-    const g = this.view.groundAt(this.view.eventPt(ev));
+    const g = this.view.surfaceAt(this.view.eventPt(ev));
     const x = g ? g.x : this.view.cam.target.x;
     const y = g ? g.y : this.view.cam.target.y;
+    const z = g ? g.z
+      : (this.levelManager ? this.levelManager.getElevation(this.bimOptions.baseLevel) || 0 : 0);
     this.cancelAssetPlacement();
-    try { a.place(x, y); }
+    try { a.place(x, y, z); }
     catch (e) { this.toast('Placement failed — ' + (e.message || e), true); }
   }
 

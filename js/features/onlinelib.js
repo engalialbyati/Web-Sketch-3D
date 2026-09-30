@@ -331,8 +331,8 @@
               app.armAssetPlacement({
                 label,
                 ghost: window.ComponentsFeature ? ComponentsFeature.foreignObject(soup) : null,
-                place: (x, y) => {
-                  const r = ComponentsFeature.placeSoup(app, soup, label + ' (' + credit + ')', x, y);
+                place: (x, y, z) => {
+                  const r = ComponentsFeature.placeSoup(app, soup, label + ' (' + credit + ')', x, y, { z });
                   r.credit = credit;
                   app.toast(r.mode === 'kernel'
                     ? `${label}: ${r.triangles.toLocaleString()} triangles → ${r.faces} kernel faces — ${r.credit}`

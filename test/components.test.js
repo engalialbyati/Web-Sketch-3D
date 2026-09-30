@@ -57,6 +57,20 @@ module.exports = h => {
     ok(m.validate().ok, 'valid');
   });
 
+  test('placeSoup opts.z: the asset lands ON the hovered surface', () => {
+    // surfaceAt feeds the armed placement a face/level elevation as z — a
+    // slab top at +3.2 m (level 2's floor) must ground the model there
+    const m = new Model();
+    const app = { model: m, run: (l, fn) => fn(m), selectGroup: () => {}, view: { cam: { target: { x: 0, y: 0, z: 0 } } } };
+    const res = CF.placeSoup(app, CF.buildSoup(compBox(0, 0, 0)), 'Bench', 2, 3, { z: 3.2 });
+    ok(res.ok && res.mode === 'kernel', 'kernel path');
+    const faces = [...m.groupEntities(res.gid).faces];
+    const bb = m.bbox([...new Set(faces.flatMap(f => m.rings(m.faces.get(f)).flat()))]);
+    near(bb.min.z, 3.2, 1e-6, 'sits on the 3.2 m surface');
+    near(bb.max.z, 3.2 + 1.4, 1e-6, 'height preserved');
+    ok(m.validate().ok, 'valid');
+  });
+
   // a clean welded box soup for the probe tests
   function boxSoup() {
     const P = [], T = [];

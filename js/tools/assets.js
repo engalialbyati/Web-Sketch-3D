@@ -42,7 +42,9 @@
       const app = this.app, view = app.view;
       if (!this._asset) return;
       view.clearPreview();
-      const g = view.groundAt(view.eventPt(ev));
+      // surface, not bare ground: over a face (slab/roof/floor) the ghost
+      // rides that face's elevation; elsewhere the active level's floor
+      const g = view.surfaceAt(view.eventPt(ev));
       if (!g) return;
       const p = { x: g.x, y: g.y, z: g.z };
       if (app.gridSnap) { p.x = Math.round(p.x); p.y = Math.round(p.y); }
@@ -60,7 +62,7 @@
     onDown(ev) {
       if (ev.button !== 0 || !this._tpl || !this._asset) return;
       const app = this.app;
-      const p = this._last || app.view.groundAt(app.view.eventPt(ev));
+      const p = this._last || app.view.surfaceAt(app.view.eventPt(ev));
       if (!p) return;
       const pt = { x: p.x, y: p.y, z: p.z };
       if (app.gridSnap) { pt.x = Math.round(pt.x); pt.y = Math.round(pt.y); }

@@ -186,7 +186,7 @@
         app.armAssetPlacement({
           label: a.label,
           size: { w, d, h: (a.h || 1) * s },
-          place: (x, y) => {
+          place: (x, y, z) => {
             let gid = null;
             app.run('place asset', m => {
               // isolation: the asset welds to itself, never into a host element
@@ -200,7 +200,7 @@
                 (f.userData || (f.userData = {})).assetGid = 'asset:' + g.id;
                 for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
               }
-              m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z }));
+              m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z + (z || 0) }));
               m.touch();
               gid = g.id;
             });

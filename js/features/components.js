@@ -117,11 +117,12 @@
    *  isolation scope (asset island), dense ones become foreign meshes. */
   function placeSoup(app, soup, name, x, y, opts = {}) {
     if (!soup || !soup.triangles || !soup.triangles.length) return { ok: false, error: 'no triangles' };
-    if (opts.forceForeign) return placeForeignSoup(app, soup, name, x, y);
+    if (opts.forceForeign) return placeForeignSoup(app, soup, name, x, y, opts.z);
     // probe the fusion cheaply: fusing is O(n) — try, and if it stays dense,
     // fall back to the foreign path (the soup is unchanged by fuse)
     const fused = SoupFuse.fuse({ positions: soup.positions, triangles: soup.triangles.map(t => t.slice()), triAttrs: soup.triAttrs });
-    if (fused.length > KERNEL_FACE_LIMIT || !kernelProbeOk(soup)) return placeForeignSoup(app, soup, name, x, y);
+    if (fused.length > KERNEL_FACE_LIMIT || !kernelProbeOk(soup)) return placeForeignSoup(app, soup, name, x, y, opts.z);
+    const z = opts.z || 0;
     let gid = null;
     app.run('place component', m => {
       // isolation: the fused model welds to itself, never into a host element
@@ -135,7 +136,7 @@
         (f.userData || (f.userData = {})).assetGid = 'asset:' + g.gid;
         for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
       }
-      m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z }));
+      m.transformVertices([...vids], p => ({ x: p.x + x, y: p.y + y, z: p.z + z }));
       m.touch();
       gid = g.gid;
     });
@@ -143,9 +144,9 @@
     return { ok: true, mode: 'kernel', gid, faces: fused.length, triangles: soup.triangles.length, name };
   }
 
-  function placeForeignSoup(app, soup, name, x, y) {
+  function placeForeignSoup(app, soup, name, x, y, z) {
     const grp = foreignObject(soup);
-    grp.position.set(x, y, 0);
+    grp.position.set(x, y, z || 0);
     const size = new THREE.Box3().setFromObject(grp).getSize(new THREE.Vector3());
     const rec = app.assets._instantiate('component:' + name, name, 'object', { scene: grp, size: { x: size.x, y: size.y, z: size.z } });
     app.view.invalidate();
@@ -172,8 +173,8 @@
           app.armAssetPlacement({
             label: def.label,
             ghost: foreignObject(soup),
-            place: (x, y) => {
-              const res = placeSoup(app, soup, def.label + ' (' + def.credit + ')', x, y, { forceForeign: !!def.dense });
+            place: (x, y, z) => {
+              const res = placeSoup(app, soup, def.label + ' (' + def.credit + ')', x, y, { forceForeign: !!def.dense, z });
               if (!res.ok) { app.toast('Could not place ' + def.label, true); return; }
               app.toast(res.mode === 'kernel'
                 ? `${def.label}: ${res.triangles.toLocaleString()} triangles → ${res.faces} kernel faces (editable solid) — ${def.credit}`

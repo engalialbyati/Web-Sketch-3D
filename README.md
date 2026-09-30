@@ -786,8 +786,13 @@ selectable, paintable, pushable, booleanable. Real-world sizes with a
 scale control. Picking a card **arms click-to-place**: the dialog closes,
 a ghost follows the cursor on the ground plane (a wireframe box for tray
 items, the actual mesh for imported/online models), the next viewport
-click inserts the asset at that point, and Esc cancels. BlenderKit (Insert
-ribbon) remains the online library.
+click inserts the asset at that point, and Esc cancels. Placement is
+**surface-aware like an element's base**: the ghost rides whatever model
+face is under the cursor — hover a slab, a roof, a floor and the asset
+lands ON it at that face's elevation — and over empty space it sits at
+the **active level's** floor height, so arming Level 2 places at Level
+2's elevation (BlenderKit's Place Asset tool follows the same rule).
+BlenderKit (Insert ribbon) remains the online library.
 
 The tray also ships **six imported component models** (park bench, fountain,
 standing woman, pickup, SUV, sofa — ~35k faces total) extracted from

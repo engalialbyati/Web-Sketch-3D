@@ -2153,6 +2153,43 @@ class Viewport {
     const { ro, rd } = this.rayFrom(s);
     return G.rayPlane(ro, rd, { n: G.v(0, 0, 1), d: 0 });
   }
+  // Placement surface for armed assets — behaves like an element's base:
+  // the nearest model FACE under the cursor wins (hover a slab, a roof, a
+  // floor and the asset lands ON it at that face's elevation); with no face
+  // hit the fallback is the ground plane at the ACTIVE level's elevation,
+  // so arming "level 2" places at level 2's floor height even over empty
+  // space. Same pick targets and visibility rules as pickFaceAt, but this
+  // returns the hit POINT, not the face id.
+  surfaceAt(s) {
+    const app = this.app;
+    this.applyCamera();
+    this.raycaster.setFromCamera(this.ndcAt(s), this.activeCamera());
+    const ray = this.raycaster.ray;
+    let best = null; // { d, p }
+    const consider = (d, p) => { if (!best || d < best.d) best = { d, p }; };
+    const pickable = obj => {
+      const eid = obj.userData && obj.userData.elementId;
+      if (!eid) return true;
+      return !app.isEntityLocked(eid) && !app.isEntityHidden(eid);
+    };
+    if (this.elementsRoot) {
+      // intersectObjects is nearest-first — the top-most surface wins
+      for (const h of this.raycaster.intersectObjects(this.elementsRoot.children.filter(pickable), true)) {
+        if (h.object.userData && h.object.userData.triangleFace) { consider(h.distance, h.point); }
+        break;
+      }
+    }
+    if (this.faceMesh && this.faceMesh.visible) {
+      for (const mh of this._pickMergedFaces(ray.origin, ray.direction)) {
+        consider(mh.t, G.add(ray.origin, G.mul(ray.direction, mh.t)));
+        break;
+      }
+    }
+    if (best) return best.p;
+    const lvlZ = app.levelManager && app.bimOptions
+      ? (app.levelManager.getElevation(app.bimOptions.baseLevel) || 0) : 0;
+    return G.rayPlane(ray.origin, ray.direction, { n: G.v(0, 0, 1), d: lvlZ });
+  }
   anyPlaneAt(s) {
     const { ro, rd } = this.rayFrom(s);
     return G.add(ro, G.mul(rd, 12)); // fallback point along ray
