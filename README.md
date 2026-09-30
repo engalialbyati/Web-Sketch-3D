@@ -779,6 +779,19 @@ as materials come and go. A bundled **CC0 photo-texture library**
 paving — see `assets/textures/SOURCES.md`) installs as image materials in
 one click, at real-world tile sizes.
 
+**Online textures — Poly Haven** (same dialog, below the bundled row)
+browses the full Poly Haven scan library (~860 CC0 PBR textures — the
+same free source SketchUp's community material browsers tap): search and
+category filters over the public API, live thumbnails, and a click
+downloads the 1k diffuse map, downscales it to a save-friendly data URL
+and registers it as a named image material tiled at the scan's declared
+**real-world size**. Everything is CC0 (no attribution required), the
+API is CORS-open (no bridge needed), and the texture is stored inside
+the model once added — drawings stay renderable offline. Deliberately
+NOT integrated: Architextures (its terms gate commercial use behind a
+paid Pro subscription) and SketchUp's own bundled materials (Trimble
+copyright).
+
 **Insert ▸ Asset Library…** — a bundled, offline component tray (trees,
 person, car, bench, street light, bollard) generated as REAL kernel
 geometry: closed prisms in named groups, watertight the moment they land —

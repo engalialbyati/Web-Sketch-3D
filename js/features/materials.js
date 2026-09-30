@@ -192,6 +192,7 @@
           <span class="dim">Bundled photo textures (CC0 · ambientCG):</span>
           ${BUNDLED.map(b => `<button class="mini-btn" data-bundled="${b.file}" title="${b.label} — ${b.size} m tile">${b.label}</button>`).join('')}
         </div>
+        <div id="ph-mount" style="border-top:1px solid #d8d8d8; padding-top:6px; margin-bottom:8px"></div>
         <table class="prop-table" style="width:100%">
           <tr><th>Name</th><th>Color</th><th>Texture</th><th>Tile (m)</th><th>Use</th><th></th></tr>
           ${rows || '<tr><td colspan="6" class="dim">No named materials yet.</td></tr>'}
@@ -200,6 +201,7 @@
     requestAnimationFrame(() => {
       const body = document.querySelector('.dialog-body') || document.body;
       const rerender = () => { materialsDialog(app); rebuildPass(app); };
+      if (window.PHTextures) PHTextures.mount(app, body); // online CC0 section
       body.querySelector('#mat-add')?.addEventListener('click', () => {
         app.run('new material', mm => { ensureMat(mm, { name: 'Material ' + (mm.materials.size + 1), color: '#b0b0b0' }); mm.touch(); });
         rerender();
