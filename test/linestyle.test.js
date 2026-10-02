@@ -271,4 +271,32 @@ module.exports = h => {
     eq(m.shellOpenEdges(r.faces), 0, 'watertight curved wall');
     w.vclean('sweep wall profile');
   });
+  test('sharp path corners AUTO-ROUND — the bend is smooth, sized above the profile reach', () => {
+    const w = makeWorld(), { G, m } = w;
+    // the user's case: a rectangular profile swept along an L path — the
+    // corner must come out as a round bend, not a hard 90° miter
+    const prof = m.addFaceFromRings([
+      G.v(0, 0, 0), G.v(0, 0.6, 0), G.v(0.25, 0.6, 0), G.v(0.25, 0, 0)]);
+    const path = [G.v(0.125, 0.3, 0), G.v(0.125, 0.3, 3), G.v(4, 0.3, 3)];
+    const r = m.sweepFaceAlongPath(prof.id, path);
+    ok(!r.error, 'sweeps');
+    eq(m.shellOpenEdges(r.faces), 0, 'watertight');
+    // the rounding: the straight 2-segment path becomes leg + arc + leg
+    const rounded = m._roundSweepCorners(path, null, 0.35);
+    ok(rounded.length > 3, 'the corner grew an arc (' + rounded.length + ' stations)');
+    near(rounded[1].z, 2.5, 0.05, 'tangent point trims the entry leg');
+    // extreme: a pipe (r=0.4) through the corner — R floors above the
+    // profile reach so the inner side never folds
+    const ring = [];
+    for (let i = 0; i < 12; i++) {
+      const t = i / 12 * Math.PI * 2;
+      ring.push(G.v(0, 0.4 * Math.cos(t), 0.4 * Math.sin(t)));
+    }
+    const pipe = m.addFaceFromRings(ring);
+    const path2 = [G.v(0, 0, 0), G.v(0, 0, 2), G.v(2, 0, 2)];
+    const r2 = m.sweepFaceAlongPath(pipe.id, path2);
+    ok(!r2.error, 'pipe sweeps');
+    eq(m.shellOpenEdges(r2.faces), 0, 'pipe bend watertight — inner side smooth');
+    w.vclean('sweep corner round');
+  });
 };

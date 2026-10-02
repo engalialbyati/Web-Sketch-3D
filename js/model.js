@@ -3406,13 +3406,97 @@ class Model {
 
   /** Sweep a profile face along a path polyline (SketchUp's Follow Me). The
    *  profile's frame parallel-transports along the path — no twist on planar
-   *  paths, natural banking through corners. Consumes the profile; the PATH
-   *  stays (SketchUp parity). Returns { faces } or { error }. */
-  sweepFaceAlongPath(faceId, path) {
+   *  paths, natural banking through corners. Sharp path corners are
+   *  AUTO-ROUNDED with a tangent arc (radius = 35% of the shorter adjacent
+   *  leg, capped at 0.5 m — opts.cornerRadius overrides), so bends come out
+   *  round instead of hard-mitered; a corner whose legs cannot carry even a
+   *  tiny radius stays a miter. Consumes the profile; the PATH stays.
+   *  Returns { faces } or { error }. */
+  // Replace every SHARP corner of a sweep path (turn > 30° — the turns the
+  // miter construction would render as a hard edge) with a tangent fillet
+  // arc, so swept bends come out round. Radius: opts.cornerRadius, or
+  // adaptive — 35% of the shorter adjacent leg, capped at 0.5 m; a corner
+  // whose legs cannot carry even 0.05 m stays a miter. Returns a new path
+  // (the input is never mutated).
+  _roundSweepCorners(path, radius, rProfile) {
+    const opts = { rProfile };
+    const SHARP = Math.PI / 6; // >30° turn = a corner, not a curve
+    let hasSharp = false;
+    for (let i = 1; i < path.length - 1; i++) {
+      const a = G.norm(G.sub(path[i], path[i - 1]));
+      const b = G.norm(G.sub(path[i + 1], path[i]));
+      if (G.dot(a, b) < Math.cos(SHARP)) { hasSharp = true; break; }
+    }
+    if (!hasSharp) return path;
+    const out = [path[0]];
+    for (let i = 1; i < path.length - 1; i++) {
+      const P = path[i];
+      const prev = path[i - 1], next = path[i + 1];
+      const legA = G.dist(P, prev), legB = G.dist(P, next);
+      const a = G.norm(G.sub(P, prev));   // arrival direction
+      const b = G.norm(G.sub(next, P));   // departure direction
+      const cos = G.dot(a, b);
+      if (cos >= Math.cos(SHARP)) { out.push(P); continue; } // gentle: keep
+      const theta = Math.acos(Math.max(-1, Math.min(1, cos)));
+      // the rounding radius must exceed the profile's reach toward this
+      // bend's inside, or the inner ring side folds (r_offset >= R): floor
+      // it at reach + 1 cm so the inner offset keeps a 1 cm radius minimum
+      const Rmin = (opts.rProfile || 0) + 0.01;
+      let R = Math.max(radius != null ? radius : Math.min(0.35 * Math.min(legA, legB), 0.5), Rmin);
+      const d = R / Math.tan(theta / 2);          // tangent distance
+      if (d < 0.05 || d >= Math.min(legA, legB) - 1e-6) {
+        // legs too short for a sane arc (or the forced radius overruns them):
+        // shrink to fit, and below 5 cm keep the miter
+        R = Math.min(legA, legB) * 0.45 * Math.tan(theta / 2);
+        if (R < 0.05) { out.push(P); continue; }
+        const d2 = R / Math.tan(theta / 2);
+        if (d2 >= Math.min(legA, legB) - 1e-6) { out.push(P); continue; }
+      }
+      const dd = R / Math.tan(theta / 2);
+      const T1 = G.add(P, G.mul(a, -dd));         // trim back on the entry leg
+      const T2 = G.add(P, G.mul(b, dd));          // forward on the exit leg
+      // the center sits on the corner's interior bisector: legs from the
+      // corner run BACK along a and FORWARD along b, so the bisector is
+      // norm(b − a) at distance R/cos(θ/2) (== R/sin((π−θ)/2))
+      const center = G.add(P, G.mul(G.norm(G.sub(b, a)), R / Math.cos(theta / 2)));
+      // arc from T1 to T2 passing the apex on the corner's side
+      const e1 = G.norm(G.sub(T1, center));
+      const e2 = G.norm(G.sub(T2, center));
+      const apex = G.norm(G.sub(P, center));
+      const N = G.norm(G.cross(a, b));
+      const dir = G.dot(G.cross(e1, apex), N) >= 0 ? 1 : -1;
+      const span = Math.acos(Math.max(-1, Math.min(1, G.dot(e1, apex))))
+        + Math.acos(Math.max(-1, Math.min(1, G.dot(apex, e2))));
+      const nArc = Math.max(4, Math.ceil(span / 0.12));
+      out.push(T1);
+      for (let k = 1; k < nArc; k++) {
+        const t = span * (k / nArc);
+        out.push(G.add(center, G.add(G.mul(e1, Math.cos(dir * t) * R), G.mul(G.norm(G.cross(N, e1)), Math.sin(dir * t) * R))));
+      }
+      out.push(T2);
+    }
+    out.push(path[path.length - 1]);
+    return out;
+  }
+  sweepFaceAlongPath(faceId, path, opts = {}) {
     const f = this.faces.get(faceId);
     if (!f) return { error: 'profile face is gone' };
     if ((f.holes || []).length) return { error: 'profiles with openings cannot sweep yet' };
     if (!path || path.length < 2) { return { error: 'path is too short' }; }
+    // the profile's reach around the path (max ⊥ distance from the first
+    // leg's line) — the rounding radius is floored above it so the inner
+    // ring side of every rounded bend keeps a ≥ 1 cm radius (no folding)
+    let rProfile = 0;
+    {
+      const u0 = G.norm(G.sub(path[1], path[0]));
+      const r0 = this.pts(f.loop);
+      for (const p of r0) {
+        const w = G.sub(p, path[0]);
+        const d = G.len(G.sub(w, G.mul(u0, G.dot(w, u0))));
+        if (d > rProfile) rProfile = d;
+      }
+    }
+    path = this._roundSweepCorners(path, opts.cornerRadius, rProfile);
     const ring = this.pts(f.loop);
     // profile frame: origin = ring centroid, normal from the ring
     const c = ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
