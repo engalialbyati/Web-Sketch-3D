@@ -1,7 +1,7 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser (and desktop)
 
-[![release](https://img.shields.io/badge/release-v0.8.0%20%22Reinforcement%20Detailing%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.8.0)
-[![tests](https://img.shields.io/badge/tests-523%20passing-brightgreen)]() 
+[![release](https://img.shields.io/badge/release-v0.9.0%20%22Materials%20as%20One%20Surface%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.9.0)
+[![tests](https://img.shields.io/badge/tests-627%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -11,7 +11,10 @@ walls, floors, doors/windows, structural columns/beams/slabs with level
 datums, dynamic infill-wall clearance, quantity takeoff, and glTF export for
 rendering engines (Twinmotion/Unreal/Blender). Runs 100% locally — no build
 step, no server required. **The Revit method is the default**: the app boots
-into Precise Drawing (your last chosen mode is remembered).
+into Precise Drawing (your last chosen mode is remembered). A Windows
+installer ships with every release, and
+[the engine is documented for non-programmers too](docs/ARCHITECTURE-PLAIN.md)
+(written for civil engineers).
 
 It also grows past the built-ins: **Scripted Elements** turn pasted code from
 any AI into parametric element types (the app ships the contract template —
@@ -24,6 +27,42 @@ incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
 models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
+
+### v0.9 — Materials as One Surface, Edge Runs, Swept-Solid Elements
+
+v0.9 makes the model behave like one continuous construction:
+
+- **Materials pattern as one surface**: textures map in a single
+  world-space (box projection), so adjacent faces carrying the same
+  material tile continuously instead of each restarting the pattern at its
+  own corner. Paint multi-selections in one undo step, drop a swatch on a
+  group to paint the whole group, and presenting mode (View ▸ Edges off)
+  now persists across reloads.
+- **Swept solids become elements**: Follow Me leaves its body selected,
+  triple-click (or "Select Connected Body") grabs any whole solid, and
+  Convert to Element claims it as a fixed element with full Revit instance
+  data — curved walls from swept profiles list in the Element Browser and
+  report quantities like any parametric element.
+- **Sweep bend validation & auto-sizing** (pipes/elbows): a bend radius
+  tighter than the profile collapses the inner side, so bends are checked
+  before geometry is built — auto-resized to the 1.5·D standard when the
+  straight legs allow it, refused with the exact minimum otherwise.
+  Collapsed sweeps are structurally impossible now.
+- **Selection that follows the line**: Shift+'+' extends an edge selection
+  along the connected chain (straightest first, through corners),
+  Shift+'−' steps it back — dense parallel outlines become one-key runs.
+- **Draw from lines at any height**: hovering a line snaps "On Line" at its
+  true elevation, and the first point on real geometry re-anchors the
+  sketch plane there — a rectangle started on a 1.50 m wall top draws at
+  1.50 m. Vertical sketch planes (V) snap parallel to X or Y.
+- **Base Level "None"**: draw at the height you point at, with no level
+  binding (a floor on a 1.50 m wall between 3 m levels needs no phantom
+  level). Circle gains a Start-End (2-point) method and Arc a
+  Start-End-Radius method, chosen from a Method dropdown; the fillet tool
+  rounds into corners at the exact typed radius in any plane, and Auto
+  Face Creation (opt-in) fills closed loops SketchUp-style.
+- **Desktop app**: a Windows installer (NSIS, per-user) ships with every
+  release; the app also serves its own save files locally.
 
 ### v0.8 — Reinforcement Detailing (MNL-66)
 
@@ -148,7 +187,10 @@ windows — 325 live parametric elements in one click.
 > Deep dive: **[Architecture & Drawing Engine](docs/ARCHITECTURE.md)** —
 > layering, the B-Rep kernel, healing/push-pull flowcharts, the parametric
 > BIM layer, structural rules, rendering and export pipelines (Mermaid
-> diagrams).
+> diagrams). **Not a programmer?** The same engine is explained in
+> construction terms — no code — in
+> **[ARCHITECTURE-PLAIN.md](docs/ARCHITECTURE-PLAIN.md)**, written for
+> civil engineers.
 
 > **AI authoring:** models can be *written* as JSON, not just saved —
 > **[docs/AI-AUTHORING.md](docs/AI-AUTHORING.md)** is a complete spec

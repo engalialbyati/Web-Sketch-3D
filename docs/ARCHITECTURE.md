@@ -8,6 +8,16 @@ geometry → render → export) with flowcharts and graphs.
 All diagrams are [Mermaid](https://mermaid.js.org/) — GitHub renders them
 natively.
 
+> **Not a programmer?** Read
+> [`ARCHITECTURE-PLAIN.md`](ARCHITECTURE-PLAIN.md) — the same engine
+> explained for civil engineers, in construction terms, with no code.
+
+**Recent engine highlights** (details in the sections below): path sweeps
+with bend validation & auto-sizing (§6a), drawing from lines at any height
+and edge-run selection (§3), Revit-standard instance data and Base Level
+"None" (§7), swept solids claimed as fixed elements (§7a), one-world-space
+material mapping (§10a), and auto face creation (§5a).
+
 ## Table of contents
 
 1. [System overview](#1-system-overview)
@@ -187,6 +197,35 @@ Free-mode tools (Line, Rect, Push/Pull…) call `model.addEdge /
 addFaceFromRings / pushPull` directly. Precise-mode tools share the same
 kernel but wrap results in **parametric entities** (§7).
 
+### 3a. The inference stack (what the cursor snaps to)
+
+`inferPoint` resolves one point per move through a priority ladder —
+higher rungs win: live sketch points → cached discrete snaps (endpoints,
+midpoints, centers, face centers, edge crossings; 1 mm-quantized dedupe,
+screen-space scan) → grid intersections → parametric centerlines →
+**on-edge tracking** (the closest point between the cursor ray and each
+straight edge — SketchUp's "On Line") → axis inference → ground.
+
+Two behaviors ride on top:
+
+- **Draw FROM a line at any height** — when a tool's first point lands on
+  real geometry (an edge interior, an elevated endpoint, an intersection,
+  a center), the sketch plane re-anchors through it (`snap3dReanchor`):
+  a rectangle started on a 3 m wall top draws at 3 m instead of collapsing
+  to the base level, and a line continues at the snapped height.
+- **Edge runs** — with edges selected, Shift+'+' walks the selection along
+  the connected chain (straightest continuation first, through corners,
+  never doubling back; `growEdgeRun`), Shift+'−' steps it back. The
+  selection order is logged through `toggleEntities`, so the run grows
+  from the last picked edge.
+
+### 3b. Vertical sketch planes snap to the axes
+
+The V key's vertical plane (Circle / Rect / vertical-chord Arc) is
+axis-parallel (`verticalAxisPlane`): the normal snaps to the world axis
+that best faces the camera, so vertical shapes stand parallel to X or Y —
+never on the camera's diagonal.
+
 ## 4. Transactions, undo and the guard
 
 ```mermaid
@@ -235,6 +274,18 @@ disappears from the viewport but every face, boundary, weld and join still
 sees it (geometry, lighting, materials and exports are untouched).
 Edit ▸ Unhide All restores them.
 
+### 5a. Auto face creation (opt-in, SketchUp-style)
+
+`Draw ▸ Auto Face Creation` fills a loop the moment it closes. The loop→face
+pipeline is one shared builder (`_runFaceBuilder`) used by both the explicit
+Create Face action and the post-op auto scan (`_autoFaceScan` runs in
+`opDone`, re-entrancy-guarded): tail/chord shedding, tightest-turn cycle
+decomposition, dominant-axis orientation, nested rings as holes, standalone
+faces with surviving source wires. Consumed wires carry a persisted
+`autoFaced` mark so scans never duplicate a face; grouped wires only face
+inside their group's edit; BIM-stamped edges never auto-face. The explicit
+action's "wires stay reusable" contract is unchanged.
+
 ## 6. Push/Pull — the sweep kernel
 
 One operation builds walls, slabs, columns, beams — the SketchUp workhorse:
@@ -260,6 +311,37 @@ partitions), and `shellVolume` resolves each orientation tree's sign
 geometrically (ray-parity probe), so punched hosts + rising tubes measure
 exactly.
 
+### 6a. Path sweeps (Follow Me) — miter construction & bend validation
+
+`sweepFaceAlongPath(profile, path)` extrudes a drawn profile along an edge
+chain with a **classic miter construction**: per-segment frames (parallel
+transport), interior corner stations carry the incoming frame rotated by
+half the corner angle (the twist splits evenly; no end-cap skew), and the
+profile keeps its **rigid drawn offset** from the path — placement rides
+along, it is never re-centered. The drawn profile is deleted before the
+loft so station 0 does not double-cover; caps close both ends;
+degenerate quads fall back to triangles/butterflies so reasonable shapes
+stay watertight.
+
+**Bend validation & auto-sizing** runs before any geometry is built:
+
+```mermaid
+flowchart TD
+    A["profile + path"] --> B["measure profile radius r<br/>(max extent around the path)<br/>+ every ARC bend radius R<br/>(equal-turn chains; sharp turns are miters)"]
+    B --> C{"any R <= r ?"}
+    C -- no --> D["build the mitered sweep"]
+    C -- yes --> E{"straight legs can carry<br/>Rmin = max(1.5·diameter, r+allowance)?"}
+    E -- yes --> F["AUTO-SIZE: rebuild each tight bend as a<br/>tangent fillet at Rmin (Kása circle fit →<br/>exact tangents) and sweep the resized path"]
+    E -- no --> G["REFUSE: 'Fillet radius too small for the<br/>selected profile size. Minimum radius is X m'<br/>— profile survives untouched"]
+```
+
+A Kása least-squares circle fit on each bend region yields exact endpoint
+tangents (chord estimates run half a step off); the replacement arc is
+tessellated in-plane, strictly forward-ordered, and each straight leg run
+is walked to its far end to prove the tangent points land on real geometry.
+Self-intersection is structurally impossible: no mesh is ever generated
+with R ≤ r.
+
 ## 7. Parametric BIM layer
 
 Precise Drawing wraps kernel solids in **parametric entities**
@@ -282,7 +364,33 @@ flowchart LR
 ```
 
 Levels are vertical datums (`LevelManager`); walls, slabs, beams and columns
-derive their vertical bounds from levels + instance offsets.
+derive their vertical bounds from levels + instance offsets. **Base Level
+"None"** unbinds a sketch from any level: the free elevation is captured
+live from real-geometry snaps through `getElevation('none')` (hover a 1.5 m
+wall top, the base plane sits at 1.5 m) — every plane/height consumer
+follows through the one hook, and the 1 m reference grid rides along.
+
+Every element is **born with Revit's standard instance data**: phasing
+(Phase Created / Demolished), Identity Data (Mark, Comments), and
+category-appropriate Structural flags (usage per category) and Room Bounding.
+Data-only parameters apply without regeneration (one fast-path regex);
+geometric parameters still rebuild. The Entity Info palette renders them as
+collapsible Revit sections with a staged-Apply bar; **fixed elements**
+(claimed bodies — see §7a) keep the data fields and hide the geometric
+inputs.
+
+### 7a. Claimed bodies: free geometry becomes an element
+
+Drawn or swept solids become first-class elements without rebuilding
+geometry: **multi-face claim** (`ConvertTool.convertFaces`) takes a selected
+face set (a Follow Me body lands selected), classifies roles from the
+combined bounds, seeds parametric dimensions, and stamps through the normal
+`bim.create` path — the Element Browser lists it, Entity Info shows its
+Revit data, and `p.fixed = true` declares the drawn geometry the design
+(one-click entry points: whole-group claim, edge→member, single-face sweep).
+`model.connectedFaces(fid)` (edge-adjacency BFS) powers triple-click body
+selection, which — covering every face of an element — is also what opens
+the element inspector in Free mode.
 
 ## 8. Hosted openings (doors / windows)
 
@@ -388,6 +496,19 @@ flowchart LR
     G --> I["picking: raycast face → id →<br/>whole entity or sub-element (Ctrl)"]
 ```
 
+### 10a. Materials — one world texture space
+
+Named materials (`model.materials`) ride faces as `matId`; textured ones
+render through a dedicated overlay pass (`rebuildPass`) that triangulates
+each face hole-aware and maps UVs by **world-space box projection**: the
+projection plane follows the face's dominant normal axis, but u/v are fixed
+world axes — every face carrying a material shares one continuous tile
+space, so coplanar faces pattern as a single surface. Painting respects
+units: a BIM drop paints the whole element (hosted doors/windows contribute
+frame+leaf, never lining), 2+ selected faces paint the selection in one
+undo step, a grouped face paints the whole group, and foreign (downloaded)
+models take solid tints with per-instance isolation.
+
 ## 11. Persistence & export
 
 ```mermaid
@@ -405,13 +526,17 @@ so lighting and materials are unaffected by what you hide while modeling.
 
 ## 12. Testing
 
-`node test/run.js` — 169 tests, no DOM, no WebGL: `geometry.js`, `model.js`
+`node test/run.js` — 627 tests, no DOM, no WebGL: `geometry.js`, `model.js`
 and the pure modules are loaded into an isolated V8 context (`vm`) and
 driven through their public APIs. Suites cover the healing kernel (punch /
-trim / arrange / dissolve), push/pull semantics, transactions, walls &
-joins, hosted cuts, structural elements (elevation rules, profiles,
-clearance, priority takeoff), wire hygiene, soften round-trip and the glTF
-writer.
+trim / arrange / dissolve), push/pull semantics, path sweeps (miter
+watertightness, rigid offset, bend validation & auto-sizing), the fillet
+construction (interior sweep, Z-plane, crossing-line trim), edge runs,
+materials (world-space UV continuity, group/selection painting), the
+Revit parameter schema (including Base Level "None"), hosted cuts,
+structural elements (elevation rules, profiles, clearance, priority
+takeoff), wire hygiene, soften round-trips, auto-face creation and the
+glTF writer.
 
 ## 13. Feature SDK (extension surface)
 
