@@ -3122,38 +3122,70 @@ class ExtrudeCurveTool extends Tool {
   _chain(edge) { return ExtrudeCurveTool.chainFor(this.app.model, edge); }
   static chainFor(model, edge) {
     const m = model;
-    const cid = edge.curveId || 0;
-    const chain = cid ? [...m.edges.values()].filter(e => e.curveId === cid) : [edge];
-    if (!chain.length) return null;
-    const deg = new Map();
-    for (const e of chain) for (const v of [e.a, e.b]) deg.set(v, (deg.get(v) || 0) + 1);
+    // JOINED PATHS: a path welded end-to-end from line + arc + line (or arc
+    // + arc) must follow as ONE chain. The seed edge's curve is the entry
+    // point; the walk extends through DEGREE-2 junctions into whatever is
+    // connected — different curves included. Free ends and branch points
+    // (3+ edges meeting) stop it.
+    const byV = new Map();
+    for (const e of m.edges.values()) for (const v of [e.a, e.b]) {
+      if (!byV.has(v)) byV.set(v, []);
+      byV.get(v).push(e);
+    }
+    const seed = edge.curveId
+      ? [...m.edges.values()].filter(e => e.curveId === edge.curveId)
+      : [edge];
+    if (!seed.length) return null;
     const used = new Set();
     const walk = (v0, e0) => {
-      // seed with the first edge traversed, then keep extending
       const path = [v0];
       used.add(e0.id);
       let cur = e0.a === v0 ? e0.b : e0.a;
       path.push(cur);
+      let came = e0;
       while (true) {
-        const nxt = chain.find(e => !used.has(e.id) && (e.a === cur || e.b === cur));
-        if (!nxt) break;
+        const inc = byV.get(cur) || [];
+        let nxt = null;
+        if (inc.length === 2) { // exactly one way onward — follow the join
+          nxt = inc[0] === came ? inc[1] : inc[0];
+          if (used.has(nxt.id)) break; // closed loop — complete
+        }
+        if (!nxt) break; // free end (1) or a branch point (3+)
         used.add(nxt.id);
         cur = nxt.a === cur ? nxt.b : nxt.a;
         path.push(cur);
+        came = nxt;
       }
       return path;
     };
+    // the seed curve's two loose ends (a closed curve walks from anywhere)
+    const deg = new Map();
+    for (const e of seed) for (const v of [e.a, e.b]) deg.set(v, (deg.get(v) || 0) + 1);
     const ends = [...deg.entries()].filter(([, n]) => n === 1).map(([v]) => v);
     let path;
     if (ends.length >= 2) {
-      const e0 = chain.find(e => e.a === ends[0] || e.b === ends[0]);
+      const e0 = seed.find(e => e.a === ends[0] || e.b === ends[0]);
       path = walk(ends[0], e0);
+      // extend the START end backward through its own degree-2 junction —
+      // the seed's two ends each join whatever is welded there
+      let v0 = path[0], eS = e0;
+      while (true) {
+        const inc = byV.get(v0) || [];
+        if (inc.length !== 2) break;
+        const nxt = inc[0] === eS ? inc[1] : inc[0];
+        if (used.has(nxt.id)) break;
+        used.add(nxt.id);
+        v0 = nxt.a === v0 ? nxt.b : nxt.a;
+        path.unshift(v0);
+        eS = nxt;
+      }
     } else {
-      path = walk(edge.a, edge); // closed loop: returns to the start vertex
+      path = walk(edge.a, edge);
     }
     if (path.length < 2) return null;
     return path.map(v => G.clone(m.vp(v)));
   }
+
   // extrusion direction: an explicit arrow-key lock gives the WORLD axis —
   // otherwise the DEFAULT is the profile's LOCAL PLANE NORMAL, computed as
   // N = normalize(Σ (Pᵢ−C) × (Pᵢ₊₁−C)) (the cross of the curve's chord
@@ -3502,15 +3534,12 @@ class FollowMeTool extends Tool {
     const pts = ExtrudeCurveTool.chainFor(app.model, pe.edge);
     if (!pts) return;
     this.hoverChain = { pts };
-    // ghost stations: the profile translated along the path (transport
-    // rotation happens at commit — the preview shows where it lands)
-    const f = app.model.faces.get(this.profile);
-    if (!f || !this.snapshot) return;
-    const ring = app.model.pts(f.loop);
-    const c = G.mul(ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0)), 1 / ring.length);
-    const n = G.norm(G.loopNormal(ring));
+    // ghost stations: the profile translated along the path RIGIDLY — it
+    // keeps its drawn offset from the path start (the commit sweeps the same
+    // way; re-centering on the path was the old "follows the center line")
+    if (!this.snapshot) return;
     for (let i = 0; i < pts.length; i += Math.max(1, Math.floor(pts.length / 4))) {
-      const off = G.sub(G.add(pts[i], G.mul(n, G.dot(G.sub(pts[0], c), n))), c);
+      const off = G.sub(pts[i], pts[0]);
       app.renderGhost(this.snapshot, p => G.add(p, off));
     }
   }

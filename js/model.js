@@ -3226,8 +3226,23 @@ class Model {
     const n = rings[0].length;
     if (rings.some(r => r.length !== n)) return [];
     const out = [];
+    const tri = (pts) => {
+      if (pts.length < 3 || G.loopArea(pts) < 1e-10) return;
+      const f = this.addFaceFromRings(pts, [], loose ? { standalone: true } : undefined);
+      if (f) { if (color != null) f.color = color; out.push(f.id); }
+    };
     const quad = (a, b, c, d) => {
-      if (G.loopArea([a, b, c, d]) < 1e-10) return;
+      if (G.loopArea([a, b, c, d]) < 1e-10) {
+        // a collapsed quad (a knife-edge corner crushes one side) must not
+        // leave a hole: emit its distinct corners — a triangle when two
+        // corners meet, two triangles when the quad butterflies flat
+        const uniq = [];
+        for (const p of [a, b, c, d])
+          if (!uniq.some(q => G.dist(q, p) < 1e-9)) uniq.push(p);
+        if (uniq.length === 3) return tri(uniq);
+        if (uniq.length === 4) { tri([uniq[0], uniq[1], uniq[2]]); tri([uniq[0], uniq[2], uniq[3]]); }
+        return;
+      }
       const f = this.addFaceFromRings([a, b, c, d], [], loose ? { standalone: true } : undefined);
       if (f) { if (color != null) f.color = color; out.push(f.id); }
     };
@@ -3408,28 +3423,49 @@ class Model {
     // local profile coordinates (u, v) in the plane, centered on the centroid
     const { u, v } = G.basisForNormal(nrm);
     const local = ring.map(p => G.v(G.dot(G.sub(p, O), u), G.dot(G.sub(p, O), v), 0));
-    // transport the frame along the path
-    let T = nrm, U = u;
+    // Classic MITERED sweep (SketchUp-style placement):
+    // - the drawn frame is kept EXACTLY at the start and end stations
+    // - each corner vertex carries a MITER ring: the incoming segment's
+    //   frame rotated half the corner angle, so the twist splits evenly
+    //   across the two adjacent segments (no 45° end-cap skew, and the
+    //   rigid offset below never swings sideways at the path's end)
+    const dirs = [];
+    for (let i = 1; i < path.length; i++) dirs.push(G.norm(G.sub(path[i], path[i - 1])));
+    const rot = (T, U, a, b, ang) => { // rotate frame T,U by ang about axis a→b
+      const ax = G.norm(G.cross(a, b));
+      if (G.isZero(ax)) return { T, U };
+      return { T: G.rotatePoint(T, G.v(0, 0, 0), ax, ang), U: G.rotatePoint(U, G.v(0, 0, 0), ax, ang) };
+    };
+    const cornerAng = (d0, d1) => {
+      const c = Math.max(-1, Math.min(1, G.dot(d0, d1)));
+      return (c < 1 - 1e-12 && c > -1 + 1e-12) ? Math.atan2(G.len(G.cross(d0, d1)), c) : 0;
+    };
+    // frames per segment (parallel transport, full rotation at each corner)
+    const F = [{ T: nrm, U: u }];
+    for (let k = 1; k < dirs.length; k++)
+      F.push(rot(F[k - 1].T, F[k - 1].U, dirs[k - 1], dirs[k], cornerAng(dirs[k - 1], dirs[k])));
+    // rigid placement: the profile KEEPS its drawn offset from the path —
+    // placing its centroid on the path would re-center it (the "follows the
+    // center line" complaint). Captured in the START frame, rides along.
+    const V0 = G.cross(nrm, u);
+    const off0 = G.sub(O, path[0]);
+    const du = G.dot(off0, u), dv = G.dot(off0, V0), dw = G.dot(off0, nrm);
     const sections = [];
     for (let i = 0; i < path.length; i++) {
-      if (i > 0) {
-        const d = G.norm(G.sub(path[i], path[i - 1]));
-        const T2 = G.norm(G.add(T, d)); // parallel transport: bisector
-        if (G.isZero(T2)) { /* 180° turn: keep the frame */ }
-        else {
-          const rot = G.cross(T, T2);
-          const ang = Math.asin(Math.max(-1, Math.min(1, G.len(rot))));
-          if (ang > 1e-9) {
-            U = G.rotatePoint(U, G.v(0, 0, 0), G.norm(rot), ang);
-            T = T2;
-          }
-        }
-      }
+      let fr;
+      if (i === 0) fr = F[0];
+      else if (i === path.length - 1) fr = F[Math.max(0, dirs.length - 1)];
+      else fr = rot(F[i - 1].T, F[i - 1].U, dirs[i - 1], dirs[i], cornerAng(dirs[i - 1], dirs[i]) / 2);
+      const { T, U } = fr;
       const V = G.cross(T, U);
-      sections.push(local.map(q => G.add(path[i], G.add(G.mul(U, q.x), G.mul(V, q.y)))));
+      const base = G.add(path[i], G.add(G.mul(U, du), G.add(G.mul(V, dv), G.mul(T, dw))));
+      sections.push(local.map(q => G.add(base, G.add(G.mul(U, q.x), G.mul(V, q.y)))));
     }
-    const faces = this.loftRings(sections, { closed: false, capStart: true, capEnd: true, color: f.color });
+    // rigid placement puts station 0 EXACTLY on the drawn profile — delete
+    // it FIRST or the start cap lands on a live face and the arrangement
+    // merges them into double-covered edges
     this.deleteFace(faceId, true);
+    const faces = this.loftRings(sections, { closed: false, capStart: true, capEnd: true, color: f.color });
     this.gc();
     return { faces };
   }

@@ -94,7 +94,8 @@ module.exports = h => {
 
   test('follow me: a square profile along an L path closes with caps', () => {
     const w = makeWorld(), { G, m } = w;
-    const sq = m.addFaceFromRings([G.v(0, 0, 3), G.v(0.3, 0, 3), G.v(0.3, 0.3, 3), G.v(0, 0.3, 3)]);
+    // profile FACES down the first segment (+X) — the normal follow-me usage
+    const sq = m.addFaceFromRings([G.v(0, 0, 3), G.v(0, 0.3, 3), G.v(0, 0.3, 3.3), G.v(0, 0, 3.3)]);
     const path = [G.v(0, 0, 3), G.v(2, 0, 3), G.v(2, 2, 3), G.v(2, 2, 5)];
     const r = m.sweepFaceAlongPath(sq.id, path);
     ok(!r.error, 'sweep succeeded');
@@ -113,5 +114,79 @@ module.exports = h => {
     const f2 = [...m.faces.values()][0];
     eq(f2.layerId, 'lyr_x', 'face layer round-trips');
     w.vclean('face layer');
+  });
+  // ---- joined paths (arcs + lines follow as ONE chain) ----------------------
+  // chainFor lives on ExtrudeCurveTool in free.js — load it headless
+  const LF = h.loadModel(['js/tools/base.js', 'js/tools/free.js']);
+  const ECT = LF.window.FreeTools.ExtrudeCurveTool;
+
+  test('chainFor: a line + arc + line path welded end-to-end is ONE chain', () => {
+    const w = makeWorld(), { G, m } = w;
+    // line 0,0→2,0 · arc 2,0→4,0 (bulge z) · line 4,0→6,1 — all welded
+    m.addEdge(G.v(0, 0, 0), G.v(2, 0, 0));
+    const arcPts = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8;
+      arcPts.push(G.v(2 + 2 * t, 0, Math.sin(t * Math.PI) * 0.8));
+    }
+    m.addPolyline(arcPts, { type: 'arc', center: G.v(3, 0, 0.3), radius: 1.3 });
+    m.addEdge(G.v(4, 0, 0), G.v(6, 1, 0));
+    const arcEdge = [...m.edges.values()].find(e => e.curveId);
+    const chain = ECT.chainFor(m, arcEdge);
+    ok(chain && chain.length >= 10, 'chain spans all three pieces (' + (chain && chain.length) + ' pts)');
+    const first = chain[0], last = chain[chain.length - 1];
+    const endsNear = (p, q) => G.dist(p, q) < 1e-6;
+    ok(endsNear(first, G.v(0, 0, 0)) || endsNear(last, G.v(0, 0, 0)), 'chain reaches the free line end');
+    ok(endsNear(first, G.v(6, 1, 0)) || endsNear(last, G.v(6, 1, 0)), 'chain reaches the far line end');
+    // seeding from a LINE edge reaches the arc too — entry point is free
+    const lineEdge = [...m.edges.values()].find(e => !e.curveId && G.dist(m.vp(e.a), G.v(0, 0, 0)) < 1e-9);
+    const chain2 = ECT.chainFor(m, lineEdge);
+    ok(chain2 && chain2.length === chain.length, 'same chain from either end');
+  });
+
+  test('chainFor: a branch point stops the walk (no greedy T-junction)', () => {
+    const w = makeWorld(), { G, m } = w;
+    m.addEdge(G.v(0, 0, 0), G.v(2, 0, 0));
+    m.addEdge(G.v(2, 0, 0), G.v(4, 0, 0));
+    m.addEdge(G.v(2, 0, 0), G.v(2, 2, 0)); // three edges meet at (2,0,0)
+    const e1 = [...m.edges.values()].find(e => G.dist(m.vp(e.a), G.v(0, 0, 0)) < 1e-9);
+    const chain = ECT.chainFor(m, e1);
+    eq(chain.length, 2, 'stops at the junction — just the seed edge, no greedy walk');
+  });
+
+  test('chainFor: a closed curve still walks its full loop', () => {
+    const w = makeWorld(), { G, m } = w;
+    const pts = [];
+    for (let i = 0; i < 12; i++) {
+      const t = i / 12 * Math.PI * 2;
+      pts.push(G.v(3 + Math.cos(t), Math.sin(t), 0));
+    }
+    m.addPolyline([...pts, pts[0]], { type: 'circle', center: G.v(3, 0, 0), radius: 1 });
+    const e0 = [...m.edges.values()].find(e => e.curveId);
+    const chain = ECT.chainFor(m, e0);
+    eq(chain.length, 13, 'the full circle loops back (12 + return vertex)');
+  });
+
+  test('follow me: the profile KEEPS its offset from the path (no re-centering)', () => {
+    const w = makeWorld(), { G, m } = w;
+    // a square profile facing down +X, BESIDE the path by 1 m in Y — it must
+    // sweep to a tube 1 m beside the path, not re-centered onto it
+    const sq = m.addFaceFromRings([G.v(3, 1, 1), G.v(3, 1, 1.3), G.v(3, 1.3, 1.3), G.v(3, 1.3, 1)]);
+    const path = [G.v(3, 0, 1), G.v(3, 3, 1)];
+    const r = m.sweepFaceAlongPath(sq.id, path);
+    ok(!r.error, 'sweep succeeded');
+    eq(m.shellOpenEdges(r.faces), 0, 'tube still watertight');
+    // rigid: the tube spans y 1.0..4.3 (path 0..3 + the drawn 1 m offset);
+    // center-line placement would have swept y -0.15..3.15
+    let minY = Infinity, maxY = -Infinity;
+    for (const fid of r.faces) for (const ring of m.rings(m.faces.get(fid)))
+      for (const vi of ring) {
+        const y = m.vp(vi).y;
+        minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+      }
+    near(minY, 1, 1e-6, 'drawn offset kept at the path start (min)');
+    near(maxY, 4.3, 1e-6, 'offset rides along to the path end (max)');
+    ok(!m.faces.has(sq.id), 'profile consumed');
+    w.vclean('follow me offset');
   });
 };
