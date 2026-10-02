@@ -19,12 +19,24 @@ module.exports = h => {
     return { lo, hi };
   };
 
-  test('parseMTL: Kd colors per material, missing diffuse stays null', () => {
-    const mtl = OL.parseMTL('newmtl red\nKd 1 0 0\nnewmtl bare\nnewmtl blue\nKd 0 0.5 1\n');
-    eq(mtl.red.length, 3, 'red parsed');
-    near(mtl.red[0], 1, 1e-9, 'red r');
-    eq(mtl.blue[2], 1, 'blue b');
-    ok(mtl.bare === null, 'no-Kd material → null (default color)');
+  test('parseMTL: Kd + map_Kd per material, options and quotes stripped', () => {
+    const mtl = OL.parseMTL([
+      'newmtl wood',
+      'Kd 0.8 0.6 0.4',
+      'map_Kd -s 1 1 1 ./textures/wood_diffuse.png',
+      'newmtl bare',
+      'newmtl quoted',
+      'map_Kd "C:\\materials\\fabric.jpg"',
+      'newmtl blue',
+      'Kd 0 0.5 1',
+    ].join('\n'));
+    eq(mtl.wood.kd.length, 3, 'wood Kd parsed');
+    near(mtl.wood.kd[0], 0.8, 1e-9, 'wood r');
+    eq(mtl.wood.map, 'textures/wood_diffuse.png', 'map file is the LAST token, ./ stripped');
+    ok(mtl.bare.kd === null && mtl.bare.map === null, 'no-Kd no-map material stays empty');
+    eq(mtl.quoted.map, 'C:/materials/fabric.jpg', 'quotes + windows slashes normalized');
+    eq(mtl.blue.kd[2], 1, 'blue b');
+    ok(mtl.blue.map === null, 'color-only material has no map');
   });
 
   test('parseOBJ: quads, slashed tokens, negative indices, usemtl colors, strays dropped', () => {
@@ -38,7 +50,7 @@ module.exports = h => {
       'f -5 -4 -3',        // negative indices → same tri as the first
       'f 2 2 3',           // degenerate — skipped
     ].join('\n');
-    const mtl = { red: [1, 0, 0], blue: [0, 0, 1] };
+    const mtl = { red: { kd: [1, 0, 0], map: null }, blue: { kd: [0, 0, 1], map: null } };
     const soup = OL.parseOBJ(obj, mtl);
     eq(soup.positions.length, 4, 'only face-used vertices (stray dropped)');
     eq(soup.triangles.length, 4, '1 + 2 + 1 triangles (degenerate skipped)');
@@ -46,6 +58,123 @@ module.exports = h => {
     eq(soup.triAttrs.filter(a => a.color === '#0000ff').length, 1, 'blue group');
     // negative-index face == first tri → welded to same remapped ids
     eq(soup.triangles[3].join(','), soup.triangles[0].join(','), 'negative indices resolve');
+    // material bookkeeping for the foreign (textured) path
+    eq(soup.mtls.length, 2, 'two materials registered');
+    eq(soup.mtls[0].name, 'red', 'first material name');
+    eq(soup.mtls[0].color, '#ff0000', 'material flat color');
+    ok(soup.matOf.every(mi => mi === 0 || mi === 1), 'every triangle tagged with its material');
+  });
+
+  test('parseOBJ: vt UVs captured per corner, faces without vt get nulls', () => {
+    const obj = [
+      'v 0 0 0', 'v 1 0 0', 'v 1 1 0',
+      'vt 0 0', 'vt 1 0', 'vt 1 1', 'vt 0.5 0.25',
+      'usemtl tex1',
+      'f 1/1 2/2 3/3',      // fully UV'd tri
+      'f 1 2 3',            // same tri, no UVs → null corners
+      'usemtl tex2',
+      'f 1/4 2/-3 3/2',     // negative vt index resolves
+    ].join('\n');
+    const soup = OL.parseOBJ(obj, { tex1: { kd: null, map: 'a.png' }, tex2: { kd: [1, 1, 1], map: 'b.png' } });
+    eq(soup.triUvs.length, 3, 'one UV triple per triangle');
+    eq(soup.triUvs[0].map(q => q.u + ',' + q.v).join(' '), '0,0 1,0 1,1', 'v/vt corners carry uv');
+    ok(soup.triUvs[1].every(q => q === null), 'no-vt face → null corners');
+    near(soup.triUvs[2][0].u, 0.5, 1e-9, 'negative vt index resolved (u)');
+    near(soup.triUvs[2][0].v, 0.25, 1e-9, 'negative vt index resolved (v)');
+    eq(soup.mtls[0].mapName, 'a.png', 'map file carried on the material');
+    eq(soup.matOf[0], 0, 'first tri uses tex1');
+    eq(soup.matOf[2], 1, 'last tri uses tex2');
+  });
+
+  // ------------------------------- foreign rendering: flat fallback + textures
+  const L3 = loadModel(['js/lib/three.min.js', 'js/features/onlinelib.js', 'js/features/components.js']);
+  const CF = L3.window.ComponentsFeature;
+
+  test('foreignObject: no materials → the flat vertex-colored mesh (back-compat)', () => {
+    const soup = { positions: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 0, y: 1, z: 0 }],
+      triangles: [[0, 1, 2]], triAttrs: [{ color: '#ff0000', alpha: 1 }] };
+    const grp = CF.foreignObject(soup);
+    eq(grp.children.length, 1, 'single mesh');
+    const mesh = grp.children[0];
+    ok(mesh.geometry.attributes.color, 'vertex colors present');
+    ok(!mesh.material.map, 'no texture');
+    ok(mesh.material.vertexColors, 'vertexColors material');
+  });
+
+  test('foreignObject: textured soup → one mesh per material with UVs', () => {
+    const P = [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0 }, { x: 0, y: 1, z: 0 }];
+    const soup = {
+      positions: P,
+      triangles: [[0, 1, 2], [0, 2, 3], [0, 1, 2]],
+      triAttrs: [{ color: null, alpha: 1 }, { color: '#00ff00', alpha: 1 }, { color: null, alpha: 1 }],
+      mtls: [{ name: 'wood', color: '#8a6a3f', mapName: 'wood.png', tex: { isTexture: true } },
+             { name: 'plain', color: '#2020c0', mapName: null, tex: null }],
+      matOf: [0, 1, 0],
+      triUvs: [[{ u: 0, v: 0 }, { u: 1, v: 0 }, { u: 1, v: 1 }],
+               [{ u: 0, v: 0 }, { u: 1, v: 0 }, { u: 1, v: 1 }],
+               [{ u: 0, v: 0 }, { u: 1, v: 0 }, { u: 1, v: 1 }]],
+    };
+    const grp = CF.foreignObject(soup);
+    eq(grp.children.length, 2, 'one mesh per material');
+    const meshes = grp.children.slice().sort((a, b) => a.material.map ? -1 : 1);
+    ok(meshes[0].material.map, 'textured mesh carries the map');
+    ok(meshes[0].geometry.attributes.uv, 'textured mesh has UVs');
+    eq(meshes[0].material.color.getHexString(), 'ffffff', 'textured base is white (image carries the look)');
+    eq(meshes[0].geometry.attributes.position.count, 6, 'wood group holds both its triangles');
+    ok(!meshes[1].material.map, 'untextured material stays flat');
+    eq(meshes[1].material.color.getHexString(), '2020c0', 'flat material uses its Kd color');
+    eq(meshes[1].geometry.attributes.position.count, 3, 'plain group holds its one triangle');
+  });
+
+  test('foreignObject: texture with NO face UVs → planar projection drapes it', () => {
+    // scopia/Sweet-Home OBJs carry vt lines their faces never reference —
+    // the triangle projects into its group bbox instead of staying flat
+    const soup = {
+      positions: [{ x: 0, y: 0, z: 0 }, { x: 2, y: 0, z: 0 }, { x: 2, y: 2, z: 0 }, { x: 0, y: 2, z: 0 }],
+      triangles: [[0, 1, 2], [0, 2, 3]], triAttrs: [{ color: null, alpha: 1 }, { color: null, alpha: 1 }],
+      mtls: [{ name: 'tex', color: null, mapName: 'x.png', tex: { isTexture: true } }],
+      matOf: [0, 0], triUvs: [[null, null, null], [null, null, null]],
+    };
+    const grp = CF.foreignObject(soup);
+    eq(grp.children.length, 1, 'one material group');
+    const mesh = grp.children[0];
+    ok(mesh.material.map, 'textured despite missing UVs');
+    ok(mesh.geometry.attributes.uv, 'UVs generated');
+    const uv = mesh.geometry.attributes.uv;
+    // first corner of tri 0 is the group bbox min → (0,0); tri 1 spans to (1,1)
+    near(uv.getX(0), 0, 1e-9, 'projected u at bbox min');
+    near(uv.getY(0), 0, 1e-9, 'projected v at bbox min');
+    near(uv.getX(4), 1, 1e-9, 'top corner maps to bbox max (u)');
+    near(uv.getY(4), 1, 1e-9, 'top corner maps to bbox max (v)');
+  });
+
+  test('foreignObject: mixed UVs — explicit corners kept, missing ones projected', () => {
+    const soup = {
+      positions: [{ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 }, { x: 1, y: 1, z: 0 }],
+      triangles: [[0, 1, 2], [0, 1, 2]], triAttrs: [{ color: null, alpha: 1 }, { color: null, alpha: 1 }],
+      mtls: [{ name: 'tex', color: null, mapName: 'x.png', tex: { isTexture: true } }],
+      matOf: [0, 0],
+      triUvs: [[{ u: 0.1, v: 0.2 }, { u: 0.3, v: 0.4 }, { u: 0.5, v: 0.6 }], [null, null, null]],
+    };
+    const mesh = CF.foreignObject(soup).children[0];
+    const uv = mesh.geometry.attributes.uv;
+    near(uv.getX(0), 0.1, 1e-6, 'explicit tri keeps its u'); // float32 storage
+    near(uv.getY(2), 0.6, 1e-6, 'explicit tri keeps its v');
+    near(uv.getX(3), 0, 1e-9, 'projected tri starts at bbox min');
+    near(uv.getX(5), 1, 1e-9, 'projected tri reaches bbox max');
+  });
+
+  test('texFromBytes: null where the runtime cannot build images (headless)', () => {
+    ok(OL.texFromBytes(new Uint8Array([1, 2, 3])) === null, 'vm has no Image → null, no throw');
+  });
+
+  test('zipFind: exact path, then basename fallback', () => {
+    const files = new Map([['model.obj', 'o'], ['textures/wood.png', 'w'], ['readme.txt', 'r']]);
+    eq(Buffer.from(OL.zipFind(files, 'textures/wood.png')).toString(), 'w', 'exact path');
+    eq(Buffer.from(OL.zipFind(files, './wood.png')).toString(), 'w', './ prefix stripped');
+    eq(Buffer.from(OL.zipFind(files, 'WOOD.PNG')).toString(), 'w', 'case-insensitive basename match');
+    ok(OL.zipFind(files, 'missing.png') === null, 'absent file → null');
+    ok(OL.zipFind(files, null) === null, 'no name → null');
   });
 
   test('transformSoup: fit to declared cm, meters, Z-up, grounded, centered', () => {

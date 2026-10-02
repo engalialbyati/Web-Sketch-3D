@@ -65,9 +65,74 @@
     return { positions, triangles, triAttrs };
   }
 
-  /** A dense component as a foreign Three.js group (vertex-colored mesh). */
+  /** A dense component as a foreign Three.js group. Models whose MTL
+   *  carries texture images (soup.mtls[].tex, decoded by the library
+   *  loader) build ONE MESH PER MATERIAL with real UVs — the catalogue
+   *  model's actual look. Everything else (bundled components, the kernel
+   *  path, textureless OBJs) stays the flat vertex-colored mesh. */
   function foreignObject(soup) {
     const P = soup.positions;
+    const mtls = soup.mtls || null;
+    const hasTex = !!(mtls && mtls.some(m => m && m.tex));
+    const grp = new THREE.Group();
+    if (hasTex) {
+      const AX = ['x', 'y', 'z'];
+      const groups = new Map(); // material index → its triangle indices
+      soup.triangles.forEach((t, i) => {
+        const mi = soup.matOf ? soup.matOf[i] : -1;
+        if (!groups.has(mi)) groups.set(mi, []);
+        groups.get(mi).push(i);
+      });
+      for (const [mi, tris] of groups) {
+        const m = (mi >= 0 && mtls[mi]) ? mtls[mi] : null;
+        const tex = m && m.tex;
+        // the group's bbox anchors the planar projection below
+        const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+        for (const ti of tris) for (const vi of soup.triangles[ti]) {
+          const p = P[vi];
+          for (let a = 0; a < 3; a++) { if (p[AX[a]] < lo[a]) lo[a] = p[AX[a]]; if (p[AX[a]] > hi[a]) hi[a] = p[AX[a]]; }
+        }
+        const pos = new Float32Array(tris.length * 9), uv = new Float32Array(tris.length * 6);
+        tris.forEach((ti, k) => {
+          const t = soup.triangles[ti];
+          const corners = soup.triUvs && soup.triUvs[ti];
+          let qs;
+          if (corners && corners[0] && corners[1] && corners[2]) {
+            qs = corners; // explicit v/vt UVs
+          } else {
+            // scopia/Sweet-Home exports carry vt lines but no face references
+            // them — planar-project this triangle into the group bbox so the
+            // texture still drapes the surface (SketchUp-style)
+            const A = P[t[0]], B = P[t[1]], C = P[t[2]];
+            const ux = B.x - A.x, uy = B.y - A.y, uz = B.z - A.z;
+            const vx = C.x - A.x, vy = C.y - A.y, vz = C.z - A.z;
+            const nx = Math.abs(uy * vz - uz * vy), ny = Math.abs(uz * vx - ux * vz), nz = Math.abs(ux * vy - uy * vx);
+            let ia, ib; // the two axes the face is NOT facing along
+            if (nx >= ny && nx >= nz) { ia = 1; ib = 2; }
+            else if (ny >= nz) { ia = 0; ib = 2; }
+            else { ia = 0; ib = 1; }
+            const ea = Math.max(1e-6, hi[ia] - lo[ia]), eb = Math.max(1e-6, hi[ib] - lo[ib]);
+            qs = [A, B, C].map(p => ({ u: (p[AX[ia]] - lo[ia]) / ea, v: (p[AX[ib]] - lo[ib]) / eb }));
+          }
+          for (let c = 0; c < 3; c++) {
+            const p = P[t[c]];
+            pos[k * 9 + c * 3] = p.x; pos[k * 9 + c * 3 + 1] = p.y; pos[k * 9 + c * 3 + 2] = p.z;
+            uv[k * 6 + c * 2] = qs[c].u; uv[k * 6 + c * 2 + 1] = qs[c].v;
+          }
+        });
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        g.computeVertexNormals();
+        // textured: white base (the image carries the look) — else the Kd
+        // flat color, grey when the MTL stated neither
+        grp.add(new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+          color: tex ? 0xffffff : ((m && m.color) || '#b9bcc0'),
+          map: tex || null, side: THREE.DoubleSide,
+        })));
+      }
+      return grp;
+    }
     const pos = new Float32Array(soup.triangles.length * 9);
     const col = new Float32Array(soup.triangles.length * 9);
     const cv = new THREE.Color();
@@ -85,7 +150,6 @@
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.computeVertexNormals();
     const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
-    const grp = new THREE.Group();
     grp.add(mesh);
     return grp;
   }

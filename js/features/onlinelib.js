@@ -44,47 +44,84 @@
   }
 
   // ------------------------------------------------------------- pure: MTL/OBJ
-  /** newmtl name → Kd [r,g,b] (null when the material states no diffuse). */
+  /** newmtl name → { kd: [r,g,b] | null, map: 'texture file' | null }. The
+   *  diffuse color AND the texture image the material paints with — map_Kd
+   *  options (-s / -o / -bm …) are skipped, the file name is the last
+   *  token, quotes and windows slashes normalized. */
   function parseMTL(text) {
     const out = {};
     let cur = null;
+    const clean = n => String(n || '').replace(/^"|"$/g, '').replace(/\\/g, '/').replace(/^\.\//, '');
     for (const line of String(text).split(/\r?\n/)) {
       const t = line.trim().split(/\s+/);
-      if (t[0] === 'newmtl' && t[1]) { cur = t[1]; if (!(cur in out)) out[cur] = null; }
+      if (t[0] === 'newmtl' && t[1]) { cur = t[1]; if (!(cur in out)) out[cur] = { kd: null, map: null }; }
       else if (t[0] === 'Kd' && cur && t.length >= 4) {
         const kd = [parseFloat(t[1]), parseFloat(t[2]), parseFloat(t[3])];
-        if (kd.every(isFinite)) out[cur] = kd;
+        if (kd.every(isFinite) && out[cur]) out[cur].kd = kd;
       }
+      else if (t[0] === 'map_Kd' && cur && t.length >= 2 && out[cur]) out[cur].map = clean(t[t.length - 1]);
     }
     return out;
   }
 
   /** Wavefront OBJ → welded triangle soup (our standard shape). Handles
-   *  v, f with v / v/vt / v/vt/vn / //vn tokens and negative indices,
+   *  v / vt, f with v / v/vt / v/vt/vn / //vn tokens and negative indices,
    *  fan-triangulates n-gons, carries the active usemtl's Kd per triangle,
-   *  and keeps ONLY face-referenced vertices — catalogue files carry strays
-   *  no face uses, and sizing to those lands the model at half scale. */
+   *  and keeps ONLY face-used vertices — catalogue files carry strays
+   *  no face uses, and sizing to those lands the model at half scale.
+   *  Real materials ride along for the FOREIGN path: per-corner UVs
+   *  (triUvs), a per-triangle material index (matOf) and the material
+   *  list (mtls: name + flat color + texture file). The kernel fusion
+   *  path ignores them and fuses flat colors exactly as before. */
   function parseOBJ(text, mtl) {
-    const v = [], tris = [], attrs = [];
-    let kd = null;
+    const v = [], vt = [], tris = [], attrs = [], triUvs = [], matOf = [], mtls = [];
+    const mtlIdx = new Map();
+    const kdOf = e => Array.isArray(e) ? e : (e && e.kd) || null; // legacy array shape accepted
+    const mapOf = e => (e && !Array.isArray(e) && e.map) || null;
+    const kdHex = c => c ? '#' + c.map(x => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, '0')).join('') : null;
+    let kd = null, mi = -1;
     for (const line of String(text).split(/\r?\n/)) {
       const t = line.trim().split(/\s+/);
       if (t[0] === 'v' && t.length >= 4) {
         const p = [+t[1], +t[2], +t[3]];
         if (p.every(isFinite)) v.push(p);
+      } else if (t[0] === 'vt' && t.length >= 3) {
+        const q = [parseFloat(t[1]), parseFloat(t[2])];
+        if (q.every(isFinite)) vt.push(q);
       } else if (t[0] === 'usemtl') {
-        kd = (mtl && t[1] in mtl) ? mtl[t[1]] : null;
+        const name = t[1] || '';
+        const e = mtl ? mtl[name] : null;
+        if (!mtlIdx.has(name)) {
+          mtlIdx.set(name, mtls.length);
+          mtls.push({ name, color: kdHex(kdOf(e)), mapName: mapOf(e) });
+        }
+        mi = mtlIdx.get(name);
+        kd = kdOf(e);
       } else if (t[0] === 'f' && t.length >= 4) {
-        const idx = [];
+        const idx = [], uvs = [];
         for (let k = 1; k < t.length; k++) {
-          let raw = parseInt(t[k].split('/')[0], 10);
+          const parts = t[k].split('/');
+          let raw = parseInt(parts[0], 10);
           if (!isFinite(raw)) continue;
           if (raw < 0) raw = v.length + raw + 1; // OBJ negative = from the end
-          if (raw >= 1 && raw <= v.length) idx.push(raw - 1);
+          let q = null;
+          if (parts.length > 1 && parts[1]) {
+            let r2 = parseInt(parts[1], 10);
+            if (isFinite(r2)) {
+              if (r2 < 0) r2 = vt.length + r2 + 1;
+              if (r2 >= 1 && r2 <= vt.length) q = { u: vt[r2 - 1][0], v: vt[r2 - 1][1] };
+            }
+          }
+          if (raw >= 1 && raw <= v.length) { idx.push(raw - 1); uvs.push(q); }
         }
         for (let i = 1; i + 1 < idx.length; i++) { // fan; skips degenerates
           const [a, b, c] = [idx[0], idx[i], idx[i + 1]];
-          if (a !== b && b !== c && a !== c) { tris.push([a, b, c]); attrs.push(kd); }
+          if (a !== b && b !== c && a !== c) {
+            tris.push([a, b, c]);
+            attrs.push(kd);
+            triUvs.push([uvs[0], uvs[i], uvs[i + 1]]);
+            matOf.push(mi);
+          }
         }
       }
     }
@@ -99,8 +136,10 @@
       }
       tri[i] = m;
     }
-    const hex = c => c ? '#' + c.map(x => Math.round(Math.min(1, Math.max(0, x)) * 255).toString(16).padStart(2, '0')).join('') : null;
-    return { positions, triangles: tris, triAttrs: attrs.map(c => ({ color: hex(c), alpha: 1 })) };
+    return {
+      positions, triangles: tris, triAttrs: attrs.map(c => ({ color: kdHex(c), alpha: 1 })),
+      mtls, matOf, triUvs,
+    };
   }
 
   // ------------------------------------------------- pure: catalogue transform
@@ -196,6 +235,37 @@
     return (d && d.modelos) || [];
   }
 
+  // ------------------------------------------- pure-ish: MTL texture decoding
+  const normName = n => String(n || '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  /** Find an MTL-referenced image inside the zip: exact path first, then
+   *  basename match (MTL files and images often sit in different folders). */
+  function zipFind(files, name) {
+    if (!name) return null;
+    const want = normName(name);
+    for (const [k, v] of files) if (normName(k) === want) return v;
+    const base = want.replace(/^.*\//, '');
+    for (const [k, v] of files) if (normName(k).replace(/^.*\//, '') === base) return v;
+    return null;
+  }
+  /** Image bytes → THREE texture (async decode; the mesh sizes from geometry,
+   *  so the model can appear before the pixels land). Null where the runtime
+   *  can't build images — headless tests, or the zip never carried the file. */
+  function texFromBytes(bytes) {
+    try {
+      const T = (typeof window !== 'undefined' && window.THREE) || (typeof THREE !== 'undefined' ? THREE : null);
+      if (!T || typeof Image === 'undefined' || typeof Blob === 'undefined'
+        || typeof URL === 'undefined' || !URL.createObjectURL) return null;
+      const img = new Image();
+      const tex = new T.Texture();
+      img.onload = () => { tex.image = img; tex.needsUpdate = true; };
+      img.src = URL.createObjectURL(new Blob([bytes])); // browsers sniff the real format
+      if (T.SRGBColorSpace != null) tex.colorSpace = T.SRGBColorSpace;
+      else if (T.sRGBEncoding != null) tex.encoding = T.sRGBEncoding; // older three
+      tex.wrapS = tex.wrapT = T.RepeatWrapping;
+      return tex;
+    } catch (e) { return null; }
+  }
+
   async function fetchModelSoup(entry) {
     const r = await fetch(BRIDGE + '/api/library/model?id=' + encodeURIComponent(entry.id));
     if (!r.ok) throw new Error('bridge HTTP ' + r.status);
@@ -206,7 +276,12 @@
     const dec = new TextDecoder();
     const mtlName = objName.replace(/\.obj$/i, '.mtl');
     const mtl = files.has(mtlName) ? parseMTL(dec.decode(files.get(mtlName))) : {};
-    return transformSoup(entry, parseOBJ(dec.decode(files.get(objName)), mtl));
+    const soup = transformSoup(entry, parseOBJ(dec.decode(files.get(objName)), mtl));
+    // real materials: decode every MTL texture image out of the same zip —
+    // foreignObject turns these into one textured mesh per material
+    for (const m of (soup.mtls || []))
+      if (m.mapName) m.tex = texFromBytes(zipFind(files, m.mapName));
+    return soup;
   }
 
   /** Download + place one catalogue entry at (x, y). Returns placeSoup's
@@ -353,6 +428,6 @@
     render(true);
   }
 
-  window.OnlineLib = { USABLE, CAT_EN, catEn, DW_CATEGORY, hostedSpec, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, fetchIndex, fetchModelSoup, placeEntry, section, wire };
+  window.OnlineLib = { USABLE, CAT_EN, catEn, DW_CATEGORY, hostedSpec, parseMTL, parseOBJ, transformSoup, filterUsable, zipRead, zipFind, texFromBytes, fetchIndex, fetchModelSoup, placeEntry, section, wire };
   if (typeof window.Engine === 'undefined') return;
 })();
