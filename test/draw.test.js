@@ -7,7 +7,7 @@ module.exports = h => {
     // single audited loader (harness)
     const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js']);
     return { G: L.window.G, DG: L.window.DrawGeom, SV: L.window.SketchValidator,
-             Model: L.window.Model, applyFillet: L.window.applyFilletToModel };
+             Model: L.window.Model, applyFillet: L.window.applyFilletToModel, VAP: L.window.verticalAxisPlane };
   }
   const extra = loadModelExtra(); const DG = extra.DG; const SketchValidator = extra.SV;
   const { G: Gi } = { G };
@@ -282,5 +282,25 @@ module.exports = h => {
     near(d(30), 30, 1e-9, '30 degrees off');
     near(d(90), 0, 1e-9, 'on the other axis');
     near(d(100), 10, 1e-9, '10 off the y axis');
+  });
+
+  test('verticalAxisPlane: vertical sketches snap parallel to X or Y, never the camera diagonal', () => {
+    const VAP = extra.VAP;
+    ok(VAP, 'helper exported');
+    const mk = (x, y) => ({ view: { activeCamera: () => ({ position: { x, y, z: 5 } }) } });
+    const a = G2.v(3, 4, 1);
+    // a 3/4 (diagonal) camera MUST still give an axis-parallel plane
+    const p1 = VAP(mk(10, 10), a);
+    ok(Math.abs(Math.abs(p1.n.x) - 1) < 1e-9 || Math.abs(Math.abs(p1.n.y) - 1) < 1e-9, 'diagonal camera → axis normal');
+    ok(Math.abs(p1.n.x) < 1e-9 ? Math.abs(Math.abs(p1.n.y) - 1) < 1e-9 : Math.abs(Math.abs(p1.n.x) - 1) < 1e-9, 'normal is a clean ±X/±Y');
+    near(G2.dot(p1.n, a), p1.d, 1e-9, 'plane passes through the anchor');
+    // cameras clearly on one side pick that side's axis (sign faces the camera)
+    const py = VAP(mk(0, 15), a);
+    near(py.n.y, 1, 1e-9, 'camera at +Y → normal +Y');
+    const nx = VAP(mk(-20, 3), a);
+    near(nx.n.x, -1, 1e-9, 'camera at -X → normal -X');
+    // camera straight above (degenerate horizontal ref) still yields a sane axis
+    const pz = VAP(mk(0.0001, 0, 9), a);
+    ok(Math.abs(Math.abs(pz.n.x) - 1) < 1e-9 || Math.abs(Math.abs(pz.n.y) - 1) < 1e-9, 'top-down camera → axis normal');
   });
 };

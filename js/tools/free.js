@@ -954,17 +954,12 @@ class RectTool extends Tool {
       this._vert = false;
       app.setStatus('Rectangle plane: ground/face');
     } else {
-      // camera-facing horizontal normal through p1
-      const dir = app.view.activeCamera().getWorldDirection
-        ? app.view.activeCamera().getWorldDirection(new THREE.Vector3())
-        : G.v(0, -1, 0);
-      let n = G.v(dir.x, dir.y, 0);
-      if (G.len(n) < 1e-6) n = G.v(0, 1, 0);
-      n = G.norm(n);
+      // vertical, but AXIS-parallel: the rectangle stands parallel to X or
+      // Y, never on the camera's diagonal
       this._captured = this._captured || this.plane;
-      this.plane = { n, d: G.dot(n, this.p1) };
+      this.plane = verticalAxisPlane(app, this.p1);
       this._vert = true;
-      app.setStatus('Rectangle plane: vertical (facing camera)');
+      app.setStatus('Rectangle plane: vertical, parallel to ' + (Math.abs(this.plane.n.x) > 0.5 ? 'Y' : 'X'));
     }
   }
   _planePick(ev) {
@@ -1116,14 +1111,11 @@ class CircleTool extends Tool {
       this._vert = false;
       app.setStatus('Circle plane: ground');
     } else {
-      const cam = app.view.activeCamera();
-      const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.center);
-      toCam.z = 0;
-      const u = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
-      const n = G.cross(u, G.v(0, 0, 1));
-      this.plane = { n, d: G.dot(n, this.center) };
+      // vertical, but AXIS-parallel: the circle stands parallel to X or Y,
+      // never on the camera's diagonal
+      this.plane = verticalAxisPlane(app, this.center);
       this._vert = true;
-      app.setStatus('Circle plane: VERTICAL (V again for ground)');
+      app.setStatus('Circle plane: VERTICAL, parallel to ' + (Math.abs(this.plane.n.x) > 0.5 ? 'Y' : 'X') + ' (V again for ground)');
     }
   }
   _tess(p2) {
@@ -1262,15 +1254,19 @@ class ArcTool extends Tool {
       }
     } else {
       // vertical plane THROUGH the chord: n = (p2 − p1) × Z contains both
-      // points by construction; degenerate for a vertical chord, where any
-      // vertical plane works — pick the camera-facing one through the chord
+      // points by construction. Degenerate for a VERTICAL chord (any
+      // vertical plane works) — snap that one to the nearest axis so the
+      // arc stands parallel to X or Y, not on the camera's diagonal
       let n = chord ? G.cross(chord, G.v(0, 0, 1)) : null;
       if (!n || G.isZero(n)) {
-        const cam = app.view.activeCamera();
-        const toCam = G.sub(G.v(cam.position.x, cam.position.y, cam.position.z), this.s);
-        toCam.z = 0;
-        n = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
-      } else n = G.norm(n);
+        this.plane = verticalAxisPlane(app, this.s);
+        this._vert = true;
+        if (this.bulge) this.bulge = projectToPlane(this.bulge, this.plane);
+        this._arcData = null;
+        app.setStatus('Arc plane: VERTICAL, parallel to ' + (Math.abs(this.plane.n.x) > 0.5 ? 'Y' : 'X') + ' (V again for ground)');
+        return;
+      }
+      n = G.norm(n);
       this.plane = { n, d: G.dot(n, this.s) };
       this._vert = true;
       if (this.bulge) this.bulge = projectToPlane(this.bulge, this.plane);

@@ -56,6 +56,29 @@ function projectToPlane(p, plane) {
   const d = G.dot(plane.n, p) - plane.d;
   return G.sub(p, G.mul(plane.n, d));
 }
+// The VERTICAL sketch plane, SNAPPED to the nearest world axis: shapes drawn
+// in Z (circles, rectangles…) stand parallel to X or Y, never on the
+// camera's diagonal. The axis whose direction best faces the camera wins, so
+// the snapped plane stays as visible as an axis-aligned plane can be from
+// the current view. anchor: a point the plane must pass through.
+function verticalAxisPlane(app, anchor) {
+  let ref = G.v(0, -1, 0);
+  try {
+    const cam = app.view.activeCamera();
+    if (cam.getWorldDirection) {
+      const dir = cam.getWorldDirection(new THREE.Vector3());
+      ref = G.v(-dir.x, -dir.y, 0); // toward the camera (view dir points away)
+    } else {
+      const p = cam.position;
+      ref = G.v(p.x - anchor.x, p.y - anchor.y, 0);
+    }
+  } catch (e) { /* keep the fallback */ }
+  if (G.len(ref) < 1e-6) ref = G.v(0, 1, 0);
+  const n = Math.abs(ref.x) >= Math.abs(ref.y)
+    ? G.v(Math.sign(ref.x) || 1, 0, 0)
+    : G.v(0, Math.sign(ref.y) || 1, 0);
+  return { n, d: G.dot(n, anchor) };
+}
 function pointInLoop(p, pts, u, v) {
   const q = pts.map(x => G.to2D(x, pts[0], u, v));
   const P = G.to2D(p, pts[0], u, v);
@@ -96,4 +119,5 @@ window.showCursorCoords = showCursorCoords;
 window.parseLen = parseLen;
 window.parseAngle = parseAngle;
 window.projectToPlane = projectToPlane;
+window.verticalAxisPlane = verticalAxisPlane;
 window.pointInLoop = pointInLoop;
