@@ -137,14 +137,23 @@
     if (!f) return [fid];
     const eid = f.userData && f.userData.bimEntityId;
     if (eid) {
-      // hosted openings (doors, windows, wall/floor cuts) NEVER take
-      // material from a drop — neither their reveal/lining faces nor their
-      // frame/leaf: the model keeps its own look and the opening stays
-      // unpainted. Explicit face selection + Paint sel. still works.
       const ent = entities.find(e => e && e.id === eid);
       const hosted = ent && ent.params &&
         (ent.params.hostWallId || ent.params.hostKind === 'face' || ent.params.hostFloorId);
-      if (hosted || f.userData.role === 'lining') return [];
+      const role = f.userData.role;
+      // DROPPING ON A DOOR/WINDOW ITSELF paints that element: its frame and
+      // leaf faces are the door you see — a deliberate drop on them paints
+      // the element (its lining/reveal faces stay neutral with the wall's
+      // opening). Lining faces never take material: a wall drop near the
+      // opening hits the reveal first, and that must keep painting NOTHING.
+      if (hosted && (ent.type === 'door' || ent.type === 'window')
+        && (role === 'frame' || role === 'leaf')) {
+        return ent.faces.filter(id => {
+          const ff = m.faces.get(id);
+          return ff && ff.userData && ff.userData.role !== 'lining';
+        });
+      }
+      if (hosted || role === 'lining') return [];
       // LIVE stamp query — the entity's own face list goes stale the
       // moment a hosted cut stamps its reveal faces to the wall without
       // extending ent.faces; the model is the truth. The opening is
@@ -181,7 +190,7 @@
     if (!fid) { app.toast('Drop the material ON a face (wall, floor, roof…)', true); return false; }
     const targets = paintTargets(m, fid, app.bim ? app.bim.entities : []);
     if (!targets.length) {
-      app.toast('Doors, windows and openings keep their own look — drop the material on a wall, floor or roof');
+      app.toast('The opening itself stays unpainted — drop on a wall to paint the wall, or on a door/window LEAF to paint it');
       return false;
     }
     app.run('paint material', mm => {

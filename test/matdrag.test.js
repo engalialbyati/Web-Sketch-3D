@@ -101,40 +101,33 @@ module.exports = async h => {
     eq(t2.length, 0, 'reveal drop resolves to NOTHING');
   });
 
-  test('paintTargets: native door entities never take drop material', () => {
+  test('paintTargets: wall drops never reach the door; door drops paint the door', () => {
     const mk = at => m.addFaceFromRings([G.v(at, at, 0), G.v(at + 0.3, at, 0), G.v(at + 0.3, at + 0.3, 0), G.v(at, at + 0.3, 0)]).id;
     const lining = mk(20), frame = mk(21), leaf = mk(22);
     bim.create('door', { hostWallId: wallEnt.id, width: 1, height: 2.1, sillHeight: 0 }, { [lining]: 'lining', [frame]: 'frame', [leaf]: 'leaf' }, []);
-    for (const fid of [lining, frame, leaf]) {
-      const t = MD.paintTargets(m, fid, bim.entities);
-      eq(t.length, 0, 'hosted door face ' + fid + ' takes no material');
-    }
-    // the wall itself still paints (and never reaches the door's faces)
+    // the wall paints — and never reaches ANY door face
     const wallFid = [...m.faces.keys()].find(x => {
       const ff = m.faces.get(x);
-      return ff.userData && ff.userData.bimEntityId === wallEnt.id;
+      return ff.userData && ff.userData.bimEntityId === wallEnt.id && ff.userData.role !== 'lining';
     });
     const t = MD.paintTargets(m, wallFid, bim.entities);
-    ok(t.length >= 1 && !t.includes(lining) && !t.includes(frame) && !t.includes(leaf), 'wall paints, door untouched');
+    ok(t.length >= 1, 'wall paints');
+    ok(!t.includes(lining) && !t.includes(frame) && !t.includes(leaf), 'wall drop never reaches the door');
+    // a deliberate drop ON the door (its frame or leaf) paints the DOOR:
+    // its own faces, minus the neutral reveal lining
+    for (const fid of [frame, leaf]) {
+      const d = MD.paintTargets(m, fid, bim.entities);
+      ok(d.includes(frame) && d.includes(leaf), 'door drop paints frame + leaf');
+      ok(!d.includes(lining), 'door drop leaves the reveal neutral');
+      ok(!d.some(x => { const ff = m.faces.get(x); return ff.userData && ff.userData.bimEntityId === wallEnt.id; }), 'door drop never reaches the wall');
+    }
+    // dropping on the OPENING itself (the reveal) paints nothing
+    eq(MD.paintTargets(m, lining, bim.entities).length, 0, 'reveal takes no material');
   });
 
   test('deleting the hosted element removes its model instance', () => {
     ok(bim.detach(doorEnt.id), 'element detached');
     eq(removedInstanceId, 'asset_1', 'the linked asset instance went with it');
-  });
-
-  test('paintTargets: native door linings are skipped too', () => {
-    const wallFid = [...m.faces.keys()].find(x => {
-      const ff = m.faces.get(x);
-      return ff.userData && ff.userData.bimEntityId === wallEnt.id && ff.userData.role !== 'lining';
-    });
-    const mk = at => m.addFaceFromRings([G.v(at, at, 0), G.v(at + 0.3, at, 0), G.v(at + 0.3, at + 0.3, 0), G.v(at, at + 0.3, 0)]).id;
-    const lining = mk(20), frame = mk(21), leaf = mk(22);
-    bim.create('door', { hostWallId: wallEnt.id, width: 1, height: 2.1, sillHeight: 0 }, { [lining]: 'lining', [frame]: 'frame', [leaf]: 'leaf' }, []);
-    const t = MD.paintTargets(m, wallFid, bim.entities);
-    ok(!t.includes(lining), 'native lining (reveal) NOT painted with the wall');
-    ok(!t.includes(frame), 'door frame keeps its own look');
-    ok(!t.includes(leaf), 'door leaf keeps its own look');
   });
 
   test('paintTargets: an asset island paints as one unit, a free face alone', () => {
