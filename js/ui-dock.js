@@ -14,9 +14,11 @@
 // column width, and panel height splits in localStorage.
 // ---------------------------------------------------------------------------
 (function () {
-  const LS_KEY  = 'websketch3d.dock';
-  const LS_COL  = 'websketch3d.dock.col'; // column widths
-  const LS_SPL  = 'websketch3d.dock.spl'; // splitter sizes per column side
+  // v2: the default layout changed (all palettes left, Entity Info right) —
+  // bumping the key applies it once over whatever was saved under v1
+  const LS_KEY  = 'websketch3d.dock2';
+  const LS_COL  = 'websketch3d.dock2.col'; // column widths
+  const LS_SPL  = 'websketch3d.dock2.spl'; // splitter sizes per column side
   const EDGE    = 48;        // px from viewport left edge to snap-left
   const COL_MIN = 200;       // minimum column width (px)
   const COL_DEF = 280;       // default column width (px)

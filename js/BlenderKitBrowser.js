@@ -309,7 +309,7 @@
     renderTags();
 
     dockApi = window.DockPanels ? DockPanels.make(panel, {
-      key: 'bkbrowser', title: 'BlenderKit Assets', side: 'right',
+      key: 'bkbrowser', title: 'BlenderKit Assets', side: 'left',
       onVisibility: () => { if (!results.length) search(); },
     }) : null;
     inputEl.addEventListener('input', () => { state.query = inputEl.value; saveState(); scheduleSearch(); });

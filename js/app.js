@@ -5580,7 +5580,7 @@ class App {
     document.getElementById('viewport').appendChild(p);
     p.querySelector('.dk-body').appendChild(node); // adopt: same id, same writers
     if (card && !card.querySelector('[id]')) card.remove(); // only the header is left
-    window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Entity Info', side: 'left' });
+    window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Entity Info', side: 'right' });
   }
   _initSwatches() {
     const wrap = document.getElementById('swatches');

@@ -57,7 +57,7 @@
     treeEl = panel.querySelector('#lay-tree');
     curSel = panel.querySelector('#lay-cur');
     dockApi = window.DockPanels ? DockPanels.make(panel, {
-      key: 'layerpanel', title: 'Layers', side: 'right', onVisibility: () => refresh(),
+      key: 'layerpanel', title: 'Layers', side: 'left', onVisibility: () => refresh(),
     }) : null;
 
     // native color picker hidden inside the panel — swatches proxy to it.
