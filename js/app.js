@@ -2794,6 +2794,7 @@ class App {
     this._buildToolbar();
     this._initMenus();
     this._initSwatches();
+    this._initEntityInfoPanel();
     this._initPointer();
     this._initKeys();
     this._initDialogs();
@@ -5478,6 +5479,31 @@ class App {
   }
 
   // ------------------------------------------------------------------ materials
+  // Entity Info becomes a DOCKABLE palette like the other panels: the
+  // sidebar's #entityinfo node is ADOPTED into the new panel (same element
+  // id — every existing writer keeps working), the emptied sidebar card
+  // goes away. Chrome and layout come from ui-dock.js.
+  _initEntityInfoPanel() {
+    if (!window.DockPanels) return;
+    const node = document.getElementById('entityinfo');
+    if (!node) return;
+    const card = node.closest('.panel'); // the sidebar card being emptied
+    const p = document.createElement('div');
+    p.id = 'entityinfopanel';
+    p.innerHTML = `
+      <div class="dk-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Entity Info</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide">✕</button>
+      </div>
+      <div class="dk-body"></div>`;
+    document.getElementById('viewport').appendChild(p);
+    p.querySelector('.dk-body').appendChild(node); // adopt: same id, same writers
+    if (card && !card.querySelector('[id]')) card.remove(); // only the header is left
+    window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Entity Info', side: 'left' });
+  }
   _initSwatches() {
     const wrap = document.getElementById('swatches');
     wrap.innerHTML = ''; // full rebuild: registry materials come and go

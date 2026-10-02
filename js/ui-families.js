@@ -26,15 +26,11 @@
   const LS_KEY = 'ws3d-fampanel';
 
   const state = {
-    visible: true,
-    dock: 'left',        // left keeps clear of the right-side palette stack
-    x: 24, y: 64,
-    collapsed: false,
     group: 'all',        // active catalog filter
     search: '',
   };
 
-  let panel = null, gridEl = null, searchEl = null;
+  let panel = null, gridEl = null, searchEl = null, dockApi = null;
 
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const CF = () => window.ColumnFamilies;
@@ -43,8 +39,7 @@
   function saveState() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
-        visible: state.visible, dock: state.dock, x: state.x, y: state.y,
-        collapsed: state.collapsed, group: state.group,
+        group: state.group,
       }));
     } catch (e) { }
   }
@@ -52,8 +47,6 @@
     try {
       const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (s) Object.assign(state, {
-        visible: s.visible !== false, dock: s.dock || 'left',
-        x: s.x || 24, y: s.y || 64, collapsed: !!s.collapsed,
         group: s.group || 'all',
       });
     } catch (e) { }
@@ -215,11 +208,12 @@
     panel = document.createElement('div');
     panel.id = 'fampanel';
     panel.innerHTML = `
-      <div id="fam-head" title="Drag to float · drop at a screen edge to dock · double-click to switch sides">
-        <span class="elb-grip">⋮⋮</span>
-        <span class="elb-title">Families</span>
-        <button class="elb-btn" id="fam-min" title="Collapse / expand">▾</button>
-        <button class="elb-btn" id="fam-x" title="Hide (reopen from the toolbar)">✕</button>
+      <div class="dk-head" id="fam-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Families</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide (reopen from the toolbar)">✕</button>
       </div>
       <div id="fam-body">
         <div class="elb-search">
@@ -231,13 +225,9 @@
     $('viewport').appendChild(panel);
     gridEl = panel.querySelector('#fam-grid');
     searchEl = panel.querySelector('#fam-search');
-
-    panel.querySelector('#fam-x').addEventListener('click', () => setVisibility(false));
-    panel.querySelector('#fam-min').addEventListener('click', () => {
-      state.collapsed = !state.collapsed;
-      applyLayout();
-      saveState();
-    });
+    dockApi = window.DockPanels ? DockPanels.make(panel, {
+      key: 'fampanel', title: 'Families', side: 'left', onVisibility: () => renderGrid(),
+    }) : null;
 
     // chips: All + the groups
     const chips = panel.querySelector('#fam-chips');
@@ -272,120 +262,25 @@
       if (fam) familyDialog(fam);
     });
 
-    initPanelDrag();
-  }
-
-  // The Element Browser defaults to the left edge too; two docked-left
-  // panels would perfectly overlap (same z-index — the later one wins and
-  // the other becomes unreachable). When the browser visibly holds an edge,
-  // tuck this palette beside it (mirrors the Layers/BlenderKit dance).
-  function deconflictDock() {
-    if (!panel) return;
-    const elb = $('elbrowser');
-    const side = state.dock;
-    const crowded = !!elb && !elb.classList.contains('hidden') &&
-      elb.classList.contains('docked-' + side) && (side === 'left' || side === 'right');
-    panel.classList.toggle('beside-elb', crowded);
-  }
-  function watchElbDock() {
-    const elb = $('elbrowser');
-    if (!elb) { setTimeout(watchElbDock, 400); return; } // palette builds later
-    deconflictDock();
-    new MutationObserver(deconflictDock) // it may dock/undock/hide at any time
-      .observe(elb, { attributes: true, attributeFilter: ['class'] });
-  }
-
-  function applyLayout() {
-    deconflictDock();
-    panel.classList.toggle('collapsed', state.collapsed);
-    panel.classList.toggle('docked-left', state.dock === 'left');
-    panel.classList.toggle('docked-right', state.dock === 'right');
-    panel.classList.toggle('floating', state.dock === 'float');
-    if (state.dock === 'float') {
-      const vp = $('viewport').getBoundingClientRect();
-      state.x = Math.max(4, Math.min(state.x, vp.width - 80));
-      state.y = Math.max(4, Math.min(state.y, vp.height - 40));
-      panel.style.left = state.x + 'px';
-      panel.style.top = state.y + 'px';
-    } else {
-      panel.style.left = panel.style.top = '';
-    }
-    panel.querySelector('#fam-min').textContent = state.collapsed ? '▸' : '▾';
   }
 
   function setVisibility(on) {
-    state.visible = on != null ? on : !state.visible;
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) renderGrid();
-    saveState();
+    if (dockApi) dockApi.setVisible(on);
     if (window.app && app.refreshToolbar) app.refreshToolbar();
   }
 
-  // ------------------------------------------------------- panel drag / dock
-  function initPanelDrag() {
-    const head = panel.querySelector('#fam-head');
-    let drag = null;
-    head.addEventListener('pointerdown', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      if (ev.button !== 0) return;
-      const pr = panel.getBoundingClientRect();
-      const vp = $('viewport').getBoundingClientRect();
-      drag = { dx: ev.clientX - pr.left, dy: ev.clientY - pr.top, vw: vp.width, vh: vp.height, moved: false };
-      head.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
-    });
-    head.addEventListener('pointermove', ev => {
-      if (!drag) return;
-      drag.moved = true;
-      const vp = $('viewport').getBoundingClientRect();
-      let x = ev.clientX - vp.left - drag.dx;
-      let y = ev.clientY - vp.top - drag.dy;
-      x = Math.max(-40, Math.min(x, drag.vw - 60));
-      y = Math.max(0, Math.min(y, drag.vh - 36));
-      const nearL = ev.clientX - vp.left < 42, nearR = vp.right - ev.clientX < 42;
-      panel.classList.toggle('dock-preview-left', nearL);
-      panel.classList.toggle('dock-preview-right', nearR);
-      panel.classList.remove('docked-left', 'docked-right');
-      panel.classList.add('floating');
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      state.x = x; state.y = y; state.dock = 'float';
-    });
-    const end = ev => {
-      if (!drag) return;
-      panel.classList.remove('dock-preview-left', 'dock-preview-right');
-      const vp = $('viewport').getBoundingClientRect();
-      if (drag.moved) {
-        if (ev.clientX - vp.left < 42) state.dock = 'left';
-        else if (vp.right - ev.clientX < 42) state.dock = 'right';
-      }
-      drag = null;
-      applyLayout();
-      saveState();
-    };
-    head.addEventListener('pointerup', end);
-    head.addEventListener('pointercancel', end);
-    head.addEventListener('dblclick', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      state.dock = state.dock === 'left' ? 'right' : 'left';
-      applyLayout();
-      saveState();
-    });
-  }
+  // (panel drag/dock chrome lives in ui-dock.js — DockPanels.make wired it)
 
   // -------------------------------------------------------------------- boot
   function boot() {
     if (!window.app || !window.ColumnFamilies) return; // waits for the app shell
     loadState();
     build();
-    applyLayout();
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) renderGrid();
-    watchElbDock();
+    if (dockApi ? dockApi.isVisible() : true) renderGrid();
   }
 
   window.FamiliesPanel = {
-    get visible() { return state.visible; },
+    get visible() { return !!(dockApi && dockApi.isVisible()); },
     toggle(force) { if (panel) setVisibility(force); },
     refresh() { if (panel) { renderGrid(); } },
   };

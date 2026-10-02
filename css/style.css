@@ -981,40 +981,10 @@ body.mode-design #hint { color: #0a5c55; }
 /* ============ Element Browser palette (floating & dockable) ============ */
 /* #layerpanel (Layers palette, ui-layers.js) and #fampanel (Families palette,
    ui-families.js) share this chrome exactly. */
-#elbrowser, #layerpanel, #fampanel {
-  position: absolute;
-  width: 232px;
-  background: #fbfbfc;
-  border: 1px solid #c3c9cf;
-  border-radius: 7px;
-  box-shadow: 0 10px 28px rgba(20, 30, 45, .18);
-  z-index: 30;
-  display: flex; flex-direction: column;
-  max-height: calc(100% - 16px);
-  min-height: 0;
-}
-#elbrowser.docked-left, #layerpanel.docked-left, #fampanel.docked-left { left: 8px !important; top: 8px !important; bottom: 8px; border-radius: 7px; }
-#elbrowser.docked-right, #layerpanel.docked-right, #fampanel.docked-right { right: 8px !important; left: auto !important; top: 8px !important; bottom: 8px; }
-/* the BlenderKit palette owns the right edge by default — tuck beside it */
-#layerpanel.beside-bkb.docked-right { right: 288px !important; }
-#elbrowser.floating, #layerpanel.floating, #fampanel.floating { max-height: calc(100% - 24px); }
-#elbrowser.dock-preview-left, #layerpanel.dock-preview-left, #fampanel.dock-preview-left { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
-#elbrowser.dock-preview-right, #layerpanel.dock-preview-right, #fampanel.dock-preview-right { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
-#elbrowser.collapsed #elb-body, #layerpanel.collapsed #lay-body, #fampanel.collapsed #fam-body { display: none; }
-#elbrowser.collapsed, #layerpanel.collapsed, #fampanel.collapsed { bottom: auto; }
-#elbrowser.hidden, #layerpanel.hidden, #fampanel.hidden { display: none; }
+/* legacy palette base: chrome now comes from .dk-panel (ui-dock.js) */
+#elbrowser, #layerpanel, #fampanel { font: 12px/1.45 var(--font-sans); color: var(--text-main); }
 
-#elb-head, #lay-head, #fam-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 6px 6px 9px;
-  background: linear-gradient(#f4f5f8, #e9ebef);
-  border-bottom: 1px solid #d3d7db;
-  border-radius: 7px 7px 0 0;
-  cursor: move;
-  user-select: none;
-  touch-action: none;
-}
-#elbrowser.collapsed #elb-head, #layerpanel.collapsed #lay-head, #fampanel.collapsed #fam-head { border-bottom: none; border-radius: 7px; }
+/* heads are .dk-head now (ui-dock.js) */
 .elb-grip { color: #a6adb4; font-size: 11px; letter-spacing: -1px; }
 .elb-title { flex: 1; font-weight: 600; font-size: 12.5px; color: #3b4148; }
 .elb-btn {
@@ -1164,37 +1134,10 @@ body.mode-design #hint { color: #0a5c55; }
 /* ============ BlenderKit Assets palette (floating & dockable) ============ */
 /* Same chrome as the Element Browser (shares .elb-grip/.elb-title/.elb-btn);
    wider so the result grid fits two thumbnail columns. */
-#bkbrowser {
-  position: absolute;
-  width: 272px;
-  background: #fbfbfc;
-  border: 1px solid #c3c9cf;
-  border-radius: 7px;
-  box-shadow: 0 10px 28px rgba(20, 30, 45, .18);
-  z-index: 30;
-  display: flex; flex-direction: column;
-  max-height: calc(100% - 16px);
-  min-height: 0;
-}
-#bkbrowser.docked-left { left: 8px !important; top: 8px !important; bottom: 8px; }
-#bkbrowser.docked-right { right: 8px !important; left: auto !important; top: 8px !important; bottom: 8px; }
-#bkbrowser.floating { max-height: calc(100% - 24px); }
-#bkbrowser.dock-preview-left, #bkbrowser.dock-preview-right { border-color: #3e66c4; box-shadow: 0 0 0 3px rgba(62, 102, 196, .35); }
-#bkbrowser.collapsed #bkb-body { display: none; }
-#bkbrowser.collapsed { bottom: auto; }
-#bkbrowser.hidden { display: none; }
+/* legacy BlenderKit base: chrome now comes from .dk-panel (ui-dock.js) */
+#bkbrowser { font: 12px/1.45 var(--font-sans); color: var(--text-main); }
 
-#bkb-head {
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 6px 6px 9px;
-  background: linear-gradient(#f4f5f8, #e9ebef);
-  border-bottom: 1px solid #d3d7db;
-  border-radius: 7px 7px 0 0;
-  cursor: move;
-  user-select: none;
-  touch-action: none;
-}
-#bkbrowser.collapsed #bkb-head { border-bottom: none; border-radius: 7px; }
+/* #bkb-head is .dk-head now (ui-dock.js) */
 #bkb-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 
 .bkb-search { display: flex; gap: 5px; padding: 6px 8px 4px; }
@@ -1448,3 +1391,73 @@ body.mode-bim .fam-chip.on { background: #ddd5f1; border-color: #b7a8e0; color: 
    shows a copy cursor. */
 body.mat-drag #dialog-backdrop { pointer-events: none; }
 body.mat-drag #viewport, body.mat-drag #viewport canvas { cursor: copy; }
+
+/* ==========================================================================
+   Dockable panels — the shared chrome (ui-dock.js). Every palette wears
+   .dk-panel: Element Browser, Layers, Families, BlenderKit, Entity Info.
+   Docked panels stack in the .dk-col columns at the viewport edges;
+   floating ones sit anywhere with the same chrome.
+   ========================================================================== */
+.dk-col {
+  position: absolute; top: 0; bottom: 0; width: 268px; z-index: 30;
+  display: flex; flex-direction: column; gap: 6px; padding: 6px;
+  pointer-events: none; /* the column never blocks the canvas — panels do */
+}
+#dk-col-left { left: 0; }
+#dk-col-right { right: 0; }
+.dk-col > * { pointer-events: auto; }
+
+.dk-panel {
+  display: flex; flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  font: 12px/1.45 var(--font-sans);
+  color: var(--text-main);
+  overflow: hidden;
+  min-height: 0;
+}
+.dk-col > .dk-panel { flex: 0 1 auto; max-height: 60%; }
+.dk-col > .dk-panel:first-child:last-child { max-height: none; flex: 1 1 auto; }
+.dk-panel.dk-float { position: absolute; width: 268px; z-index: 40; }
+.dk-panel.hidden { display: none; }
+
+.dk-head {
+  touch-action: none;
+  display: flex; align-items: center; gap: 4px;
+  height: 32px; padding: 0 6px 0 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-light);
+  cursor: grab; user-select: none;
+  flex: 0 0 auto;
+}
+.dk-head:active { cursor: grabbing; }
+.dk-grip { color: var(--text-dim); font-size: 10px; letter-spacing: -1px; }
+.dk-title {
+  flex: 1; font-weight: 600; font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dk-btn {
+  width: 22px; height: 22px; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-muted);
+  font-size: 10px; line-height: 1; cursor: pointer; padding: 0;
+}
+.dk-btn:hover { background: var(--bg-hover); color: var(--text-main); }
+
+.dk-panel > .dk-body, .dk-panel > #elb-body, .dk-panel > #lay-body,
+.dk-panel > #fam-body, .dk-panel > #bkb-body {
+  overflow: auto; min-height: 0;
+  display: flex; flex-direction: column;
+}
+/* legacy panel bodies keep their inner layout; ensure they scroll */
+.dk-panel #elb-body, .dk-panel #lay-body, .dk-panel #fam-body, .dk-panel #bkb-body { max-height: min(56vh, 520px); }
+.dk-panel.collapsed > .dk-body, .dk-panel.collapsed > #elb-body,
+.dk-panel.collapsed > #lay-body, .dk-panel.collapsed > #fam-body,
+.dk-panel.collapsed > #bkb-body { display: none; }
+
+/* live dock preview while dragging near an edge */
+.dk-panel.dk-preview-left, .dk-panel.dk-preview-right {
+  outline: 2px dashed var(--border-focus);
+  outline-offset: 2px;
+}

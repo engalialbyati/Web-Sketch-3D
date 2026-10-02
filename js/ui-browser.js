@@ -23,23 +23,20 @@
   const LS_KEY = 'ws3d-elbrowser';
 
   const state = {
-    visible: true,
-    dock: 'left',        // 'left' | 'right' | 'float'
-    x: 24, y: 24,        // float position (viewport-local px)
-    collapsed: false,
     expanded: new Set(), // node keys ('cat:', 'fam:', 'typ:') that are open
     level: 'all',        // level filter: 'all' | level id
   };
 
   let panel = null, treeEl = null, catalog = null, counts = new Map(), elementsByType = new Map();
-  let refreshTimer = null;
+  let refreshTimer = null, dockApi = null;
 
   // ------------------------------------------------------------- persistence
+  // (chrome state — dock/float/collapse/visibility — lives in ui-dock.js;
+  //  only the CONTENT state persists here)
   function saveState() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
-        visible: state.visible, dock: state.dock, x: state.x, y: state.y,
-        collapsed: state.collapsed, expanded: [...state.expanded],
+        expanded: [...state.expanded],
       }));
     } catch (e) { }
   }
@@ -47,8 +44,6 @@
     try {
       const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (s) Object.assign(state, {
-        visible: s.visible !== false, dock: s.dock || 'left',
-        x: s.x || 24, y: s.y || 24, collapsed: !!s.collapsed,
         expanded: new Set(s.expanded || []),
         level: s.level || 'all',
       });
@@ -60,11 +55,12 @@
     panel = document.createElement('div');
     panel.id = 'elbrowser';
     panel.innerHTML = `
-      <div id="elb-head" title="Drag to float · drop at a screen edge to dock · double-click to dock left">
-        <span class="elb-grip">⋮⋮</span>
-        <span class="elb-title">Element Browser</span>
-        <button class="elb-btn" id="elb-min" title="Collapse / expand">▾</button>
-        <button class="elb-btn" id="elb-x" title="Hide (reopen from the toolbar)">✕</button>
+      <div class="dk-head" id="elb-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Element Browser</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide (reopen from the toolbar)">✕</button>
       </div>
       <div id="elb-body">
         <div class="elb-search">
@@ -75,102 +71,26 @@
       </div>`;
     $('viewport').appendChild(panel);
     treeEl = panel.querySelector('#elb-tree');
+    dockApi = window.DockPanels ? DockPanels.make(panel, {
+      key: 'elbrowser', title: 'Element Browser', side: 'left', onVisibility: () => refresh(),
+    }) : null;
 
-    panel.querySelector('#elb-x').addEventListener('click', () => setVisibility(false));
-    panel.querySelector('#elb-min').addEventListener('click', () => {
-      state.collapsed = !state.collapsed;
-      applyLayout();
-      saveState();
-    });
     panel.querySelector('#elb-filter').addEventListener('input', () => renderTree());
     panel.querySelector('#elb-level').addEventListener('change', ev => {
       state.level = ev.target.value;
       saveState();
       refresh(); // counts and element lists are level-dependent
     });
-    initPanelDrag();
     initViewportDrop();
   }
 
-  function applyLayout() {
-    panel.classList.toggle('collapsed', state.collapsed);
-    panel.classList.toggle('docked-left', state.dock === 'left');
-    panel.classList.toggle('docked-right', state.dock === 'right');
-    panel.classList.toggle('floating', state.dock === 'float');
-    if (state.dock === 'float') {
-      const vp = $('viewport').getBoundingClientRect();
-      state.x = Math.max(4, Math.min(state.x, vp.width - 80));
-      state.y = Math.max(4, Math.min(state.y, vp.height - 40));
-      panel.style.left = state.x + 'px';
-      panel.style.top = state.y + 'px';
-    } else {
-      panel.style.left = panel.style.top = '';
-    }
-    panel.querySelector('#elb-min').textContent = state.collapsed ? '▸' : '▾';
+  function applyLayout() { // body-only concerns; chrome lives in ui-dock.js
+    if (dockApi && !dockApi.isVisible()) return;
   }
 
   function setVisibility(on) {
-    state.visible = on != null ? on : !state.visible;
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) refresh();
-    saveState();
+    if (dockApi) dockApi.setVisible(on);
     if (window.app && app.refreshToolbar) app.refreshToolbar();
-  }
-
-  // ------------------------------------------------------- panel drag / dock
-  function initPanelDrag() {
-    const head = panel.querySelector('#elb-head');
-    let drag = null;
-    head.addEventListener('pointerdown', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      if (ev.button !== 0) return;
-      const pr = panel.getBoundingClientRect();
-      const vp = $('viewport').getBoundingClientRect();
-      drag = {
-        dx: ev.clientX - pr.left, dy: ev.clientY - pr.top,
-        vw: vp.width, vh: vp.height, moved: false,
-      };
-      head.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
-    });
-    head.addEventListener('pointermove', ev => {
-      if (!drag) return;
-      drag.moved = true;
-      const vp = $('viewport').getBoundingClientRect();
-      let x = ev.clientX - vp.left - drag.dx;
-      let y = ev.clientY - vp.top - drag.dy;
-      x = Math.max(-40, Math.min(x, drag.vw - 60));
-      y = Math.max(0, Math.min(y, drag.vh - 36));
-      // live edge preview while dragging near a border
-      const nearL = ev.clientX - vp.left < 42, nearR = vp.right - ev.clientX < 42;
-      panel.classList.toggle('dock-preview-left', nearL);
-      panel.classList.toggle('dock-preview-right', nearR);
-      panel.classList.remove('docked-left', 'docked-right');
-      panel.classList.add('floating');
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      state.x = x; state.y = y; state.dock = 'float';
-    });
-    const end = ev => {
-      if (!drag) return;
-      panel.classList.remove('dock-preview-left', 'dock-preview-right');
-      const vp = $('viewport').getBoundingClientRect();
-      if (drag.moved) {
-        if (ev.clientX - vp.left < 42) state.dock = 'left';
-        else if (vp.right - ev.clientX < 42) state.dock = 'right';
-      }
-      drag = null;
-      applyLayout();
-      saveState();
-    };
-    head.addEventListener('pointerup', end);
-    head.addEventListener('pointercancel', end);
-    head.addEventListener('dblclick', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      state.dock = state.dock === 'left' ? 'right' : 'left';
-      applyLayout();
-      saveState();
-    });
   }
 
   // ------------------------------------------------- drag a type → viewport
@@ -789,9 +709,7 @@
     loadState();
     build();
     initTreeEvents();
-    applyLayout();
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) refresh();
+    if (dockApi ? dockApi.isVisible() : state.visible) refresh();
     if (window.Engine) {
       Engine.events.on('db:ready', () => refresh());
       Engine.events.on('model:changed', () => {
@@ -802,7 +720,7 @@
   }
 
   window.ElementBrowser = {
-    get visible() { return state.visible; },
+    get visible() { return !!(dockApi ? dockApi.isVisible() : state.visible); },
     toggle(force) { if (panel) setVisibility(force); },
     refresh() { refresh(); },
     activateType,

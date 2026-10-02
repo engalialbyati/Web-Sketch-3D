@@ -43,17 +43,13 @@
   const TAGS = ['Chair', 'Table', 'Sofa', 'Bed', 'Lamp', 'Plant', 'Kitchen', 'Bathroom', 'Office', 'Decor'];
 
   const state = {
-    visible: false,
-    dock: 'right',       // 'left' | 'right' | 'float'
-    x: 24, y: 24,        // float position (viewport-local px)
-    collapsed: false,
     query: '',
     tag: null,           // active quick-search tag
     glbOnly: null,       // tri-state: null = auto (on when no Blender), true/false = user choice
     definingId: null,    // placed-row currently showing its Define-as chips
   };
 
-  let panel = null, gridEl = null, statusEl = null, inputEl = null, tagsEl = null, placedEl = null;
+  let panel = null, gridEl = null, statusEl = null, inputEl = null, tagsEl = null, placedEl = null, dockApi = null;
   let results = [];
   let searchSeq = 0;            // stale-response guard
   let searchTimer = null;
@@ -96,8 +92,7 @@
   function saveState() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify({
-        visible: state.visible, dock: state.dock, x: state.x, y: state.y,
-        collapsed: state.collapsed, query: state.query, tag: state.tag,
+        query: state.query, tag: state.tag,
         glbOnly: state.glbOnly,
       }));
     } catch (e) { }
@@ -106,8 +101,6 @@
     try {
       const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
       if (s) Object.assign(state, {
-        visible: !!s.visible, dock: s.dock || 'right',
-        x: s.x || 24, y: s.y || 24, collapsed: !!s.collapsed,
         query: s.query || '', tag: s.tag || null,
         glbOnly: s.glbOnly == null ? null : !!s.glbOnly,
       });
@@ -289,11 +282,12 @@
     panel = document.createElement('div');
     panel.id = 'bkbrowser';
     panel.innerHTML = `
-      <div id="bkb-head" title="Drag to float · drop at a screen edge to dock · double-click to swap sides">
-        <span class="elb-grip">⋮⋮</span>
-        <span class="elb-title">BlenderKit Assets</span>
-        <button class="elb-btn" id="bkb-min" title="Collapse / expand">▾</button>
-        <button class="elb-btn" id="bkb-x" title="Hide (reopen from the toolbar)">✕</button>
+      <div class="dk-head" id="bkb-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">BlenderKit Assets</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide (reopen from the toolbar)">✕</button>
       </div>
       <div id="bkb-body">
         <div class="bkb-search">
@@ -314,12 +308,10 @@
     inputEl.value = state.query;
     renderTags();
 
-    panel.querySelector('#bkb-x').addEventListener('click', () => setVisibility(false));
-    panel.querySelector('#bkb-min').addEventListener('click', () => {
-      state.collapsed = !state.collapsed;
-      applyLayout();
-      saveState();
-    });
+    dockApi = window.DockPanels ? DockPanels.make(panel, {
+      key: 'bkbrowser', title: 'BlenderKit Assets', side: 'right',
+      onVisibility: () => { if (!results.length) search(); },
+    }) : null;
     inputEl.addEventListener('input', () => { state.query = inputEl.value; saveState(); scheduleSearch(); });
     inputEl.addEventListener('keydown', ev => {
       if (ev.key === 'Enter') { ev.preventDefault(); search(); }
@@ -378,7 +370,6 @@
     // wheel/keys inside the palette belong to the palette, not the camera
     panel.addEventListener('wheel', ev => ev.stopPropagation());
     panel.addEventListener('pointerdown', ev => ev.stopPropagation());
-    initPanelDrag();
     initCursorTracking();
   }
 
@@ -387,97 +378,26 @@
   // effects on the active tool.
   function initCursorTracking() {
     app.view.canvas.addEventListener('pointermove', ev => {
-      if (!state.visible) return;
+      if (!(dockApi && dockApi.isVisible())) return;
       const g = app.view.groundAt(app.view.eventPt(ev));
       if (g) lastGround = g;
     });
   }
 
-  function applyLayout() {
-    panel.classList.toggle('collapsed', state.collapsed);
-    panel.classList.toggle('docked-left', state.dock === 'left');
-    panel.classList.toggle('docked-right', state.dock === 'right');
-    panel.classList.toggle('floating', state.dock === 'float');
-    if (state.dock === 'float') {
-      const vp = $('viewport').getBoundingClientRect();
-      state.x = Math.max(4, Math.min(state.x, vp.width - 80));
-      state.y = Math.max(4, Math.min(state.y, vp.height - 40));
-      panel.style.left = state.x + 'px';
-      panel.style.top = state.y + 'px';
-    } else {
-      panel.style.left = panel.style.top = '';
-    }
-    panel.querySelector('#bkb-min').textContent = state.collapsed ? '▸' : '▾';
-  }
-
   function setVisibility(on) {
-    state.visible = on != null ? !!on : !state.visible;
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible && !results.length) search(); // first open: most downloaded
-    saveState();
+    if (dockApi) dockApi.setVisible(on); else panel.classList.toggle('hidden', true);
+    if (dockApi && dockApi.isVisible() && !results.length) search();
     if (window.app && app.refreshToolbar) app.refreshToolbar();
   }
 
-  // ------------------------------------------------------- panel drag / dock
-  function initPanelDrag() {
-    const head = panel.querySelector('#bkb-head');
-    let drag = null;
-    head.addEventListener('pointerdown', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      if (ev.button !== 0) return;
-      const pr = panel.getBoundingClientRect();
-      const vp = $('viewport').getBoundingClientRect();
-      drag = { dx: ev.clientX - pr.left, dy: ev.clientY - pr.top, vw: vp.width, vh: vp.height, moved: false };
-      head.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
-    });
-    head.addEventListener('pointermove', ev => {
-      if (!drag) return;
-      drag.moved = true;
-      const vp = $('viewport').getBoundingClientRect();
-      let x = ev.clientX - vp.left - drag.dx;
-      let y = ev.clientY - vp.top - drag.dy;
-      x = Math.max(-40, Math.min(x, drag.vw - 60));
-      y = Math.max(0, Math.min(y, drag.vh - 36));
-      const nearL = ev.clientX - vp.left < 42, nearR = vp.right - ev.clientX < 42;
-      panel.classList.toggle('dock-preview-left', nearL);
-      panel.classList.toggle('dock-preview-right', nearR);
-      panel.classList.remove('docked-left', 'docked-right');
-      panel.classList.add('floating');
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      state.x = x; state.y = y; state.dock = 'float';
-    });
-    const end = ev => {
-      if (!drag) return;
-      panel.classList.remove('dock-preview-left', 'dock-preview-right');
-      const vp = $('viewport').getBoundingClientRect();
-      if (drag.moved) {
-        if (ev.clientX - vp.left < 42) state.dock = 'left';
-        else if (vp.right - ev.clientX < 42) state.dock = 'right';
-      }
-      drag = null;
-      applyLayout();
-      saveState();
-    };
-    head.addEventListener('pointerup', end);
-    head.addEventListener('pointercancel', end);
-    head.addEventListener('dblclick', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      state.dock = state.dock === 'left' ? 'right' : 'left';
-      applyLayout();
-      saveState();
-    });
-  }
+  // (panel drag/dock chrome lives in ui-dock.js — DockPanels.make wired it)
 
   // -------------------------------------------------------------------- boot
   function boot() {
     if (!window.app) return; // waits for the app shell
     loadState();
     build();
-    applyLayout();
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) search();
+    if (dockApi && dockApi.isVisible()) search();
     // the manager owns the registry — every place/remove/define re-renders
     if (window.Engine) Engine.events.on('assets:changed', () => renderPlaced());
     renderPlaced();
@@ -485,7 +405,7 @@
   }
 
   window.BlenderKitBrowser = {
-    get visible() { return state.visible; },
+    get visible() { return !!(dockApi && dockApi.isVisible()); },
     toggle(force) { if (panel) setVisibility(force); },
     search(query) { if (panel) { state.query = query || ''; inputEl.value = state.query; search(); } },
     import: (asset) => importAsset(asset, null),

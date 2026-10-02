@@ -22,49 +22,26 @@
 // ---------------------------------------------------------------------------
 (function () {
   const $ = id => document.getElementById(id);
-  const LS_KEY = 'ws3d-layerpanel';
-
-  const state = {
-    visible: true,
-    dock: 'right',       // 'left' | 'right' | 'float'
-    x: 24, y: 64,        // float position (viewport-local px)
-    collapsed: false,
-  };
-
   let panel = null, treeEl = null, curSel = null, colorInput = null;
-  let refreshTimer = null;
+  let refreshTimer = null, dockApi = null;
 
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   // ------------------------------------------------------------- persistence
-  function saveState() {
-    try {
-      localStorage.setItem(LS_KEY, JSON.stringify({
-        visible: state.visible, dock: state.dock, x: state.x, y: state.y,
-        collapsed: state.collapsed,
-      }));
-    } catch (e) { }
-  }
-  function loadState() {
-    try {
-      const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
-      if (s) Object.assign(state, {
-        visible: s.visible !== false, dock: s.dock || 'right',
-        x: s.x || 24, y: s.y || 64, collapsed: !!s.collapsed,
-      });
-    } catch (e) { }
-  }
+  function saveState() { /* chrome state persists in ui-dock.js */ }
+  function loadState() { }
 
   // ------------------------------------------------------------------ build
   function build() {
     panel = document.createElement('div');
     panel.id = 'layerpanel';
     panel.innerHTML = `
-      <div id="lay-head" title="Drag to float · drop at a screen edge to dock · double-click to dock left">
-        <span class="elb-grip">⋮⋮</span>
-        <span class="elb-title">Layers</span>
-        <button class="elb-btn" id="lay-min" title="Collapse / expand">▾</button>
-        <button class="elb-btn" id="lay-x" title="Hide (reopen from the toolbar)">✕</button>
+      <div class="dk-head" id="lay-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Layers</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide (reopen from the toolbar)">✕</button>
       </div>
       <div id="lay-body">
         <div class="elb-search">
@@ -79,6 +56,9 @@
     $('viewport').appendChild(panel);
     treeEl = panel.querySelector('#lay-tree');
     curSel = panel.querySelector('#lay-cur');
+    dockApi = window.DockPanels ? DockPanels.make(panel, {
+      key: 'layerpanel', title: 'Layers', side: 'right', onVisibility: () => refresh(),
+    }) : null;
 
     // native color picker hidden inside the panel — swatches proxy to it.
     // Kept offscreen but RENDERED: a display:none input never opens the
@@ -93,12 +73,6 @@
         app.setLayerFlags(colorInput.dataset.lid, { color: colorInput.value });
     });
 
-    panel.querySelector('#lay-x').addEventListener('click', () => setVisibility(false));
-    panel.querySelector('#lay-min').addEventListener('click', () => {
-      state.collapsed = !state.collapsed;
-      applyLayout();
-      saveState();
-    });
     panel.querySelector('#lay-new').addEventListener('click', () => {
       const app = window.app;
       if (!app || !app.addLayer) return;
@@ -110,110 +84,17 @@
     curSel.addEventListener('change', () => {
       if (window.app && app.setCurrentLayer) app.setCurrentLayer(curSel.value);
     });
-    initPanelDrag();
     initRowEvents();
   }
 
-  // The BlenderKit palette docks right by default; both palettes share
-  // z-index 30, so two `docked-right` panels would perfectly overlap (the
-  // later one in the DOM wins and the other is unreachable). When the
-  // BlenderKit palette visibly holds the right edge, tuck this palette
-  // beside it instead (it keeps full-height dock behavior, just offset).
-  function deconflictDock() {
-    if (!panel) return;
-    const bkb = $('bkbrowser');
-    const crowded = !!bkb && !bkb.classList.contains('hidden') &&
-      bkb.classList.contains('docked-right') && state.dock === 'right';
-    panel.classList.toggle('beside-bkb', crowded);
-  }
-  function watchBkbDock() {
-    const bkb = $('bkbrowser');
-    if (!bkb) { setTimeout(watchBkbDock, 400); return; } // palette builds later
-    deconflictDock();
-    new MutationObserver(deconflictDock) // it may dock/undock at any time
-      .observe(bkb, { attributes: true, attributeFilter: ['class'] });
-  }
-
-  function applyLayout() {
-    deconflictDock();
-    panel.classList.toggle('collapsed', state.collapsed);
-    panel.classList.toggle('docked-left', state.dock === 'left');
-    panel.classList.toggle('docked-right', state.dock === 'right');
-    panel.classList.toggle('floating', state.dock === 'float');
-    if (state.dock === 'float') {
-      const vp = $('viewport').getBoundingClientRect();
-      state.x = Math.max(4, Math.min(state.x, vp.width - 80));
-      state.y = Math.max(4, Math.min(state.y, vp.height - 40));
-      panel.style.left = state.x + 'px';
-      panel.style.top = state.y + 'px';
-    } else {
-      panel.style.left = panel.style.top = '';
-    }
-    panel.querySelector('#lay-min').textContent = state.collapsed ? '▸' : '▾';
-  }
+  function applyLayout() { /* chrome layout lives in ui-dock.js */ }
 
   function setVisibility(on) {
-    state.visible = on != null ? on : !state.visible;
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) refresh();
-    saveState();
+    if (dockApi) dockApi.setVisible(on);
     if (window.app && app.refreshToolbar) app.refreshToolbar();
   }
 
-  // ------------------------------------------------------- panel drag / dock
-  function initPanelDrag() {
-    const head = panel.querySelector('#lay-head');
-    let drag = null;
-    head.addEventListener('pointerdown', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      if (ev.button !== 0) return;
-      const pr = panel.getBoundingClientRect();
-      const vp = $('viewport').getBoundingClientRect();
-      drag = {
-        dx: ev.clientX - pr.left, dy: ev.clientY - pr.top,
-        vw: vp.width, vh: vp.height, moved: false,
-      };
-      head.setPointerCapture(ev.pointerId);
-      ev.preventDefault();
-    });
-    head.addEventListener('pointermove', ev => {
-      if (!drag) return;
-      drag.moved = true;
-      const vp = $('viewport').getBoundingClientRect();
-      let x = ev.clientX - vp.left - drag.dx;
-      let y = ev.clientY - vp.top - drag.dy;
-      x = Math.max(-40, Math.min(x, drag.vw - 60));
-      y = Math.max(0, Math.min(y, drag.vh - 36));
-      const nearL = ev.clientX - vp.left < 42, nearR = vp.right - ev.clientX < 42;
-      panel.classList.toggle('dock-preview-left', nearL);
-      panel.classList.toggle('dock-preview-right', nearR);
-      panel.classList.remove('docked-left', 'docked-right');
-      panel.classList.add('floating');
-      panel.style.left = x + 'px';
-      panel.style.top = y + 'px';
-      state.x = x; state.y = y; state.dock = 'float';
-    });
-    const end = ev => {
-      if (!drag) return;
-      panel.classList.remove('dock-preview-left', 'dock-preview-right');
-      const vp = $('viewport').getBoundingClientRect();
-      if (drag.moved) {
-        if (ev.clientX - vp.left < 42) state.dock = 'left';
-        else if (vp.right - ev.clientX < 42) state.dock = 'right';
-      }
-      drag = null;
-      applyLayout();
-      saveState();
-    };
-    head.addEventListener('pointerup', end);
-    head.addEventListener('pointercancel', end);
-    head.addEventListener('dblclick', ev => {
-      if (ev.target.closest('.elb-btn')) return;
-      state.dock = state.dock === 'left' ? 'right' : 'left';
-      applyLayout();
-      saveState();
-    });
-  }
+  // (panel drag/dock chrome lives in ui-dock.js — DockPanels.make wired it)
 
   // -------------------------------------------------------------- tree rows
   function refresh() {
@@ -403,11 +284,8 @@
   // -------------------------------------------------------------------- boot
   function boot() {
     if (!window.app) return; // waits for the app shell
-    loadState();
     build();
-    applyLayout();
-    panel.classList.toggle('hidden', !state.visible);
-    if (state.visible) refresh();
+    if (dockApi ? dockApi.isVisible() : true) refresh();
     if (window.Engine) {
       Engine.events.on('db:ready', () => refresh());
       Engine.events.on('model:changed', () => {
@@ -415,11 +293,10 @@
         refreshTimer = setTimeout(refresh, 400); // counts follow commits
       });
     }
-    watchBkbDock();
   }
 
   window.LayerPanel = {
-    get visible() { return state.visible; },
+    get visible() { return !!(dockApi && dockApi.isVisible()); },
     toggle(force) { if (panel) setVisibility(force); },
     refresh() { refresh(); },
   };
