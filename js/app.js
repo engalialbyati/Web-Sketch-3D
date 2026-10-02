@@ -7826,11 +7826,22 @@ class App {
     // Same ray/line math as the axis inference below.
     if (!locked) {
       const { ro, rd } = this.view.clientToWorldRay(ev.clientX, ev.clientY);
-      let eBest = null, eD = 10, eBestId = null;
+      // PARAMETRIC DRAWING SNAP DIET: in Precise mode, edges far from the
+      // active drawing plane (other floors of a dense model) must not pull
+      // the cursor — a 3 m wall on a 3-storey villa otherwise snaps to
+      // whatever edge sits under the pixel. ±1 m around the base elevation.
+      let drawZ = null;
+      if (this.mode === 'bim' && this.bimOptions && this.bimOptions.baseLevel
+        && ['wall', 'floor', 'draw', 'room'].includes(this.tool ? this.tool.id : '')) {
+        drawZ = this.levelManager.getElevation(this.bimOptions.baseLevel);
+        if (this.bimOptions.baseLevel === 'none') drawZ = this.levelManager.getElevation('none');
+      }
+      let eBest = null, eD = drawZ != null ? 5 : 10, eBestId = null;
       for (const e of model.edges.values()) {
         if (e.curveId) continue;
         const a = model.vp(e.a), b = model.vp(e.b);
         if (!a || !b) continue;
+        if (drawZ != null && Math.abs((a.z + b.z) / 2 - drawZ) > 1) continue;
         const vec = G.sub(b, a);
         const L = G.len(vec);
         if (L < 1e-6) continue;
