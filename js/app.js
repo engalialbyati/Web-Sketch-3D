@@ -8277,11 +8277,13 @@ class App {
     this._edgeRunLog.push(id);
   }
   // ---------------------------------------------------------- edge run grow
-  // Shift + '+' / '−': walk the edge selection ALONG THE LINE. Dense near-
-  // parallel edges (a slab outline, rebar chairs) become a one-key run:
-  // grow adds the most collinear unselected edge at the run's head — never
-  // a perpendicular branch (30° deflection max, so tangent arc segments
-  // chain too) — and shrink steps the run back one edge. dir: +1 grow, -1
+  // Shift + '+' / '−': walk the edge selection ALONG THE CONNECTED CHAIN.
+  // Dense near-parallel edges (a slab outline, rebar chairs) become a one-
+  // key run: grow adds the STRAIGHTEST unselected edge at the run's head —
+  // a collinear continuation (≤30°, so tangent arc segments chain) always
+  // wins over a perpendicular branch, and when nothing is in line the run
+  // continues THROUGH THE CORNER on the least-turning connected edge (never
+  // back on itself). Shrink steps the run back one edge. dir: +1 grow, -1
   // step back. Returns true when the selection changed.
   growEdgeRun(dir = 1) {
     const m = this.model;
@@ -8290,12 +8292,11 @@ class App {
     this._edgeRunLog = this._edgeRunLog.filter(id => this.sel.edges.has(id));
     for (const id of this.sel.edges) if (!this._edgeRunLog.includes(id)) this._edgeRunLog.push(id);
     const run = this._edgeRunLog;
-    const hint = `Edge run: ${this.sel.edges.size + (dir > 0 ? 1 : 0)} selected — Shift++ extends in line, Shift+− steps back`;
     if (dir < 0) {
       if (run.length <= 1) { this.toast('The run is at its seed edge', true); return false; }
       this.sel.edges.delete(run.pop());
       this.onSelectionChanged();
-      this.setStatus(`Edge run: ${this.sel.edges.size} selected — Shift++ extends in line, Shift+− steps back`);
+      this.setStatus(`Edge run: ${this.sel.edges.size} selected — Shift++ extends along the chain, Shift+− steps back`);
       return true;
     }
     const last = m.edges.get(run[run.length - 1]);
@@ -8308,13 +8309,15 @@ class App {
         let arr = byV.get(v); if (!arr) byV.set(v, arr = []);
         arr.push(e);
       }
-    const MAX_DEFLECT = Math.PI / 6; // "in line": ≤30° — perpendiculars and corners lose
+    const IN_LINE = Math.PI / 6;         // ≤30° counts as "in line"
+    const NO_BACKTRACK = Math.PI * 0.94; // ~169°: doubling back on the path
     // Best continuation AT one end of the head edge: incoming direction runs
-    // through the end vertex; candidates are scored by their deflection.
+    // through the end vertex; candidates are scored by their deflection —
+    // straightest wins, corners only when nothing is in line.
     const bestAt = endV => {
       const other = last.a === endV ? last.b : last.a;
       const d = G.norm(G.sub(m.vp(endV), m.vp(other))); // travel direction through endV
-      let best = null, bestAng = MAX_DEFLECT;
+      let best = null, bestAng = NO_BACKTRACK;
       for (const cand of byV.get(endV) || []) {
         if (cand.id === last.id || this.sel.edges.has(cand.id)) continue;
         const far = cand.a === endV ? cand.b : cand.a;
@@ -8324,7 +8327,7 @@ class App {
         const ang = Math.acos(Math.max(-1, Math.min(1, G.dot(d, G.mul(d2, 1 / L)))));
         if (ang < bestAng) { bestAng = ang; best = cand; }
       }
-      return best;
+      return best ? { edge: best, ang: bestAng } : null;
     };
     // with no history both ends are candidates — the straighter continuation
     // wins; once the run has ≥2 edges it only ever grows at the head
@@ -8334,13 +8337,13 @@ class App {
       pick = bestAt(shared === last.a ? last.b : last.a);
     } else {
       const ca = bestAt(last.a), cb = bestAt(last.b);
-      pick = ca && cb ? ca : (ca || cb); // ties are geometrically impossible
+      pick = ca && cb ? (ca.ang <= cb.ang ? ca : cb) : (ca || cb);
     }
-    if (!pick) { this.toast('No further edge in line — the run has reached a corner or a free end'); return false; }
-    this.sel.edges.add(pick.id);
-    this._edgeRunLogPush(pick.id);
+    if (!pick) { this.toast('The run has reached a free end (or everything is already selected)'); return false; }
+    this.sel.edges.add(pick.edge.id);
+    this._edgeRunLogPush(pick.edge.id);
     this.onSelectionChanged();
-    this.setStatus(hint);
+    this.setStatus(`Edge run: ${this.sel.edges.size} selected${pick.ang > IN_LINE ? ' — through the corner' : ''} — Shift++ extends along the chain, Shift+− steps back`);
     return true;
   }
   // ------------------------------------------------------------- asset select

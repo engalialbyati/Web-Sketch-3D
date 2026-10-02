@@ -51,7 +51,7 @@ class SelectTool extends Tool {
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
     return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : (this.app.mode === 'bim'
       ? `Select: click selects whole ELEMENTS. Drag = window select (elements too). Faces and edges are selectable in Free Drawing — Measure Area still picks faces.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`
-      : `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds. With edges selected: Shift++ extends the run in line, Shift+− steps back.`);
+      : `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds. With edges selected: Shift++ extends the run along the chain (through corners), Shift+− steps back.`);
   }
   // ---- Revit shape handles for selected parametric walls -------------------
   // FREE mode is face-first: the handles/badge live at the wall's BASE, and

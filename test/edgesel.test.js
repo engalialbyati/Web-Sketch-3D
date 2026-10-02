@@ -154,19 +154,50 @@ module.exports = h => {
     eq(app2.sel.edges.size, 2, 'nothing added when blocked');
   });
 
-  test('a corner stops the run; Shift+− steps it back', () => {
+  test('a corner CONTINUES the run — connected angled lines chain; Shift+− steps back', () => {
     const { app2, m2, G } = runApp();
     const a = m2.addEdge(G.v(0, 0, 0), G.v(3, 0, 0));
     const b = m2.addEdge(G.v(3, 0, 0), G.v(6, 0, 0));
     const c = m2.addEdge(G.v(6, 0, 0), G.v(6, 3, 0));   // 90° corner
+    const d = m2.addEdge(G.v(6, 3, 0), G.v(3, 3, 0));   // another corner
     app2.sel.edges = new Set([a.id]);
-    app2.growEdgeRun(1);
-    eq(app2.growEdgeRun(1), false, 'corner refuses to extend');
-    ok(!app2.sel.edges.has(c.id), 'corner edge not selected');
+    ok(app2.growEdgeRun(1), 'first grow');
+    ok(app2.sel.edges.has(b.id), 'in-line edge taken first');
+    ok(app2.growEdgeRun(1), 'grow through the corner');
+    ok(app2.sel.edges.has(c.id), 'the angled edge joined the run');
+    ok(app2.growEdgeRun(1), 'grow through the second corner');
+    ok(app2.sel.edges.has(d.id), 'the run walks the whole polyline');
+    eq(app2.growEdgeRun(1), false, 'free end: run is blocked');
     ok(app2.growEdgeRun(-1), 'shrink works');
+    eq(app2.sel.edges.size, 3, 'one edge stepped back');
+    ok(app2.growEdgeRun(-1), 'shrink again');
+    ok(app2.growEdgeRun(-1), 'shrink to the seed');
     eq(app2.sel.edges.size, 1, 'back to the seed');
     eq(app2.growEdgeRun(-1), false, 'cannot shrink past the seed');
-    eq(app2.sel.edges.size, 1, 'seed survives');
+  });
+
+  test('at a junction the STRAIGHTEST branch wins — even when all are angled', () => {
+    const { app2, m2, G } = runApp();
+    const seed = m2.addEdge(G.v(0, 0, 0), G.v(3, 0, 0));
+    const near = m2.addEdge(G.v(3, 0, 0), G.v(6, 2.5, 0));   // ~40° deflection
+    const wide = m2.addEdge(G.v(3, 0, 0), G.v(1.5, 3, 0));   // ~117° deflection
+    app2.sel.edges = new Set([seed.id]);
+    ok(app2.growEdgeRun(1), 'grow');
+    ok(app2.sel.edges.has(near.id), 'the least-turning edge joined');
+    ok(!app2.sel.edges.has(wide.id), 'the wide turn stayed out');
+  });
+
+  test('a closed rectangle loops around and never double-selects', () => {
+    const { app2, m2, G } = runApp();
+    const a = m2.addEdge(G.v(0, 0, 0), G.v(3, 0, 0));
+    const b = m2.addEdge(G.v(3, 0, 0), G.v(3, 3, 0));
+    const c = m2.addEdge(G.v(3, 3, 0), G.v(0, 3, 0));
+    const d = m2.addEdge(G.v(0, 3, 0), G.v(0, 0, 0));
+    app2.sel.edges = new Set([a.id]);
+    let grew = 0;
+    for (let i = 0; i < 8 && app2.growEdgeRun(1); i++) grew++;
+    eq(grew, 3, 'the run closed the rectangle (3 more edges)');
+    eq(app2.sel.edges.size, 4, 'all four sides selected, loop stops');
   });
 
   test('tangent arc segments chain — the run walks a curved edge', () => {
