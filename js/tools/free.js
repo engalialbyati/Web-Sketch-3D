@@ -54,12 +54,23 @@ class SelectTool extends Tool {
       : `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds.`);
   }
   // ---- Revit shape handles for selected parametric walls -------------------
+  // FREE mode is face-first: the handles/badge live at the wall's BASE, and
+  // from above they project right onto the TOP face — they may only own the
+  // click when the whole element is the selection (Alt+click), never steal a
+  // face pick. BIM mode always selects whole elements, so they always show.
+  _wholeElementSelected(ent) {
+    const app = this.app;
+    let seen = 0;
+    for (const fid of ent.faces) if (app.sel.faces.has(fid)) seen++;
+    return seen > 0 && seen >= ent.faces.filter(id => app.model.faces.has(id)).length;
+  }
   _wallSel() {
     const app = this.app;
     for (const fid of app.sel.faces) {
       const f = app.model.faces.get(fid);
       const ent = f && app.bim.getEntityForFace(f);
-      if (ent && ent.type === 'wall' && ent.params.base && ent.params.end && !ent.params.closed)
+      if (ent && ent.type === 'wall' && ent.params.base && ent.params.end && !ent.params.closed
+        && (app.mode === 'bim' || this._wholeElementSelected(ent)))
         return ent;
     }
     return null;

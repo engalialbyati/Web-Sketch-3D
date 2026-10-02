@@ -1215,6 +1215,49 @@ class BimEntityManager {
   }
   // phase 2: re-extrude one wall from its (dynamically solved) ring against
   // whatever geometry currently exists, re-stamp it, re-cut its hosted
+  // PAINT MEMORY across parametric rebuilds: rebuilds recreate every face
+  // from parameters, and fresh faces come back unpainted. Before a wipe we
+  // snapshot each element's paint PER ROLE (exterior/interior/top/side/
+  // lining…); after the rebuild the new faces re-stamp from the snapshot.
+  // A uniformly painted element (the common case) is restored whole even
+  // when role names shift between creator and rebuild classifier.
+  captureElementSkins(ents) {
+    const m = this.model, skins = new Map();
+    for (const ent of ents) {
+      if (!ent || !ent.faces) continue;
+      const byRole = new Map();
+      for (const fid of ent.faces) {
+        const f = m.faces.get(fid);
+        if (!f) continue;
+        const role = (f.userData && f.userData.role) || 'side';
+        if (!byRole.has(role)) byRole.set(role, { matId: f.matId || null, color: f.color || null, alpha: f.alpha == null ? 1 : f.alpha });
+      }
+      if (byRole.size) skins.set(ent.id, byRole);
+    }
+    return skins;
+  }
+  applyElementSkins(skins) {
+    if (!skins || !skins.size) return;
+    const m = this.model;
+    for (const [eid, byRole] of skins) {
+      const ent = this.getEntityById(eid);
+      if (!ent || !ent.faces || !ent.faces.length) continue;
+      const uniform = byRole.size === 1 ? [...byRole.values()][0] : null;
+      for (const fid of ent.faces) {
+        const f = m.faces.get(fid);
+        if (!f) continue;
+        const role = (f.userData && f.userData.role) || 'side';
+        const skin = byRole.get(role) || uniform;
+        if (!skin) continue;
+        f.matId = skin.matId;
+        f.color = skin.color;
+        f.alpha = skin.alpha;
+      }
+    }
+    const A = window.app;
+    if (A && window.MaterialsFeature && MaterialsFeature.rebuildPass) MaterialsFeature.rebuildPass(A);
+  }
+
   _rebuildWallCore(id, hosted) {
     const ent = this.getEntityById(id);
     if (!ent || ent.type !== 'wall') return false;
@@ -1283,6 +1326,10 @@ class BimEntityManager {
     let pre;
     try { pre = this.wallRing(ent.params); } catch (e) { pre = null; }
     if (!pre || G.ringDegenerate(pre)) return false;
+    // PAINT MEMORY: the rebuild recreates every face — snapshot the paint
+    // per role first, or a painted wall loses its material on its own edit
+    const hosted0 = this.entities.filter(e => e.params && e.params.hostWallId === id);
+    const skins = this.captureElementSkins([ent, ...hosted0]);
     // Construction-wire sweep brackets the WHOLE multi-phase rebuild (the
     // hold releases between delete and re-extrude): join residue like a
     // miter-cap diagonal born attached in one phase and orphaned in the
@@ -1293,7 +1340,7 @@ class BimEntityManager {
       const hosted = this._deleteWallGeometry(ent);
       m.bimHold = false;
       const ok = this._rebuildWallCore(id, hosted);
-      if (ok) this.ensureWallBottom(ent); // joins strip caps — restore
+      if (ok) { this.applyElementSkins(skins); this.ensureWallBottom(ent); } // joins strip caps — restore
       // the face rule survives every rebuild path — a wall edited onto a
       // standing column's line re-trims on the spot (cheap null early-out
       // when nothing blocks it)
@@ -2892,6 +2939,11 @@ class App {
     // a fresh model has no assets — drop the instances or File ▸ New keeps
     // rendering the previous scene's doors/windows over the empty grid
     if (this.assets && this.assets.clear) { try { this.assets.clear(); } catch (e) { } }
+    // same for the material visuals + tray: the texture overlay group and
+    // the swatch list belong to the OLD model (File ▸ New left textured
+    // ghosts over the empty viewport)
+    if (window.MaterialsFeature && MaterialsFeature.rebuildPass) { try { MaterialsFeature.rebuildPass(this); } catch (e) { } }
+    if (this.refreshSwatchesIfMaterialsChanged) { try { this.refreshSwatchesIfMaterialsChanged(); } catch (e) { } }
     this.model = m;
     this.levelManager.model = m;
     this.bim.model = m;
@@ -3089,6 +3141,10 @@ class App {
           if (f.userData && f.userData.bimEntityId === e.id) wipeFaces.add(fid);
         for (const eid of e.edges) wipeEdges.add(eid);
       }
+      // PAINT MEMORY: everything above is about to be recreated unpainted —
+      // snapshot the skins first (the load-time self-heal runs here, which
+      // is why materials vanished on reload for invalid saved models)
+      this._rebuildSkins = this.bim.captureElementSkins(this.bim.entities.filter(e => wipeFaces.size && e.faces && e.faces.some(fid => wipeFaces.has(fid))));
       for (const [fid, f] of [...mm.faces]) if (wipeFaces.has(fid)) mm.faces.delete(fid);
       for (const [eid, e2] of [...mm.edges]) if (wipeEdges.has(eid)) mm.edges.delete(eid);
       mm.gc();
@@ -3264,6 +3320,7 @@ class App {
           // detach every welded neighbor ('rebuild from parameters loses walls')
           this.bim._restampWallFaces();
           recutHostedAll(mm);
+          this.bim.applyElementSkins(this._rebuildSkins); // paint rides the rebuild
         } finally { mm.bimHold = false; }
       });
       return finish();
@@ -3293,6 +3350,7 @@ class App {
       }
       try { this.bim._restampWallFaces(); } catch (e) { }
       try { recutHostedAll(mm); } catch (e) { }
+      try { this.bim.applyElementSkins(this._rebuildSkins); } catch (e) { }
       mm.bimHold = false;
       try { tx.commit(); } catch (e) { /* rollback already handled by the guard */ }
       this._rebuilding = false;
@@ -10034,6 +10092,11 @@ class App {
       if (hasContent) {
         this.model.load(data);
         this.view.rebuild();
+        // materials ride the load (registry + per-face matId) — build the
+        // texture overlay + tray NOW: no model:changed fires at boot, so
+        // without this every reload came back unpainted
+        if (window.MaterialsFeature && MaterialsFeature.rebuildPass) { try { MaterialsFeature.rebuildPass(this); } catch (e) { } }
+        if (this.refreshSwatchesIfMaterialsChanged) { try { this.refreshSwatchesIfMaterialsChanged(); } catch (e) { } }
         // model.load swapped levels/grids wholesale: rebuild their view
         // layers too, or the datum planes/grips hold the pre-load state
         // (grids "disappeared" until a level edit nudged them back)

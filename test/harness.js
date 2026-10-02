@@ -45,6 +45,11 @@ function loadModel(extraFiles = []) {
 function ok(cond, msg = 'expected truthy') {
   if (!cond) throw new Error(msg);
 }
+// async test bodies settle through here: their rejections used to escape
+// the sync runner as unhandled rejections (a flaky async test KILLED the
+// whole suite instead of reporting) — they now flip to a counted FAIL
+const _pending = [];
+function settle() { return Promise.all(_pending.splice(0)); }
 function eq(actual, expected, msg) {
   if (typeof actual === 'number' && typeof expected === 'number') return near(actual, expected, 1e-9, msg);
   if (actual !== expected) throw new Error(`${msg || 'eq'}: expected ${fmt(expected)}, got ${fmt(actual)}`);
@@ -64,7 +69,15 @@ const fmt = v => typeof v === 'number' ? v.toPrecision(12) : JSON.stringify(v);
 const _stats = { pass: 0, fail: 0 };
 function test(name, fn) {
   try {
-    fn();
+    const r = fn();
+    if (r && typeof r.then === 'function') {
+      _stats.pass++; // provisional — a rejection flips it to a FAIL
+      _pending.push(r.then(null, e => {
+        _stats.pass--; _stats.fail++;
+        console.log(`  FAIL ${name} (async)\n         ${e.message}`);
+      }));
+      return;
+    }
     _stats.pass++;
     console.log(`  ok   ${name}`);
   } catch (e) {
@@ -115,4 +128,4 @@ function makeWorld() {
   };
 }
 
-module.exports = { loadModel, test, summary, ok, eq, near, throws, fmt, makeWorld, _stats };
+module.exports = { loadModel, test, summary, ok, eq, near, throws, fmt, makeWorld, _stats, settle };

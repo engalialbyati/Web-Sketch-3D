@@ -272,9 +272,11 @@ module.exports = h => {
       const hg = hollow.groups[0].gid;
       const res = SolidOps.run(m, SolidOps.OPS.SHELL, hg, c.id, kernel);
       ok(res.ok, 'shell ok: ' + (res.error || ''));
-      // hollow volume was 64-8=56; union with 1 → 57; void dropped keeps 57
-      // (the void never subtracts — Outer Shell only removes INNER SHELLS)
-      near(res.groups[0].volume, 57, 1e-6, 'volume without the void double-count');
+      // SketchUp Outer Shell semantics (dropInnerShells): the void's
+      // surface is an INNER shell and is dropped, which FILLS the cavity —
+      // outer envelope 64 + cube 1 = 65. (The old expectation of 57 never
+      // actually ran: async tests were counted before they executed.)
+      near(res.groups[0].volume, 65, 1e-6, 'outer shell fills the internal void');
       ok(SolidOps.solidReport(m, res.groups[0].gid).ok, 'watertight');
     });
   }

@@ -8,7 +8,7 @@ module.exports = async h => {
   const { loadModel, test, ok, eq, near } = h;
   const L = loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/lib/three.min.js', 'js/app.js', 'js/assets.js', 'js/features/onlinelib.js']);
   const w = L.window;
-  const { G, Model, BimTools, AssetManager, BimEntityManager } = w;
+  const { G, Model, BimTools, AssetManager, BimEntityManager, StructuralManager } = w;
   const THREE = w.THREE;
 
   test('loadTemplate: "lib:" ids rebuild from the cached catalogue, not the GLB bridge', async () => {
@@ -172,5 +172,50 @@ module.exports = async h => {
     fresh.bimEntities = [];
     w.App.prototype.bindModel.call(appStub, fresh);
     eq(mgr.instances.size, 0, 'fresh model drops the instances');
+  });
+
+  test('rebuildFromParams: painted materials survive the rebuild', () => {
+    // the reload self-heal wipes + recreates every element face — paint
+    // memory (role-keyed skins) must restore it
+    const m3 = new Model();
+    m3.bimEntities = [];
+    m3.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim3 = new BimEntityManager(m3);
+    const A2 = [0, 0, 0], B2 = [6, 0, 0];
+    const p3 = { base: A2, end: B2, height: 3, thickness: 0.2, locationLine: 'centerline', primitive: 'line', closed: false, joins: { start: 0, end: 0 } };
+    const before3 = new Set(m3.faces.keys());
+    m3.bimHold = true;
+    try {
+      const ring = BimTools.WallTool.bandRing(G, [G.v(...A2), G.v(...B2)], 0.2, 'centerline');
+      m3.pushPull(m3.addFaceFromRings(ring), 3);
+    } finally { m3.bimHold = false; }
+    const nf3 = [...m3.faces.keys()].filter(id => !before3.has(id)).map(id => m3.faces.get(id)).filter(f => f && !f.userData);
+    const roles3 = {}; for (const f of nf3) roles3[f.id] = 'side';
+    const edges3 = [];
+    for (const f of nf3) for (const r of m3.rings(f)) for (let i = 0; i < r.length; i++) {
+      const e = m3.findEdge(r[i], r[(i + 1) % r.length]);
+      if (e && !e.userData) edges3.push(e.id);
+    }
+    const wall3 = bim3.create('wall', JSON.parse(JSON.stringify(p3)), roles3, [...new Set(edges3)]);
+    // paint the whole wall with a named material
+    m3.materials = new Map([['mat_x', { id: 'mat_x', name: 'Brick', color: '#a44a3a', alpha: 1, texture: { kind: 'brick', size: 0.22 } }]]);
+    for (const fid of wall3.faces) { const f = m3.faces.get(fid); f.matId = 'mat_x'; f.color = '#a44a3a'; }
+
+    const app4 = Object.assign(Object.create(w.App.prototype), {
+      model: m3, bim: bim3,
+      view: { rebuild() { }, invalidate() { }, zoomExtents() { }, clearPins() { }, clearPreview() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      refreshGroups() { }, _updateEditBox() { }, _saveAutosave() { }, refreshEdgeStamps() { },
+      run: (label, fn) => fn(m3),
+      levelManager: { model: m3, levels: m3.levels, getElevation: () => 0, getLevel: () => m3.levels[0] },
+      structural: new StructuralManager(() => m3.levels, () => m3.bimEntities),
+    });
+    w.app = app4;
+    const out4 = app4.rebuildFromParams();
+    ok(out4 && out4.counts && out4.counts.wall === 1, 'wall rebuilt');
+    const painted = wall3.faces.filter(fid => { const f = m3.faces.get(fid); return f && f.matId === 'mat_x' && f.color === '#a44a3a'; });
+    ok(painted.length === wall3.faces.length,
+      'every rebuilt face re-stamped (' + painted.length + '/' + wall3.faces.length + ') — no unpainted wipe');
+    ok(m3.materials.has('mat_x'), 'material registry intact');
   });
 };

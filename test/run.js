@@ -30,6 +30,7 @@ const SUITE = [
     const countersBefore = counters();
     const exported = require(path.join(__dirname, f))(harness);
     if (exported && typeof exported.then === 'function') await exported;
+    await harness.settle(); // async test bodies count before the file's summary
     const { pass: p, fail: fl } = delta(countersBefore);
     console.log(`\n${f}: ${p} passed, ${fl} failed\n`);
     pass += p; fail += fl;
