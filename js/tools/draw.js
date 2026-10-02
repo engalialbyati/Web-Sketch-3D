@@ -65,9 +65,10 @@ class DrawGeom {
     return { pts, center: G.v(center.x, center.y, center.z), radius, span };
   }
 
-  // Tangent-arc fillet at a corner — AutoCAD semantics. Legs run corner P
-  // toward pA and corner P toward pB; radius r; all in the legs' (sketch)
-  // plane. Pure 2D construction in world x/y:
+  // Tangent-arc fillet at a corner — AutoCAD semantics, in the plane the
+  // two legs span (ANY orientation: ground-plane pairs and vertical Z-plane
+  // profiles fillet identically). Legs run corner P toward pA and pB; radius r.
+  // Construction in the plane's 2D coordinates:
   //   u1, u2   unit directions from P along both legs
   //   theta    interior angle acos(u1·u2)
   //   ub       interior bisector (u1+u2)/||u1+u2||
@@ -76,30 +77,40 @@ class DrawGeom {
   //   T1/T2    = P + d·u1 / P + d·u2       trim targets on each leg
   // The arc sweeps ONLY the minor interior angle between T1 and T2: the
   // 2D cross product u1×u2 picks the rotation direction whose SHORT way
-  // runs through the corner-facing side (the old sign was inverted — the
-  // arc notched OUTSIDE the corner and swept the complementary ~270°).
+  // runs through the corner-facing side. Results map back to 3D through
+  // the plane basis, so a vertical fillet's arc really stands in Z.
   // Returns the fillet, or { error: 'parallel' } / { error:'radius', maxR }
   // for the degenerate cases (callers toast the reason).
   static filletCorner(G, corner, pA, pB, r) {
-    const u1 = G.norm(G.sub(pA, corner)), u2 = G.norm(G.sub(pB, corner));
-    if (!u1 || !u2 || !(r > 1e-9)) return { error: 'radius', maxR: 0 };
-    const theta = Math.acos(Math.max(-1, Math.min(1, G.dot(u1, u2))));
+    // in-plane basis from the legs' cross product (the plane normal)
+    const n3 = G.cross(G.sub(pA, corner), G.sub(pB, corner));
+    const ln = G.len(n3);
+    if (ln < 1e-12) return { error: 'parallel' };
+    const { u: e1, v: e2 } = G.basisForNormal(G.mul(n3, 1 / ln));
+    const to2 = p => G.to2D(p, corner, e1, e2);
+    const to3 = (x, y) => G.from2D(x, y, corner, e1, e2);
+    const A = to2(pA), B = to2(pB);
+    const lenA = Math.hypot(A.x, A.y), lenB = Math.hypot(B.x, B.y);
+    if (lenA < 1e-9 || lenB < 1e-9 || !(r > 1e-9)) return { error: 'radius', maxR: 0 };
+    const u1 = { x: A.x / lenA, y: A.y / lenA }, u2 = { x: B.x / lenB, y: B.y / lenB };
+    const theta = Math.acos(Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y)));
     if (theta < 0.05 || Math.PI - theta < 0.05) return { error: 'parallel' };
     const d = r / Math.tan(theta / 2);
-    const lenA = G.dist(corner, pA), lenB = G.dist(corner, pB);
     if (lenA <= d + 1e-9 || lenB <= d + 1e-9)
       return { error: 'radius', maxR: Math.min(lenA, lenB) * Math.tan(theta / 2) };
-    const ub = G.norm(G.add(u1, u2));
-    const C = G.add(corner, G.mul(ub, r / Math.sin(theta / 2)));
-    const T1 = G.add(corner, G.mul(u1, d)), T2 = G.add(corner, G.mul(u2, d));
+    const bl = Math.hypot(u1.x + u2.x, u1.y + u2.y);
+    const ub = { x: (u1.x + u2.x) / bl, y: (u1.y + u2.y) / bl };
+    const C = { x: ub.x * r / Math.sin(theta / 2), y: ub.y * r / Math.sin(theta / 2) };
+    const T1 = { x: u1.x * d, y: u1.y * d }, T2 = { x: u2.x * d, y: u2.y * d };
     // start/end angles measured at the arc center; the 2D cross decides the
     // sweep direction so T1→T2 takes the SHORT way, bulging toward the corner
     const startAngle = Math.atan2(T1.y - C.y, T1.x - C.x);
     const endAngle = Math.atan2(T2.y - C.y, T2.x - C.x);
     const cross2 = u1.x * u2.y - u1.y * u2.x;
     const dir = cross2 >= 0 ? -1 : 1;
-    const arc = DrawGeom.arcSweep(G, C, r, startAngle, endAngle, dir);
-    return { corner, center: C, radius: r, t1: T1, t2: T2, d, theta, pts: arc.pts, span: arc.span };
+    const arc = DrawGeom.arcSweep(G, { x: C.x, y: C.y, z: 0 }, r, startAngle, endAngle, dir);
+    return { corner, center: to3(C.x, C.y), radius: r, t1: to3(T1.x, T1.y), t2: to3(T2.x, T2.y),
+      d, theta, pts: arc.pts.map(p => to3(p.x, p.y)), span: arc.span };
   }
 
   // Location-line offset (Revit): D = p2 - p1 in the draw plane; the in-plane
@@ -189,13 +200,24 @@ class DrawGeom {
   // corner point (z from segment A) and each segment's far endpoint as seen
   // from the corner, or null when parallel / non-intersecting rays.
   static cornerFromEdges(G, a1, a2, b1, b2) {
-    const r = { x: a2.x - a1.x, y: a2.y - a1.y }, s = { x: b2.x - b1.x, y: b2.y - b1.y };
+    // Work in the plane the two lines SPAN: project onto the two axes least
+    // aligned with the plane normal, so vertical pairs (e.g. +X and +Z legs
+    // of a wall profile) intersect exactly like ground-plane ones — pure XY
+    // math read them as parallel (a Z leg projects to a point in XY).
+    const r3 = G.sub(a2, a1), s3 = G.sub(b2, b1);
+    const n = G.cross(r3, s3);
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    const P = az >= ay && az >= ax ? p => ({ x: p.x, y: p.y })
+      : ay >= ax ? p => ({ x: p.x, y: p.z })
+        : p => ({ x: p.y, y: p.z });
+    const A1 = P(a1), B1 = P(b1);
+    const r = { x: P(a2).x - A1.x, y: P(a2).y - A1.y }, s = { x: P(b2).x - B1.x, y: P(b2).y - B1.y };
     const den = r.x * s.y - r.y * s.x;
     if (Math.abs(den) < 1e-9) return null;
-    const t = ((b1.x - a1.x) * s.y - (b1.y - a1.y) * s.x) / den;
-    const u = ((b1.x - a1.x) * r.y - (b1.y - a1.y) * r.x) / den;
+    const t = ((B1.x - A1.x) * s.y - (B1.y - A1.y) * s.x) / den;
+    const u = ((B1.x - A1.x) * r.y - (B1.y - A1.y) * r.x) / den;
     if (t < -0.05 || t > 1.05 || u < -0.05 || u > 1.05) return null; // edges must actually cross
-    const corner = G.v(a1.x + r.x * t, a1.y + r.y * t, a1.z + (a2.z - a1.z) * t);
+    const corner = G.add(a1, G.mul(r3, t));
     // far endpoints: the half of each edge away from the corner (ties —
     // a corner mid-edge on the other line — resolve to the second endpoint)
     const far = (p, q) => G.dist(corner, q) >= G.dist(corner, p) ? q : p;

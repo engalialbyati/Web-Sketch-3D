@@ -145,6 +145,53 @@ module.exports = h => {
     near(big.maxR, 0.2, 1e-9, 'maxR = short leg × tan(theta/2) — the actionable bound');
   });
 
+  test('fillet in the Z AXIS: vertical-plane pairs intersect and round in their own plane', () => {
+    // +X and +Z legs (a wall profile corner): pure-XY math read the Z leg
+    // as a POINT — now the pair spans the XZ plane and fillets in it
+    const cx = DG.cornerFromEdges(G2, G2.v(-2, 0, 0), G2.v(4, 0, 0), G2.v(0, 0, -2), G2.v(0, 0, 4));
+    ok(cx, 'vertical pair crosses (was: falsely parallel)');
+    near(cx.corner.x, 0, 1e-9, 'corner x');
+    near(cx.corner.z, 0, 1e-9, 'corner z');
+    const f = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(4, 0, 0), G2.v(0, 0, 4), 1);
+    ok(f && !f.error, 'vertical fillet exists');
+    near(f.span, Math.PI / 2, 1e-6, 'quarter sweep in the XZ plane');
+    near(f.t1.z, 0, 1e-9, 't1 on the +X leg');
+    near(f.t2.x, 0, 1e-9, 't2 on the +Z leg');
+    near(f.center.x, 1, 1e-9, 'center at (r, 0, r)');
+    near(f.center.z, 1, 1e-9, 'center at (r, 0, r)');
+    for (const p of f.pts) near(p.y, 0, 1e-9, 'arc stands in the vertical plane (y=0)');
+    const mid = f.pts[Math.floor(f.pts.length / 2)];
+    near(mid.x, 1 - Math.SQRT1_2, 1e-6, 'arc midpoint faces the corner (x)');
+    near(mid.z, 1 - Math.SQRT1_2, 1e-6, 'arc midpoint faces the corner (z)');
+    // the YZ plane too — another orientation of the same construction
+    const fyz = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(0, 4, 0), G2.v(0, 0, 4), 1);
+    ok(fyz && !fyz.error, 'YZ fillet exists');
+    near(fyz.span, Math.PI / 2, 1e-6, 'YZ quarter sweep');
+    for (const p of fyz.pts) near(p.x, 0, 1e-9, 'arc stands in the YZ plane (x=0)');
+    // and the ground plane still behaves identically (regression)
+    const fxy = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(4, 0, 0), G2.v(0, 4, 0), 1);
+    ok(fxy && !fxy.error && Math.abs(fxy.span - Math.PI / 2) < 1e-6, 'XY fillet unchanged');
+  });
+
+  test('applyFilletToModel: a vertical wall profile fillet splices real 3D arc edges', () => {
+    const m = new extra.Model();
+    const e1 = m.addEdge(G2.v(-2, 0, 3), G2.v(4, 0, 3));   // horizontal leg
+    const e2 = m.addEdge(G2.v(0, 0, 3), G2.v(0, 0, 7));    // rising leg (Z)
+    const c = DG.cornerFromEdges(G2, m.vp(e1.a), m.vp(e1.b), m.vp(e2.a), m.vp(e2.b));
+    ok(c, 'vertical profile crosses');
+    const f = DG.filletCorner(G2, c.corner, c.pA, c.pB, 0.6);
+    ok(f && !f.error, 'vertical fillet exists');
+    extra.applyFillet(m, { ...f, edgeA: e1, edgeB: e2 });
+    const arcs = [...m.edges.values()].filter(e => e.curveId);
+    ok(arcs.length >= 6, `arc chains (${arcs.length} edges)`);
+    for (const e of arcs) for (const vi of [e.a, e.b]) {
+      const p = m.vp(vi);
+      near(p.y, 0, 1e-6, 'arc vertex stays in the legs\' plane (y=0)');
+      ok(p.z >= 3 - 1e-6 && p.x >= -1e-6, 'arc rounds INTO the vertical wedge');
+    }
+    ok(m.validate().ok, 'model valid after the vertical fillet');
+  });
+
   test('fillet refuses radii larger than the edges allow', () => {
     const f = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(0.2, 0, 0), G2.v(0, 2, 0), 0.5);
     ok(f && f.error === 'radius', 'edge too short for the tangent distance');
