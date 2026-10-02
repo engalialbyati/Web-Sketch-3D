@@ -248,6 +248,12 @@ const TOOL_DEFS = {
     { id: 'stripfoot', label: 'Strip Footing', key: '' },
     { id: 'brace', label: 'Brace', key: '' },
     { id: 'plate', label: 'Base Plate', key: '' },
+    { id: 'column', label: 'Column', key: '' },
+    { id: 'beam', label: 'Beam', key: '' },
+    { id: 'foundation', label: 'Foundation', key: '' },
+    { id: 'roof', label: 'Roof', key: '' },
+    { id: 'stairs', label: 'Stairs', key: '' },
+    { id: 'handrail', label: 'Handrail', key: '' },
     { id: 'convert', label: 'Convert to BIM', key: '' },
     'sep',
     { id: 'door', label: 'Door', key: '' },
@@ -341,47 +347,66 @@ const RIBBON_GROUPS = {
 const RIBBON_TABS = {
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: '2D Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
-    { title: 'Sketch', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
-    { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
+    { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
+    { title: 'Sketch', tools: ['draw'] },
+    { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array'] },
+    { title: 'Measure', tools: ['tape', 'measurearea'] },
   ] },
   model: { label: 'Model', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Create', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
+    { title: '3D Forms', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
+    { title: 'Building', tools: ['wall', 'floor', 'column', 'beam', 'roof', 'stairs'] },
     { title: 'Solids', tools: ['solid-union', 'solid-subtract', 'solid-trim', 'solid-intersect', 'solid-split', 'solid-shell'] },
-    { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array'] },
-    { title: 'Tools', tools: ['paint', 'eraser'] },
+    { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
+    { title: 'Tools', tools: ['paint', 'eraser', 'trim'] },
   ] },
-  insert: { label: 'Insert', groups: [
+  architecture: { label: 'Architecture', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
+    { title: 'Walls', tools: ['wall', 'curtain', 'sweep'] },
+    { title: 'Openings', tools: ['door', 'window', 'opening'] },
+    { title: 'Floors & Roof', tools: ['floor', 'ceiling', 'roof'] },
     { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
-    { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
-    { title: 'Hosts', tools: ['door', 'window', 'opening'] },
-    { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
-    { title: 'Libraries', tools: ['browser', 'families', 'assetlib', 'kit'] },
+    { title: 'Rooms', tools: ['room'] },
+    { title: 'Modify', tools: ['pushpull', 'resize', 'move', 'rotate', 'mirror', 'array'] },
   ] },
-  annotate: { label: 'Annotate', groups: [
+  structure: { label: 'Structure', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Annotate', tools: ['dim', 'dimang', 'dimrad', 'tag', 'text', 'spot', 'cloud', 'region'] },
-    { title: 'Views', tools: ['section', 'elevmark'] },
-    { title: 'Measure', tools: ['tape', 'measurearea'] },
-    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+    { title: 'Framing', tools: ['column', 'beam', 'brace'] },
+    { title: 'Foundation', tools: ['foundation', 'stripfoot', 'plate'] },
+    { title: 'Reinforcement', tools: ['rebar-element', 'rebar-column', 'rebar-stirrup', 'rebar-bbs'] },
+    { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
   ] },
   detailing: { label: 'Detailing', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Rebar', tools: ['rebar-element', 'rebar-column', 'rebar-straight', 'rebar-lshape', 'rebar-stirrup', 'rebar-ushape', 'rebar-bent', 'rebar-helical'] },
-        { title: 'Schedule', tools: ['rebar-bbs'] },
+    { title: 'Cages', tools: ['rebar-element', 'rebar-column'] },
+    { title: 'Bar Shapes', tools: ['rebar-straight', 'rebar-lshape', 'rebar-stirrup', 'rebar-ushape', 'rebar-bent', 'rebar-helical'] },
+    { title: 'Schedule', tools: ['rebar-bbs'] },
+    { title: 'Display', tools: ['xray', 'wire', 'shadows'] },
+  ] },
+  insert: { label: 'Insert', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
+    { title: 'Content & Catalogs', tools: ['browser', 'families', 'assetlib', 'kit'] },
+    { title: 'Convert & Interop', tools: ['convert'] },
+    { title: 'Placement', tools: ['gridplace'] },
+  ] },
+  annotate: { label: 'Annotate', groups: [
+    { title: 'Select', tools: ['select', 'edgeselect'] },
+    { title: 'Dimension', tools: ['dim', 'dimang', 'dimrad', 'spot'] },
+    { title: 'Notes & Tags', tools: ['tag', 'text', 'cloud', 'region'] },
+    { title: 'Views', tools: ['section', 'elevmark'] },
+    { title: 'Measure', tools: ['tape', 'measurearea'] },
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Navigate', tools: ['orbit', 'pan', 'zoomext', 'walk', 'lookaround'] },
-    { title: 'Palettes', tools: ['layers', 'browser'] },
+    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
+    { title: 'Palettes', tools: ['layers', 'browser', 'levelview'] },
   ] },
   manage: { label: 'Manage', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Quick', tools: ['undo', 'redo', 'zoomext'] },
-    { title: 'Palettes', tools: ['families'] },
+    { title: 'Project Datums', tools: ['levelsbtn', 'gridsbtn'] },
+    { title: 'Standards', tools: ['layers', 'families'] },
+    { title: 'History', tools: ['undo', 'redo', 'zoomext'] },
   ] },
 };
 
@@ -4733,6 +4758,10 @@ class App {
   _toolMode(id) {
     for (const mode of Object.keys(TOOL_DEFS))
       if (TOOL_DEFS[mode].some(t => t !== 'sep' && t.id === id)) return mode;
+    if (window.Engine) {
+      const f = Engine.features.get(id);
+      if (f && f.mode) return f.mode;
+    }
     return null;
   }
 
@@ -4810,6 +4839,11 @@ class App {
       for (const mode of ['free', 'bim', 'design'])
         for (const t of TOOL_DEFS[mode])
           if (t !== 'sep' && !byId.has(t.id)) byId.set(t.id, t);
+      if (window.Engine) {
+        for (const d of Engine.features.list('tool')) {
+          if (!byId.has(d.id)) byId.set(d.id, { id: d.id, label: d.label, key: d.key || '' });
+        }
+      }
     } else {
       const defs = TOOL_DEFS[this.mode].filter(t => t !== 'sep');
       groups = (RIBBON_GROUPS[this.mode] || []).map(g => ({ ...g }));
@@ -4856,7 +4890,8 @@ class App {
         const t = byId.get(id);
         if (!t) continue;
         const key = t.key ? ` (${t.key === 'Space' ? 'Space' : t.key})` : '';
-        mk(ICONS[t.id], t.label + key, '', JSON.stringify({ tool: t.id }), () => this.setTool(t.id));
+        const iconSvg = ICONS[t.id] || (window.Engine && Engine.features.get(t.id)?.icon) || '';
+        mk(iconSvg, t.label + key, '', JSON.stringify({ tool: t.id }), () => this.setTool(t.id));
       }
     }
     this._syncLevelViewControl(); // populate/show the Level View select if a standard view is locked
