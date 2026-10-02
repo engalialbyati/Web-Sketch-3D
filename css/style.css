@@ -56,7 +56,10 @@ body {
   height: 38px;
   flex: none;
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
-  z-index: 20;
+  /* the bar is ONE stacking context for its dropdowns (z 300 inside); it
+     must sit above the dock columns (z 20-100) or every File/Edit menu
+     opens BEHIND the panels */
+  z-index: 150;
   gap: 2px;
 }
 .brand {
