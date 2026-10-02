@@ -5158,7 +5158,7 @@ class App {
         ['Paste Aligned to Level…', 'pasteAligned', ''],
         ['Delete', 'deleteSelection', 'Del'], '-',
         ['Select All', 'selectAll', 'Ctrl+A'], ['Deselect All', 'deselect', ''],
-        ['Clean Up Stray Lines', 'cleanupWires', ''],
+        ['Clean Up Stray Lines', 'cleanupWires', ''], ['Audit & Repair Model', 'auditRepair', ''],
         ['Unhide All Edges', 'unhideAll', ''],
         ['Reverse Faces', 'reverseFaces', ''], '-',
         ['Group', 'group', 'Ctrl+G'],
@@ -5548,6 +5548,7 @@ class App {
       pasteAligned: () => A.pasteAlignedToLevel(),
       sunSettings: () => A.sunSettings(),
       interference: () => A.interferenceCheck(),
+      auditRepair: () => A.auditRepair(),
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
       georef: () => A.georefDialog(),
@@ -10017,6 +10018,54 @@ class App {
     a.click();
     const parts = Object.entries(r.counts).map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`);
     this.toast(`Exported model.ifc — ${r.entities} IFC entities (${parts.join(', ')})${r.warn ? ' · ' + r.warn : ''}`);
+  }
+  // ---- Audit & Repair: find structurally torn faces and heal ----------------
+  // Torn = ring pair without an edge, vertex visited twice, or a self-loop
+  // edge. Torn faces of parametric walls are removed and the walls rebuild
+  // parametrically; non-parametric torn faces are removed (their decor can
+  // be redrawn). Iterated up to 5 rounds; reports what was repaired.
+  auditRepair() {
+    const m = this.model;
+    let round = 0, removedTorn = 0, rebuiltWalls = 0, loops = 0;
+    const owners = new Set();
+    for (;;) {
+      round++;
+      const bad = new Set();
+      const v = m.validate();
+      for (const e of (v.errors || [])) {
+        const mt = /face (\d+)/.exec(typeof e === 'string' ? e : e.msg || JSON.stringify(e));
+        if (mt) bad.add(+mt[1]);
+      }
+      for (const f of m.faces.values()) {
+        for (const ring of m.rings(f)) {
+          const seen = new Set();
+          for (const vv of ring) { if (seen.has(vv)) bad.add(f.id); seen.add(vv); }
+          for (let i = 0; i < ring.length; i++) if (!m.findEdge(ring[i], ring[(i + 1) % ring.length])) bad.add(f.id);
+          if (ring.length < 3) bad.add(f.id);
+        }
+      }
+      if (!bad.size || round > 5) break;
+      for (const fid of bad) {
+        const f = m.faces.get(fid);
+        const st = f && f.userData && f.userData.bimEntityId;
+        if (st && this.bim.getEntityById(st)) owners.add(st);
+        m.faces.delete(fid);
+        removedTorn++;
+      }
+      for (const [id, e] of [...m.edges]) if (e.a === e.b) { m.edges.delete(id); loops++; }
+      m.gc();
+      // parametric rebuild of every affected wall
+      for (const st of owners) {
+        const e2 = this.bim.getEntityById(st);
+        if (e2 && e2.type === 'wall' && !(e2.params && e2.params.fixed) && this.bim.rebuildWallWithHosts(st)) rebuiltWalls++;
+      }
+      owners.clear();
+      m.touch();
+    }
+    const v = m.validate();
+    this.view.rebuild();
+    this.view.invalidate();
+    this.toast(`Audit & Repair: ${removedTorn} torn faces removed, ${rebuiltWalls} walls rebuilt, ${loops} self-loops — model ${v.ok ? 'valid ✓' : 'still has ' + (v.errors || []).length + ' issues'}`);
   }
   // ---- DXF export (drafting handoff) ----------------------------------------
   exportDxf() {
