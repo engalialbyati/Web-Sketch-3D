@@ -229,11 +229,26 @@
     headDraggable();
     head.title = 'Drag to float · drop near an edge to dock · double-click docks left';
     if (!head.querySelector('.dk-title')) {
-      head.innerHTML = `<span class="dk-grip">⋮⋮</span><span class="dk-title"></span>
-        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
-        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
-        <button class="dk-btn dk-min"   title="Collapse / expand">▾</button>
-        <button class="dk-btn dk-x"     title="Hide (reopen from toolbar)">✕</button>`;
+      head.innerHTML = `<span class="dk-grip" title="Drag to float or dock">
+          <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+            <circle cx="2" cy="2" r="1.2"/><circle cx="8" cy="2" r="1.2"/>
+            <circle cx="2" cy="7" r="1.2"/><circle cx="8" cy="7" r="1.2"/>
+            <circle cx="2" cy="12" r="1.2"/><circle cx="8" cy="12" r="1.2"/>
+          </svg>
+        </span>
+        <span class="dk-title"></span>
+        <button class="dk-btn dk-dockl" title="Dock to Left Sidebar">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <button class="dk-btn dk-dockr" title="Dock to Right Sidebar">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+        <button class="dk-btn dk-min" title="Collapse / Expand">
+          <svg class="dk-chev-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="dk-btn dk-x" title="Close Panel">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>`;
     }
     const titleEl = head.querySelector('.dk-title');
     if (titleEl) titleEl.textContent = opts.title || opts.key;
@@ -265,7 +280,12 @@
       panel.classList.toggle('dk-right', st.dock === 'right');
       panel.classList.toggle('dk-float', st.dock === 'float');
       const min = head.querySelector('.dk-min');
-      if (min) min.textContent = st.collapsed ? '▸' : '▾';
+      if (min) {
+        min.setAttribute('aria-expanded', !st.collapsed);
+        if (!min.querySelector('svg')) {
+          min.textContent = st.collapsed ? '▸' : '▾';
+        }
+      }
       if (st.dock === 'float') {
         const vp = document.getElementById('viewport').getBoundingClientRect();
         const c  = clampXY(st.x, st.y, vp.width, vp.height);
