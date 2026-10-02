@@ -5085,6 +5085,7 @@ class App {
       ]],
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
+        ['Entity Info', 'entityInfoShow'],
         ['Bar Bending Schedule', 'bbsDlg'],
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
@@ -5157,6 +5158,29 @@ class App {
       });
       bar.appendChild(m);
     }
+    // Surfaced quick tools on right side of menubar
+    const qTools = document.createElement('div');
+    qTools.id = 'menu-quick-tools';
+    qTools.className = 'menu-quick-tools';
+    const quickDefs = [
+      { id: 'mq-script', label: 'Scripted', title: 'Scripted Element Editor (Tools ▸ Scripted Element)', icon: ICONS.draw || '✎', act: 'openScript' },
+      { id: 'mq-mat', label: 'Materials', title: 'Materials Palette (Tools ▸ Materials)', icon: ICONS.paint || '🎨', act: 'materialsDlg' },
+      { id: 'mq-asset', label: 'Asset Lib', title: 'Asset Library (Tools ▸ Asset Library)', icon: ICONS.assetlib || '📦', act: 'assetLibDlg' },
+      { id: 'mq-sched', label: 'Schedules', title: 'Element Schedules (View ▸ Schedules)', icon: '📋', act: 'schedDlg' },
+      { id: 'mq-bbs', label: 'BBS', title: 'Bar Bending Schedule (View ▸ Bar Bending Schedule)', icon: ICONS['rebar-bbs'] || '📊', act: 'bbsDlg' },
+      { id: 'mq-render', label: 'Blender Render', title: 'Render Scene with Blender (Tools ▸ Render with Blender)', icon: '✨', act: 'renderDay' },
+      { id: 'mq-png', label: 'Snapshot', title: 'Export PNG Snapshot (File ▸ Export PNG)', icon: '📷', act: 'exportPng' },
+    ];
+    quickDefs.forEach(q => {
+      const btn = document.createElement('button');
+      btn.className = 'mq-btn';
+      btn.title = q.title;
+      btn.innerHTML = `<span class="mq-icon">${q.icon}</span><span class="mq-label">${q.label}</span>`;
+      btn.addEventListener('click', () => this.action(q.act));
+      qTools.appendChild(btn);
+    });
+    bar.appendChild(qTools);
+
     window.addEventListener('mousedown', () => this._closeMenus());
   }
   _openMenu(m, name, items) {
@@ -5336,6 +5360,13 @@ class App {
       materialsDlg: () => { if (window.MaterialsFeature) MaterialsFeature.materialsDialog(A); },
       meshToFacesDlg: () => { if (window.MeshToFaces) MeshToFaces.dialog(A); },
       assetLibDlg: () => { if (window.AssetLib) AssetLib.dialog(A); },
+      // the ✕ on the dockable Entity Info panel hid it with no way back —
+      // this restores it (docked wherever it last lived)
+      entityInfoShow: () => {
+        const p = window.__entityInfoPanel;
+        if (p && p.setVisible) { p.setVisible(true); A.toast('Entity Info restored — drag its title bar to dock left/right or float it'); }
+        else A.toast('Entity Info panel is not available in this build', true);
+      },
       renderDay: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, false); },
       renderNight: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, true); },
       surveyCsv: () => { if (window.RenderFeature) RenderFeature.importSurveyCsvFile ? RenderFeature.importSurveyCsvFile(A) : A.toast('Use Tools ▸ Import Survey CSV', true); },
