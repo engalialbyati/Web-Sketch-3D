@@ -2447,6 +2447,21 @@ class PaintTool extends Tool {
       app.toast('Material sampled');
       return;
     }
+    // MULTI-SELECT PAINT: 2+ faces selected → the bucket coats the whole
+    // selection (one undo step); a single/empty selection keeps the classic
+    // click-a-face (or click-a-group) behavior
+    if (app.sel && app.sel.faces && app.sel.faces.size >= 2) {
+      const picked = [...app.sel.faces];
+      app.run('paint selection', m => {
+        for (const id of picked) {
+          const ff = m.faces.get(id);
+          if (ff) { ff.color = app.currentMaterial.color; ff.alpha = app.currentMaterial.alpha; ff.matId = app.currentMaterial.matId || null; }
+        }
+        m.touch();
+      });
+      app.toast(`Painted ${picked.length} selected faces with "${app.currentMaterial.name}"`);
+      return;
+    }
     app.run('paint', m => {
       // painting a grouped face (outside group edit mode) paints the whole group
       const targets = f.gid && app.activeGroup !== f.gid

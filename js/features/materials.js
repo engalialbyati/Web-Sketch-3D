@@ -171,6 +171,13 @@
         return ff.userData && ff.userData.assetGid === gid;
       });
     }
+    // A KERNEL GROUP paints as one unit — the same whole-group rule the
+    // Paint Bucket already follows (drop on any member face, the group's
+    // whole body takes the material)
+    if (f.gid) {
+      const gf = m.groupEntities(f.gid).faces;
+      if (gf && gf.size) return [...gf];
+    }
     return [fid];
   }
 
@@ -223,6 +230,19 @@
     }
     const fid = v.pickFaceAt(v.eventPt(ev));
     if (!fid) { app.toast('Drop the material ON a face (wall, floor, roof…)', true); return false; }
+    // MULTI-SELECT PAINT: with 2+ faces selected the drop paints THE
+    // SELECTION — the way to coat several separate things at once, and with
+    // the shared world-space texture mapping they pattern as one surface
+    if (app.sel && app.sel.faces && app.sel.faces.size >= 2) {
+      const picked = [...app.sel.faces];
+      app.run('paint selection', mm => {
+        stamp(mm, picked, mat);
+        mm.touch();
+      });
+      rebuildPass(app);
+      app.toast(`${(mat && mat.name) || 'Material'} painted on ${picked.length} selected faces — one continuous pattern`);
+      return true;
+    }
     const targets = paintTargets(m, fid, app.bim ? app.bim.entities : []);
     if (!targets.length) {
       app.toast('The opening itself stays unpainted — drop on a wall to paint the wall, or on a door/window LEAF to paint it');
@@ -346,37 +366,46 @@
       const outer = m.pts(f.loop);
       const n = G.loopNormal(outer);
       if (G.isZero(n)) continue;
-      const { u, v } = G.basisForNormal(n);
-      const o = outer[0];
-      const t2 = p => ({ x: (p.x - o.x) * u.x + (p.y - o.y) * u.y + (p.z - o.z) * u.z, y: (p.x - o.x) * v.x + (p.y - o.y) * v.y + (p.z - o.z) * v.z });
-      const from2 = p => ({ x: o.x + p.x * u.x + p.y * v.x, y: o.y + p.x * u.y + p.y * v.y, z: o.z + p.x * u.z + p.y * v.z });
-      const uv = p => [p.x / mat.texture.size, p.y / mat.texture.size];
+      // WORLD-SPACE BOX MAPPING: the projection plane follows the face's
+      // dominant normal axis, but u/v are FIXED world axes measured from the
+      // world origin — every face carrying this material shares ONE
+      // continuous texture space. Coplanar neighbours (a split slab, twin
+      // wall strips) pattern as if they were a single face instead of each
+      // restarting the tile at its own first vertex.
+      const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+      let U, V;
+      if (ax >= ay && ax >= az) { U = G.v(0, 1, 0); V = G.v(0, 0, 1); } // ±X face → YZ plane
+      else if (ay >= az) { U = G.v(1, 0, 0); V = G.v(0, 0, 1); }        // ±Y face → XZ plane
+      else { U = G.v(1, 0, 0); V = G.v(0, 1, 0); }                      // ±Z face → XY plane
+      const uvOf = p => [G.dot(p, U) / mat.texture.size, G.dot(p, V) / mat.texture.size];
+      const t2 = p => ({ x: G.dot(p, U), y: G.dot(p, V) });
       const pos = [], uvs = [];
+      const holes3 = (f.holes || []).map(h => m.pts(h));
       // HOLE-AWARE triangulation: a fanned outer ring paints a SOLID quad
       // across every opening — a textured wall covered its windows. Same
-      // ShapeUtils path the face renderer itself uses.
+      // ShapeUtils path the face renderer itself uses. Indices address the
+      // 2D contour and the untouched 3D points in parallel.
       const contour = outer.map(t2);
-      const holes = (f.holes || []).map(h => m.pts(h).map(t2));
+      const holes = holes3.map(h => h.map(t2));
       let tris;
       try {
         tris = THREE.ShapeUtils.triangulateShape(
           contour.map(p => new THREE.Vector2(p.x, p.y)),
           holes.map(h => h.map(p => new THREE.Vector2(p.x, p.y))));
       } catch (e) { tris = []; }
+      const all3 = outer.concat(...holes3);
       if (!tris.length) { // degenerate hole layout: fan the outer ring only
-        for (let i = 1; i + 1 < contour.length; i++)
+        for (let i = 1; i + 1 < outer.length; i++)
           for (const idx of [0, i, i + 1]) {
-            const p3 = from2(contour[idx]);
+            const p3 = outer[idx];
             pos.push(p3.x, p3.y, p3.z);
-            uvs.push(...uv(contour[idx]));
+            uvs.push(...uvOf(p3));
           }
       } else {
-        const all = contour.concat(...holes);
         for (const t of tris) for (const idx of t) {
-          const p2 = all[idx];
-          const p3 = from2(p2);
+          const p3 = all3[idx];
           pos.push(p3.x, p3.y, p3.z);
-          uvs.push(...uv(p2));
+          uvs.push(...uvOf(p3));
         }
       }
       if (!pos.length) continue;
@@ -529,5 +558,5 @@
       if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged();
     });
   }
-  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass, paintTargets, avgTextureColor, attrJSON, MAT_MIME };
+  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass, paintTargets, paintDropAt, avgTextureColor, attrJSON, MAT_MIME };
 })();

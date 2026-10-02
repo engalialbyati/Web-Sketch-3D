@@ -2822,6 +2822,9 @@ class App {
     this.axisLocks = new Set();
     this.activeGroup = null; // gid being edited (double-click to enter)
     this.axesOn = true; this.gridOn = true; this.edgesOn = true;
+    // presentation state survives reloads: edges-off for clean screenshots
+    // and live presenting must not reset on the next page load
+    try { if (localStorage.getItem('websketch3d.edges') === '0') this.edgesOn = false; } catch (e) { }
     this.gridSnap = false; // F9: snap drawing points to the 1 m grid
     this.shadowsOn = true; this.fogOn = true; this.xrayOn = false;
     try { this.perfHudOn = !!localStorage.getItem('websketch3d.perfhud'); } catch (e) { this.perfHudOn = false; }
@@ -2830,6 +2833,7 @@ class App {
 
     const vp = document.getElementById('viewport');
     this.view = new Viewport(vp, this);
+    if (!this.edgesOn) this.view.setEdges(false); // honored from the saved presentation state
     // display settings restored from the last session (Display Settings dialog)
     try {
       const rc = localStorage.getItem('websketch3d.rebarColor');
@@ -5514,7 +5518,12 @@ class App {
       toggleAxes: () => { A.axesOn = !A.axesOn; A.view.setAxes(A.axesOn); },
       toggleGrid: () => { A.gridOn = !A.gridOn; A.view.setGrid(A.gridOn); },
       toggleGridSnap: () => A.toggleGridSnap(),
-      toggleEdges: () => { A.edgesOn = !A.edgesOn; A.view.setEdges(A.edgesOn); },
+      toggleEdges: () => {
+        A.edgesOn = !A.edgesOn;
+        try { localStorage.setItem('websketch3d.edges', A.edgesOn ? '1' : '0'); } catch (e) { }
+        A.view.setEdges(A.edgesOn);
+        A.toast(A.edgesOn ? 'Edges: on' : 'Edges hidden — View ▸ Edges brings them back (presenting mode)');
+      },
       toggleShadows: () => { A.shadowsOn = !A.shadowsOn; A.view.setShadows(A.shadowsOn); },
       togglePerfHud: () => {
         A.view.perfHud = !A.view.perfHud;
@@ -6149,6 +6158,21 @@ class App {
       const g = this.model.groups.get(pick.group);
       items.push([`Edit Group "${g ? g.name : ''}"`, () => this.enterGroup(pick.group)]);
       items.push(['Rename Group…', () => this.renameGroupDialog(pick.group)]);
+      // the whole group body takes the current material in one step (the
+      // Paint Bucket's whole-group rule, reachable from the menu)
+      items.push([`Paint Group (${this.currentMaterial.name})`, () => {
+        const faces = [...this.model.groupEntities(pick.group).faces];
+        if (!faces.length) { this.toast('That group has no faces', true); return; }
+        this.run('paint group', m => {
+          for (const id of faces) {
+            const ff = m.faces.get(id);
+            if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; ff.matId = this.currentMaterial.matId || null; }
+          }
+          m.touch();
+        });
+        if (window.MaterialsFeature && MaterialsFeature.rebuildPass) MaterialsFeature.rebuildPass(this);
+        this.toast(`Painted ${faces.length} faces of "${g ? g.name : 'group'}"`);
+      }]);
       items.push(['Select Group', () => this.selectGroup(pick.group)]);
       if (g && g.solid) items.push(['Make Hollow', () => this.makeSolid(pick.group, false)]);
       else {
@@ -6178,8 +6202,21 @@ class App {
       // (same as triple-clicking) — ready to group or convert to an element
       if (f && this.mode === 'free' && !(f.userData && f.userData.bimEntityId))
         items.push(['Select Connected Body', () => this.selectConnectedBody(pick.face)]);
-      items.push([`Paint (${this.currentMaterial.name})`, () => {
-        this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; ff.matId = this.currentMaterial.matId || null; } m.touch(); });
+      items.push([this.sel.faces.size >= 2
+        ? `Paint ${this.sel.faces.size} Selected Faces (${this.currentMaterial.name})`
+        : `Paint (${this.currentMaterial.name})`, () => {
+        // selection-aware: 2+ faces selected → coat the selection (one
+        // undo step, one continuous texture pattern); otherwise the
+        // clicked face / its element
+        const ids = this.sel.faces.size >= 2 ? [...this.sel.faces] : [pick.face];
+        this.run('paint', m => {
+          for (const id of ids) {
+            const ff = m.faces.get(id);
+            if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; ff.matId = this.currentMaterial.matId || null; }
+          }
+          m.touch();
+        });
+        if (window.MaterialsFeature && MaterialsFeature.rebuildPass) MaterialsFeature.rebuildPass(this);
       }]);
       items.push(['Reverse Face', () => { this.run('reverse face', m => { const ff = m.faces.get(pick.face); if (ff) ff.loop.reverse(); }); }]);
       items.push(['Push/Pull', () => this.setTool('pushpull')]);

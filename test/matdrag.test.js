@@ -7,7 +7,7 @@
 // paints just itself.
 module.exports = async h => {
   const { loadModel, test, ok, eq } = h;
-  const L = loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/app.js', 'js/tools/assets.js', 'js/features/onlinelib.js', 'js/features/materials.js']);
+  const L = loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/lib/three.min.js', 'js/app.js', 'js/tools/assets.js', 'js/features/onlinelib.js', 'js/features/materials.js']);
   const w = L.window;
   const { G, Model, StructuralManager, BimTools, AssetTools, OnlineLib, MaterialsFeature: MD, BimEntityManager } = w;
 
@@ -166,5 +166,82 @@ module.exports = async h => {
     const back = JSON.parse(attr.replace(/&quot;/g, '"'));
     eq(back.matId, 'mat_"quoted"', 'payload round-trips');
     eq(MD.MAT_MIME, 'application/x-websketch-material', 'drag mime stable');
+  });
+
+  test('paintTargets: a GROUPED face paints the whole group', () => {
+    const m2 = new Model();
+    const fa = m2.addFaceFromRings([G.v(0, 0, 3), G.v(1, 0, 3), G.v(1, 1, 3), G.v(0, 1, 3)]);
+    const fb = m2.addFaceFromRings([G.v(5, 0, 3), G.v(6, 0, 3), G.v(6, 1, 3), G.v(5, 1, 3)]);
+    const g = m2.createGroup({ faces: new Set([fa.id, fb.id]), edges: new Set() }, 'Body');
+    const t = MD.paintTargets(m2, fa.id, []);
+    eq(t.length, 2, 'the whole group resolves');
+    ok(t.includes(fa.id) && t.includes(fb.id), 'both member faces are targets');
+    const g2 = m2.groups.get(g.id);
+    eq(g2.name, 'Body', 'group exists');
+  });
+
+  test('paintDropAt: 2+ selected faces → the drop paints the SELECTION', () => {
+    const m2 = new Model();
+    const fa = m2.addFaceFromRings([G.v(0, 0, 0), G.v(1, 0, 0), G.v(1, 1, 0), G.v(0, 1, 0)]);
+    const fb = m2.addFaceFromRings([G.v(3, 0, 0), G.v(4, 0, 0), G.v(4, 1, 0), G.v(3, 1, 0)]);
+    const fc = m2.addFaceFromRings([G.v(6, 0, 0), G.v(7, 0, 0), G.v(7, 1, 0), G.v(6, 1, 0)]);
+    m2.materials.set('mat_sel', { id: 'mat_sel', name: 'Selection Wood', color: '#8a5a2a', alpha: 1, texture: { kind: 'wood', size: 1 } });
+    let ran = null;
+    const app2 = {
+      model: m2, bim: { entities: [] },
+      sel: { faces: new Set([fa.id, fb.id]), edges: new Set() },
+      run: (l, fn) => { ran = l; fn(m2); },
+      toast() { }, setStatus() { },
+      view: { pickFaceAt: () => fc.id, eventPt: () => ({ x: 0, y: 0 }), scene: null, invalidate() { } },
+    };
+    ok(MD.paintDropAt(app2, m2.materials.get('mat_sel'), {}), 'drop handled');
+    eq(ran, 'paint selection', 'one transaction for the whole selection');
+    eq(m2.faces.get(fa.id).matId, 'mat_sel', 'first selected face painted');
+    eq(m2.faces.get(fb.id).matId, 'mat_sel', 'second selected face painted');
+    ok(!m2.faces.get(fc.id).matId, 'the UNSELECTED face under the cursor stays untouched');
+  });
+
+  test('texture pass: ONE world texture space — adjacent faces pattern continuously', () => {
+    const THREE2 = w.THREE;
+    ok(THREE2, 'THREE available in the harness');
+    // canvas stub for the procedural texture painter (no DOM in the vm)
+    const stubCanvas = () => {
+      const c = { width: 0, height: 0 };
+      c.getContext = () => new Proxy({}, { get: (t, k) => k === 'canvas' ? c : () => { }, set: () => true });
+      return c;
+    };
+    L.sandbox.document = { createElement: () => stubCanvas() };
+    const m2 = new Model();
+    m2.materials.set('mat_w', { id: 'mat_w', name: 'Wood', color: null, alpha: 1, texture: { kind: 'wood', size: 1 } });
+    // two coplanar slabs side by side, sharing the x=2 edge
+    const fa = m2.addFaceFromRings([G.v(0, 0, 0), G.v(2, 0, 0), G.v(2, 2, 0), G.v(0, 2, 0)]);
+    const fb = m2.addFaceFromRings([G.v(2, 0, 0), G.v(4, 0, 0), G.v(4, 2, 0), G.v(2, 2, 0)]);
+    fa.matId = fb.matId = 'mat_w';
+    const scene = new THREE2.Scene();
+    const app2 = { model: m2, sel: { faces: new Set(), edges: new Set() }, view: { scene, invalidate() { } } };
+    MD.rebuildPass(app2);
+    eq(app2._texturePass.children.length, 2, 'one overlay mesh per face');
+    const uvAt = mesh => {
+      const pos = mesh.geometry.getAttribute('position'), uv = mesh.geometry.getAttribute('uv');
+      const map = new Map();
+      for (let i = 0; i < pos.count; i++) {
+        const k = [pos.getX(i).toFixed(6), pos.getY(i).toFixed(6), pos.getZ(i).toFixed(6)].join(',');
+        map.set(k, [uv.getX(i), uv.getY(i)]);
+      }
+      return map;
+    };
+    const A = uvAt(app2._texturePass.children[0]), B = uvAt(app2._texturePass.children[1]);
+    let shared = 0, agree = 0;
+    for (const [k, u] of A) if (B.has(k)) {
+      shared++;
+      const b = B.get(k);
+      if (Math.abs(b[0] - u[0]) < 1e-6 && Math.abs(b[1] - u[1]) < 1e-6) agree++;
+    }
+    ok(shared >= 2, `the meshes share the seam vertices (${shared})`);
+    eq(agree, shared, 'every shared vertex carries the IDENTICAL uv — no pattern restart at the seam');
+    // world mapping: a +Z face projects XY, so u tracks world x exactly
+    const u0 = A.get('0.000000,0.000000,0.000000'), u2 = A.get('2.000000,0.000000,0.000000');
+    ok(u0 && u2, 'corner vertices present');
+    ok(Math.abs(u0[0]) < 1e-6 && Math.abs(u2[0] - 2) < 1e-6, 'u = world x / tile size (no per-face origin)');
   });
 };
