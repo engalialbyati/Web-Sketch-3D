@@ -5115,11 +5115,12 @@ class App {
         '-', ['Analytical Model', 'analytical', ''], ['Export Analytical CSV…', 'analyticalCsv', ''],
         ['Truss Generator…', 'trussDlg', ''], ['Property Lines…', 'propDlg', ''],
         '-', ['Export PNG', 'exportPng', ''], ['Export glTF…', 'exportGltf', ''],
-        ['Export IFC…', 'exportIfc', ''], ['Print Sheet…', 'printSheet', ''],
+        ['Export IFC…', 'exportIfc', ''], ['Export DXF…', 'exportDxf', ''], ['Print Sheet…', 'printSheet', ''],
       ]],
       ['Edit', [
         ['Undo', 'undo', 'Ctrl+Z'], ['Redo', 'redo', 'Ctrl+Y'], '-',
         ['Cut', 'cut', 'Ctrl+X'], ['Copy', 'copy', 'Ctrl+C'], ['Paste', 'paste', 'Ctrl+V'],
+        ['Paste Aligned to Level…', 'pasteAligned', ''],
         ['Delete', 'deleteSelection', 'Del'], '-',
         ['Select All', 'selectAll', 'Ctrl+A'], ['Deselect All', 'deselect', ''],
         ['Clean Up Stray Lines', 'cleanupWires', ''],
@@ -5162,6 +5163,7 @@ class App {
         ['Standard View: Back', 'viewBack', ''], ['Standard View: Left', 'viewLeft', ''],
         ['Standard View: Right', 'viewRight', ''], '-',
         ['Exit Section View', 'exitSection', ''],
+        ['Sun Settings…', 'sunSettings', ''],
         ['Zoom Extents', 'zoomExtents', 'Ctrl+Shift+E'],
       ]],
       ['Draw', [
@@ -5181,6 +5183,7 @@ class App {
         ['Render with Blender (day)', 'renderDay', ''],
         ['Render with Blender (night)', 'renderNight', ''],
         ['Import Survey CSV…', 'surveyCsv', ''],
+        ['Interference Check…', 'interference', ''],
         ['Union (Solids)', 'solidUnion', ''], ['Subtract (Solids)', 'solidSubtract', ''],
         ['Trim (Solids)', 'solidTrim', ''], ['Intersect (Solids)', 'solidIntersect', ''],
         ['Split (Solids)', 'solidSplit', ''], ['Outer Shell (Solids)', 'solidShell', ''],
@@ -5478,6 +5481,10 @@ class App {
       unhideAll: () => A.unhideAllEdges(),
       exportGltf: () => A.exportGltf(),
       exportIfc: () => A.exportIfc(),
+      exportDxf: () => A.exportDxf(),
+      pasteAligned: () => A.pasteAlignedToLevel(),
+      sunSettings: () => A.sunSettings(),
+      interference: () => A.interferenceCheck(),
       editInPlace: () => A.editInPlaceFromSelection(),
       levels: () => A.levelsDialog(),
       georef: () => A.georefDialog(),
@@ -6239,6 +6246,12 @@ class App {
       const f = this.model.faces.get(pick.face);
       const pent = f && this.bim.getEntityForFace(f);
       if (pent && !this._eip) items.push([`Edit In Place — ${pent.type} ${pent.id}`, () => this.enterEditInPlace(pent.id)]);
+      // Revit's context staples: every instance of this type, and arm the
+      // tool with this element's type to place another
+      if (pent && !this._eip) {
+        items.push([`Select All Instances — ${pent.type}${pent.params && pent.params.name ? ' "' + pent.params.name + '"' : ''}`, () => this.selectAllInstances(pent)]);
+        items.push([`Create Similar — ${pent.type}`, () => this.createSimilar(pent)]);
+      }
       // the whole body from one click: swept/extruded solids grabbed as one
       // (same as triple-clicking) — ready to group or convert to an element
       if (f && this.mode === 'free' && !(f.userData && f.userData.bimEntityId))
@@ -9870,6 +9883,136 @@ class App {
     a.click();
     const parts = Object.entries(r.counts).map(([k, v]) => `${v} ${k}${v > 1 ? 's' : ''}`);
     this.toast(`Exported model.ifc — ${r.entities} IFC entities (${parts.join(', ')})${r.warn ? ' · ' + r.warn : ''}`);
+  }
+  // ---- DXF export (drafting handoff) ----------------------------------------
+  exportDxf() {
+    if (!window.DxfWriter) { this.toast('DXF writer not loaded', true); return; }
+    if (!this.model.edges.size) { this.toast('Nothing to export — draw something first', true); return; }
+    const unit = this._dxfUnit || 'mm';
+    const text = DxfWriter.modelToDxf(this.model, { unit });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type: 'application/dxf' }));
+    a.download = 'plan.dxf';
+    a.click();
+    this.toast(`Exported plan.dxf — ${this.model.edges.size} lines as ${unit} DXF (layers per category)`);
+  }
+  // ---- Interference Check (clash detection) ---------------------------------
+  interferenceCheck() {
+    if (!window.Interference) { this.toast('Interference module not loaded', true); return; }
+    const ents = this.bim.entities.filter(e => e.faces && e.faces.length);
+    if (ents.length < 2) { this.toast('Need at least two elements to check interference', true); return; }
+    const clashes = Interference.interference(this.model, ents);
+    this._lastClashes = clashes;
+    const rows = clashes.length
+      ? clashes.slice(0, 200).map((c, i) => {
+        const p = c.points[0];
+        return `<tr data-clash="${i}" style="cursor:pointer">
+          <td>${c.a.type} ${c.a.id}</td><td>${c.b.type} ${c.b.id}</td>
+          <td>${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}</td></tr>`;
+      }).join('')
+      : '';
+    this.dialog('Interference Check — ' + (clashes.length
+      ? `${clashes.length} clash${clashes.length === 1 ? '' : 'es'} found` : 'no clashes — the model is clean'), `
+      <div class="dim" style="margin:0 0 8px">Solid-vs-solid check between every pair of elements
+        (AABB broad phase, triangle narrow phase). Click a row to select both elements.</div>
+      ${clashes.length ? `<table class="ob-table" style="width:100%;border-collapse:collapse">
+        <tr style="text-align:left"><th>Element A</th><th>Element B</th><th>First clash point (m)</th></tr>${rows}
+      </table>` : '<p>✓ No hard interferences between elements.</p>'}`,
+      [['Select All Clashing', clashes.length ? () => {
+        const ids = new Set();
+        for (const c of clashes) { ids.add(c.a.id); ids.add(c.b.id); }
+        this.selectEntitiesByIds([...ids]);
+        return false; // keep the dialog open
+      } : null], ['Close', null]]);
+    const tbl = document.querySelector('#dialog-backdrop table');
+    if (tbl) tbl.addEventListener('click', ev => {
+      const tr = ev.target.closest('tr[data-clash]');
+      if (!tr) return;
+      const c = clashes[+tr.dataset.clash];
+      this.selectEntitiesByIds([c.a.id, c.b.id]);
+      if (this.zoomToSelection) this.zoomToSelection();
+    });
+  }
+  selectEntitiesByIds(ids) {
+    const faces = new Set();
+    for (const id of ids) {
+      const e = this.bim.getEntityById(id);
+      if (e) for (const fid of e.faces) if (this.model.faces.has(fid)) faces.add(fid);
+    }
+    if (!faces.size) { this.toast('Those elements are gone'); return; }
+    this.sel = { faces, edges: new Set() };
+    this.onSelectionChanged();
+  }
+  // ---- Select All Instances / Create Similar --------------------------------
+  selectAllInstances(ent) {
+    // same type + same name family (fixed/converted share the name) — the
+    // Revit SA rule: one "type", every instance of it
+    const key = e => e.type + '|' + ((e.params || {}).name || '') + '|' + ((e.params || {}).thickness || '') + '|' + ((e.params || {}).width || '') + 'x' + ((e.params || {}).depth || '');
+    const k = key(ent);
+    const same = this.bim.entities.filter(e => key(e) === k);
+    this.selectEntitiesByIds(same.map(e => e.id));
+    this.toast(`${same.length} instance${same.length === 1 ? '' : 's'} of ${ent.type}${ent.params && ent.params.name ? ' "' + ent.params.name + '"' : ''} selected`);
+  }
+  createSimilar(ent) {
+    // arm the element's creation tool with ITS type parameters (Revit CS)
+    const p = ent.params || {};
+    if (['wall', 'floor', 'slab', 'column', 'beam', 'roof', 'brace', 'foundation'].includes(ent.type)) {
+      if (p.thickness != null) this.bimOptions.thickness = p.thickness;
+      if (p.width != null && ent.type === 'column') { this.bimOptions.columnWidth = p.width; this.bimOptions.columnDepth = p.depth || p.width; }
+      if (p.height != null) this.bimOptions.unconnectedHeight = p.topConstraint === 'unconnected' ? p.height : this.bimOptions.unconnectedHeight;
+      if (p.baseLevel && this.levelManager.getLevel(p.baseLevel)) this.bimOptions.baseLevel = p.baseLevel;
+      if (p.topConstraint) this.bimOptions.topConstraint = p.topConstraint;
+    }
+    this.setTool(ent.type === 'slab' ? 'floor' : ent.type === 'foundation' ? 'foundation' : ent.type);
+    this.toast(`Create Similar: ${ent.type} armed with its type${p.name ? ' "' + p.name + '"' : ''} — click to place`);
+  }
+  // ---- Paste Aligned to Level ------------------------------------------------
+  pasteAlignedToLevel() {
+    if (!this.clipboard) { this.toast('Copy something first (Ctrl+C)', true); return; }
+    const lvls = this.levelManager.levels;
+    if (!lvls.length) { this.toast('No levels to align to', true); return; }
+    // the clipboard's current elevation span
+    let zMin = Infinity;
+    for (const [, x, y, z] of this.clipboard.v) if (z < zMin) zMin = z;
+    this.dialog('Paste Aligned to Level', `
+      <div class="dim" style="margin:0 0 8px">The copied geometry lands with its LOWEST point at the chosen level (Revit's Paste Aligned ▸ Selected Levels).</div>
+      <div class="form-row"><label>Level</label><select id="pa-level">${lvls.map(l =>
+        `<option value="${l.id}">${l.name} (${l.elevation.toFixed(2)} m)</option>`).join('')}</select></div>`,
+      [['Paste', () => {
+        const sel = document.getElementById('pa-level');
+        const lvl = this.levelManager.getLevel(sel.value);
+        if (!lvl) return true;
+        const faces = this.run('paste aligned', m => m.importSubset(this.clipboard, G.v(0, 0, lvl.elevation - zMin)));
+        if (faces && faces.length) {
+          this.sel = { edges: new Set(), faces: new Set(faces.map(f => f.id)) };
+          this.onSelectionChanged();
+        }
+        this.toast(`Pasted ${faces ? faces.length : 0} faces aligned to ${lvl.name}`);
+      }], ['Cancel', null]]);
+  }
+  // ---- Sun Settings -----------------------------------------------------------
+  sunSettings() {
+    const sun = this.view.sun;
+    if (!sun) { this.toast('Sun not available', true); return; }
+    // derive azimuth/altitude from the current position (normalized)
+    const r = Math.hypot(sun.position.x, sun.position.y, sun.position.z);
+    const alt = Math.asin(sun.position.z / r) * 180 / Math.PI;
+    const azi = Math.atan2(sun.position.y, sun.position.x) * 180 / Math.PI;
+    this.dialog('Sun Settings', `
+      <div class="dim" style="margin:0 0 8px">Sun angle for shadows and shading — azimuth (0° = +X east, 90° = +Y north) and altitude above the horizon.</div>
+      <div class="form-row"><label>Azimuth</label><input type="number" id="sun-azi" step="5" value="${azi.toFixed(0)}" style="width:90px"> °</div>
+      <div class="form-row"><label>Altitude</label><input type="number" id="sun-alt" step="5" min="5" max="89" value="${alt.toFixed(0)}" style="width:90px"> °</div>
+      <div class="form-row"><label>Intensity</label><input type="number" id="sun-int" step="0.05" min="0" max="2" value="${sun.intensity}" style="width:90px"></div>`,
+      [['Apply', () => {
+        const azi2 = parseFloat(document.getElementById('sun-azi').value) * Math.PI / 180;
+        const alt2 = Math.max(0.08, Math.min(1.54, parseFloat(document.getElementById('sun-alt').value) * Math.PI / 180));
+        const int2 = parseFloat(document.getElementById('sun-int').value);
+        const R = 80;
+        sun.position.set(R * Math.cos(alt2) * Math.cos(azi2), R * Math.cos(alt2) * Math.sin(azi2), R * Math.sin(alt2));
+        if (isFinite(int2)) sun.intensity = Math.max(0, Math.min(2, int2));
+        this.view.invalidate();
+        this.toast(`Sun: azimuth ${document.getElementById('sun-azi').value}°, altitude ${document.getElementById('sun-alt').value}°`);
+      }], ['Close', null]]);
   }
   deleteSelection() {
     if (this.selAnn && this.deleteSelectedAnnotation()) return;

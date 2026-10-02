@@ -1,7 +1,7 @@
 # WebSketch 3D — a SketchUp-style 3D modeler for the browser (and desktop)
 
 [![release](https://img.shields.io/badge/release-v0.9.0%20%22Materials%20as%20One%20Surface%22-blue)](https://github.com/engalialbyati/Web-Sketch-3D/releases/tag/v0.9.0)
-[![tests](https://img.shields.io/badge/tests-627%20passing-brightgreen)]() 
+[![tests](https://img.shields.io/badge/tests-633%20passing-brightgreen)]() 
 [![no build step](https://img.shields.io/badge/runtime-pure%20static%20files-blue)]()
 [![license](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
@@ -27,6 +27,23 @@ incremental weld hashing, memoized AABBs) so interactive drags stay smooth as
 models grow.
 
 ![WebSketch 3D — house model](docs/screenshot.png)
+
+### v0.10 — Professional BIM tool batch
+
+- **Interference Check** (Tools menu): pairwise solid-vs-solid clash
+  detection across all elements — AABB broad phase, triangle narrow phase,
+  witness points, click a row to select & zoom both clashing elements.
+- **Create Similar / Select All Instances** (context menu on any element):
+  arm the element's tool with its type parameters, or grab every instance
+  of that type at once — Revit's CS/SA workflow.
+- **Paste Aligned to Level** (Edit menu): the clipboard lands with its
+  lowest point exactly on a chosen level (mezzanine copy-paste workflows).
+- **DXF export** (File ▸ Export DXF): R12 lines on category layers
+  (A-WALL, S-COLS…), m/cm/mm units — the drafting handoff to AutoCAD.
+- **Sun Settings** (View menu): azimuth / altitude / intensity control of
+  the sun behind shadows and shading.
+- Full feature-by-feature comparison against Revit:
+  [docs/REVIT-COMPARISON.md](docs/REVIT-COMPARISON.md).
 
 ### v0.9 — Materials as One Surface, Edge Runs, Swept-Solid Elements
 
