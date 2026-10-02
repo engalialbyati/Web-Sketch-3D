@@ -699,6 +699,10 @@ class LevelManager {
 // carries lightweight userData { bimEntityId, bimType, role }; state lives on
 // the model (model.bimEntities) for undo/save round-trips.
 // ---------------------------------------------------------------------------
+// Revit's default project phase set — Phase Created / Phase Demolished on
+// every element reference these (a project can add more; we ship Revit's)
+const PHASES = ['Existing', 'New Construction'];
+
 class BimEntityManager {
   constructor(model) { this.model = model; this._idHwm = {}; }
   get entities() { return this.model.bimEntities; }
@@ -850,6 +854,19 @@ class BimEntityManager {
     // new elements land on the CURRENT layer (AutoCAD behavior); legacy
     // entities without a layer resolve back to '0' on load
     const ent = { id, type, params, faces: Object.keys(faceRoles).map(Number), edges: [...edgeIds], layerId: this.model.currentLayerId || '0' };
+    // REVIT'S STANDARD INSTANCE DATA: every element is born with phasing,
+    // identity, and category-appropriate structural / room-bounding data.
+    // Defaults only — an explicit value (or a saved older element's value)
+    // always wins; the properties panel renders fallbacks for legacy files.
+    const P = ent.params || (ent.params = {});
+    if (P.phaseCreated == null) P.phaseCreated = 'New Construction';
+    if (P.structural == null) P.structural = ['column', 'beam', 'brace', 'foundation', 'plate', 'stripfoot'].includes(type);
+    if (P.structuralUsage == null) {
+      if (type === 'wall') P.structuralUsage = 'nonbearing';
+      else if (type === 'brace') P.structuralUsage = 'brace';
+      else if (type === 'beam') P.structuralUsage = 'beam';
+    }
+    if (P.roomBounding == null && ['wall', 'floor', 'slab', 'roof'].includes(type)) P.roomBounding = true;
     this.entities.push(ent);
     // REGISTRY INVALIDATION: tools build geometry first and register after —
     // the geometry commit's rebuild cached the view's no-op-gate signature
@@ -8445,17 +8462,48 @@ class App {
         // Revit room identity fields — text edits recolor the fill plate,
         // no geometry regeneration (the boundary is wall-detected)
         const txt = (key, label) => ({ key, label, kind: 'text', value: String(p[key] != null ? p[key] : '') });
-        list = [txt('name', 'Name'), txt('number', 'Number'), txt('department', 'Department'), txt('zone', 'Zone')];
+        list = [txt('name', 'Name'), txt('number', 'Number'), txt('department', 'Department'), txt('zone', 'Zone'), txt('occupancy', 'Occupancy')];
         break;
       }
       default: list = [];
     }
+    // ---- Revit's standard instance data (EVERY element carries these) ----
+    // Phasing + Identity Data, then the Structural group Revit shows for the
+    // structural categories, and Room Bounding for the room-bounding ones.
+    const txt0 = (key, label) => ({ key, label, kind: 'text', value: String(p[key] != null ? p[key] : '') });
+    const chk0 = (key, label, def) => ({ key, label, kind: 'check', value: p[key] != null ? !!p[key] : def });
+    const phaseOpts = PHASES.map(x => [x, x]);
+    list.push(
+      { key: 'phaseCreated', label: 'Phase Created', kind: 'select', value: p.phaseCreated || 'New Construction', options: phaseOpts },
+      { key: 'phaseDemolished', label: 'Phase Demolished', kind: 'select', value: p.phaseDemolished || '', options: [['', 'None']].concat(phaseOpts) },
+      txt0('mark', 'Mark'),
+      txt0('comments', 'Comments'),
+    );
+    if (['wall', 'column', 'beam', 'brace', 'foundation', 'plate', 'stripfoot', 'floor', 'slab', 'roof'].includes(ent.type)) {
+      list.push(chk0('structural', 'Structural', ['column', 'beam', 'brace', 'foundation', 'plate', 'stripfoot'].includes(ent.type)));
+      if (ent.type === 'wall')
+        list.push({ key: 'structuralUsage', label: 'Structural Usage', kind: 'select', value: p.structuralUsage || 'nonbearing',
+          options: [['nonbearing', 'Non-bearing'], ['bearing', 'Bearing'], ['shear', 'Shear'], ['structural', 'Structural'], ['combined', 'Combined']] });
+      else if (ent.type === 'beam' || ent.type === 'brace')
+        list.push({ key: 'structuralUsage', label: 'Structural Usage', kind: 'select', value: p.structuralUsage || (ent.type === 'brace' ? 'brace' : 'beam'),
+          options: [['beam', 'Beam'], ['girder', 'Girder'], ['joist', 'Joist'], ['brace', 'Brace'], ['other', 'Other']] });
+    }
+    if (['wall', 'floor', 'slab', 'roof'].includes(ent.type))
+      list.push(chk0('roomBounding', 'Room Bounding', true));
     return list.filter(Boolean);
   }
   // Write one instance param and regenerate the element. Returns falsy on a
   // failed rebuild (the caller's transaction rolls params + geometry back).
   _applyBimParam(ent, key, v) {
     const p = ent.params;
+    // Revit's data-only parameters carry no geometry — set and done, no
+    // regeneration (Comments, Mark, Phasing, Structural flags, Room Bounding,
+    // Occupancy). They ride the entity through save/undo like any param.
+    if (/^(comments|mark|phaseCreated|phaseDemolished|structural|structuralUsage|roomBounding|occupancy)$/.test(key)) {
+      p[key] = v;
+      if (this.model && this.model.touch) this.model.touch();
+      return true;
+    }
     if (key === 'topConstraint') return this._setTopConstraint(ent, v);
     if (key === 'height' && ent.type === 'column') p.heightNominal = null; // explicit edit wins
     if (key === 'rotation') p.rotation = v * Math.PI / 180; // field is degrees
@@ -8545,18 +8593,33 @@ class App {
       <div class="pp-row"><span class="pp-lab">${esc(k)}</span>
         <input class="pp-in" data-td="${esc(k)}" type="${typeof defs[k] === 'number' ? 'number' : 'text'}" step="any" value="${esc(defs[k])}"></div>`).join('')
       : '<p class="dim" style="margin:0;font-size:12px">This type carries no editable defaults.</p>';
+    // Revit's TYPE identity data — Type Mark, Keynote, Assembly Code… live
+    // on the type (shared by every instance), never on the element
+    const idn = t.identity || (t.identity = {});
+    const TI = [
+      ['typeMark', 'Type Mark'], ['keynote', 'Keynote'], ['description', 'Description'],
+      ['assemblyCode', 'Assembly Code'], ['cost', 'Cost'], ['manufacturer', 'Manufacturer'],
+      ['url', 'URL'], ['typeComments', 'Type Comments'],
+    ];
+    const idRows = TI.map(([k, lab]) => `
+      <div class="pp-row"><span class="pp-lab">${lab}</span>
+        <input class="pp-in" data-ti="${k}" type="text" value="${esc(idn[k] != null ? idn[k] : '')}"></div>`).join('');
     this.dialog(`Type: ${esc(t.name)}`, `
       <p class="dim" style="margin:0 0 10px;font-size:12px">Defaults for NEW ${(info.categoryName || ent.type).toLowerCase()} placements of “${esc(t.name)}”. This element keeps its own instance values.</p>
-      ${rows}`, [
-        ['Save Defaults', () => {
+      ${rows}
+      <div class="pp-gh" style="margin-top:12px;cursor:default"><span>Identity Data</span></div>
+      ${idRows}`, [
+        ['Save Type', () => {
           const box = document.getElementById('dialog-backdrop');
           const next = { ...defs };
           box.querySelectorAll('[data-td]').forEach(inp => {
             next[inp.dataset.td] = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
           });
           t.defaults = next;
+          box.querySelectorAll('[data-ti]').forEach(inp => { idn[inp.dataset.ti] = inp.value; });
+          t.identity = idn;
           if (this.db && this.db.putType) this.db.putType(t).catch(() => { });
-          this.toast(`Type “${t.name}” defaults saved — new placements use them`);
+          this.toast(`Type “${t.name}” saved — new placements use the defaults`);
           return true;
         }],
         ['Cancel', null],
@@ -8765,10 +8828,14 @@ class App {
       // sections; edits are STAGED and committed by Apply (one transaction)
       const CKEYS = new Set(['topConstraint', 'locationLine', 'sillHeight', 'offsetX', 'offsetY', 'offsetLateral']);
       const MKEYS = new Set(['layers']);
-      const IKEYS = ent.type === 'room' ? new Set(['name', 'number', 'department', 'zone']) : new Set();
+      const PKEYS = new Set(['phaseCreated', 'phaseDemolished']);
+      const SKEYS = new Set(['structural', 'structuralUsage', 'roomBounding']);
+      const IKEYS = ent.type === 'room'
+        ? new Set(['name', 'number', 'department', 'zone', 'occupancy', 'mark', 'comments'])
+        : new Set(['mark', 'comments']);
       const sect = f => IKEYS.has(f.key) ? 'identity' : MKEYS.has(f.key) ? 'materials'
-        : CKEYS.has(f.key) ? 'constraints' : 'dimensions';
-      const grps = { constraints: [], dimensions: [], materials: [], identity: [] };
+        : PKEYS.has(f.key) ? 'phasing' : SKEYS.has(f.key) ? 'structural' : CKEYS.has(f.key) ? 'constraints' : 'dimensions';
+      const grps = { constraints: [], dimensions: [], structural: [], materials: [], phasing: [], identity: [] };
       for (const f of fields) grps[sect(f)].push(f);
       // stairs: their own editable dimensions ride in Dimensions too
       if (ent.type === 'stairs' && window.StairsFeature) {
@@ -8783,6 +8850,15 @@ class App {
       // read-only rows, each in its Revit section
       if (lvl) grps.constraints.push({ ro: ['Base Level', lvl.name] });
       if (p.hostWallId) grps.constraints.push({ ro: ['Host', p.hostWallId] });
+      if ((ent.type === 'door' || ent.type === 'window') && p.height != null)
+        grps.dimensions.push({ ro: ['Head Height', fmtLen((+p.sillHeight || 0) + (+p.height || 0))] });
+      if (ent.type === 'room') {
+        const ul = p.upperLimitId ? this.levelManager.getLevel(p.upperLimitId) : null;
+        if (ul) grps.constraints.push({ ro: ['Upper Limit', ul.name] });
+        if (p.limitOffset != null) grps.constraints.push({ ro: ['Limit Offset', fmtLen(p.limitOffset)] });
+        if (p.area != null) grps.dimensions.push({ ro: ['Area', (+p.area).toFixed(2) + ' m²'] });
+        if (p.perimeter != null) grps.dimensions.push({ ro: ['Perimeter', fmtLen(p.perimeter)] });
+      }
       if (p.fixed) {
         if (p.height != null) grps.dimensions.push({ ro: ['Height', fmtLen(p.height)] });
         if (p.thickness != null) grps.dimensions.push({ ro: ['Thickness', fmtLen(p.thickness)] });
@@ -8842,7 +8918,9 @@ class App {
           </div>
           ${grpHtml('constraints', 'Constraints')}
           ${grpHtml('dimensions', 'Dimensions')}
+          ${grpHtml('structural', 'Structural')}
           ${grpHtml('materials', 'Materials and Finishes')}
+          ${grpHtml('phasing', 'Phasing')}
           ${grpHtml('identity', 'Identity Data')}
           <div class="pp-actions">
             ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
