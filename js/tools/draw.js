@@ -836,7 +836,7 @@ class DrawPrimitiveEngine {
     if (!e) { if (!this.edgeA) app.toast('Hover a line first'); return; }
     if (!this.edgeA) {
       this.edgeA = e;
-      app.setStatus('Fillet: hover the second intersecting line (type a radius + Enter, or drag, to change it).');
+      app.setStatus('Fillet: hover the second intersecting line — type a radius (e.g. 0.5) and press Enter to change it.');
       return;
     }
     const A = app.model.vp(this.edgeA.a), A2 = app.model.vp(this.edgeA.b);
