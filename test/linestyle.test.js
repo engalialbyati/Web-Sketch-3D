@@ -282,7 +282,7 @@ module.exports = h => {
     ok(!r.error, 'sweeps');
     eq(m.shellOpenEdges(r.faces), 0, 'watertight');
     // the rounding: the straight 2-segment path becomes leg + arc + leg
-    const rounded = m._roundSweepCorners(path, null, 0.35);
+    const rounded = m._roundSweepCorners(path, null, null); // no frame: adaptive radius only
     ok(rounded.length > 3, 'the corner grew an arc (' + rounded.length + ' stations)');
     near(rounded[1].z, 2.5, 0.05, 'tangent point trims the entry leg');
     // extreme: a pipe (r=0.4) through the corner — R floors above the

@@ -3415,11 +3415,15 @@ class Model {
   // Replace every SHARP corner of a sweep path (turn > 30° — the turns the
   // miter construction would render as a hard edge) with a tangent fillet
   // arc, so swept bends come out round. Radius: opts.cornerRadius, or
-  // adaptive — 35% of the shorter adjacent leg, capped at 0.5 m; a corner
-  // whose legs cannot carry even 0.05 m stays a miter. Returns a new path
-  // (the input is never mutated).
-  _roundSweepCorners(path, radius, rProfile) {
-    const opts = { rProfile };
+  // adaptive — 35% of the shorter adjacent leg, capped at 0.5 m — floored
+  // above the profile's reach TOWARD THIS BEND's inside (frame-transported
+  // rigid offset projected on the bend's radial direction) plus a 8 cm
+  // minimum inner radius, so the inner ring side stays a smooth fan instead
+  // of pinching; a corner whose legs cannot carry even 0.05 m stays a
+  // miter. frame: { u, v, T, du, dv, dw, local } — the profile's rigid
+  // placement (see sweepFaceAlongPath). Returns a new path.
+  _roundSweepCorners(path, radius, frame) {
+    const INNER_MIN = 0.08; // the smallest inner bend radius we accept
     const SHARP = Math.PI / 6; // >30° turn = a corner, not a curve
     let hasSharp = false;
     for (let i = 1; i < path.length - 1; i++) {
@@ -3428,6 +3432,42 @@ class Model {
       if (G.dot(a, b) < Math.cos(SHARP)) { hasSharp = true; break; }
     }
     if (!hasSharp) return path;
+    // parallel-transport the profile frame along the path (the same
+    // construction the sweep uses) so per-corner inner reach is measured in
+    // the frame that actually carries the profile there
+    let F = null;
+    if (frame) {
+      const dirs = [];
+      for (let i = 1; i < path.length; i++) {
+        const d = G.sub(path[i], path[i - 1]);
+        const L = G.len(d);
+        if (L > 1e-9) dirs.push(G.mul(d, 1 / L));
+      }
+      const turn = (a2, b2) => Math.acos(Math.max(-1, Math.min(1, G.dot(a2, b2))));
+      const rot = (T, U, a2, b2, ang) => {
+        const ax = G.norm(G.cross(a2, b2));
+        if (G.isZero(ax)) return { T, U };
+        return { T: G.rotatePoint(T, G.v(0, 0, 0), ax, ang), U: G.rotatePoint(U, G.v(0, 0, 0), ax, ang) };
+      };
+      F = [{ T: frame.T, U: frame.u }];
+      for (let k = 1; k < dirs.length; k++)
+        F.push(rot(F[k - 1].T, F[k - 1].U, dirs[k - 1], dirs[k], turn(dirs[k - 1], dirs[k])));
+    }
+    // per-corner inner reach: the profile's rigid offset projected on the
+    // bend's radial direction (toward the turn center) at the corner frame
+    const innerReach = (ci, a, b) => {
+      if (!F) return 0;
+      const turnDir = G.norm(G.sub(b, G.mul(a, G.dot(b, a))));
+      const Fr = F[Math.max(0, Math.min(ci, F.length - 1))];
+      const V = G.cross(Fr.T, Fr.U);
+      let reach = 0;
+      for (const q of frame.local) {
+        const ox = frame.du + q.x, oy = frame.dv + q.y;
+        const r2 = ox * G.dot(turnDir, Fr.U) + oy * G.dot(turnDir, V);
+        if (r2 > reach) reach = r2;
+      }
+      return reach;
+    };
     const out = [path[0]];
     for (let i = 1; i < path.length - 1; i++) {
       const P = path[i];
@@ -3438,10 +3478,7 @@ class Model {
       const cos = G.dot(a, b);
       if (cos >= Math.cos(SHARP)) { out.push(P); continue; } // gentle: keep
       const theta = Math.acos(Math.max(-1, Math.min(1, cos)));
-      // the rounding radius must exceed the profile's reach toward this
-      // bend's inside, or the inner ring side folds (r_offset >= R): floor
-      // it at reach + 1 cm so the inner offset keeps a 1 cm radius minimum
-      const Rmin = (opts.rProfile || 0) + 0.01;
+      const Rmin = innerReach(i, a, b) + INNER_MIN;
       let R = Math.max(radius != null ? radius : Math.min(0.35 * Math.min(legA, legB), 0.5), Rmin);
       const d = R / Math.tan(theta / 2);          // tangent distance
       if (d < 0.05 || d >= Math.min(legA, legB) - 1e-6) {
@@ -3483,30 +3520,20 @@ class Model {
     if (!f) return { error: 'profile face is gone' };
     if ((f.holes || []).length) return { error: 'profiles with openings cannot sweep yet' };
     if (!path || path.length < 2) { return { error: 'path is too short' }; }
-    // the profile's reach around the path (max ⊥ distance from the first
-    // leg's line) — the rounding radius is floored above it so the inner
-    // ring side of every rounded bend keeps a ≥ 1 cm radius (no folding)
-    let rProfile = 0;
-    {
-      const u0 = G.norm(G.sub(path[1], path[0]));
-      const r0 = this.pts(f.loop);
-      for (const p of r0) {
-        const w = G.sub(p, path[0]);
-        const d = G.len(G.sub(w, G.mul(u0, G.dot(w, u0))));
-        if (d > rProfile) rProfile = d;
-      }
-    }
-    path = this._roundSweepCorners(path, opts.cornerRadius, rProfile);
+    // profile frame FIRST: the corner rounder needs it to size each bend
+    // above the profile's reach toward that bend's inside
     const ring = this.pts(f.loop);
-    // profile frame: origin = ring centroid, normal from the ring
     const c = ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
     const O = G.mul(c, 1 / ring.length);
     let nrm = G.loopNormal(ring);
     if (G.isZero(nrm)) return { error: 'profile is degenerate' };
     nrm = G.norm(nrm);
-    // local profile coordinates (u, v) in the plane, centered on the centroid
     const { u, v } = G.basisForNormal(nrm);
     const local = ring.map(p => G.v(G.dot(G.sub(p, O), u), G.dot(G.sub(p, O), v), 0));
+    const off0 = G.sub(O, path[0]);
+    const du = G.dot(off0, u), dv = G.dot(off0, v), dw = G.dot(off0, nrm);
+    path = this._roundSweepCorners(path, opts.cornerRadius,
+      { u, v, T: nrm, du, dv, dw, local });
     // Classic MITERED sweep (SketchUp-style placement):
     // - the drawn frame is kept EXACTLY at the start and end stations
     // - each corner vertex carries a MITER ring: the incoming segment's
@@ -3531,9 +3558,6 @@ class Model {
     // rigid placement: the profile KEEPS its drawn offset from the path —
     // placing its centroid on the path would re-center it (the "follows the
     // center line" complaint). Captured in the START frame, rides along.
-    const V0 = G.cross(nrm, u);
-    const off0 = G.sub(O, path[0]);
-    const du = G.dot(off0, u), dv = G.dot(off0, V0), dw = G.dot(off0, nrm);
     const sections = [];
     for (let i = 0; i < path.length; i++) {
       let fr;
