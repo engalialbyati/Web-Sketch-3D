@@ -151,6 +151,21 @@ module.exports = async h => {
     eq(MD.paintTargets(m, probe3.id, bim.entities).length, 1, 'bare face paints alone');
   });
 
+  test('serialize→load keeps the named-material identity on faces', () => {
+    // reload/file round-trips must carry matId + the registry — textured
+    // materials render through it (colors alone are not enough)
+    const m2 = new Model();
+    const f = m2.addFaceFromRings([G.v(0, 0, 0), G.v(1, 0, 0), G.v(1, 1, 0), G.v(0, 1, 0)]);
+    m2.materials.set('mat_rt', { id: 'mat_rt', name: 'Brick', color: '#a44a3a', alpha: 1, texture: { kind: 'brick', size: 0.22 } });
+    f.matId = 'mat_rt'; f.color = '#a44a3a';
+    const m3 = new Model();
+    m3.load(JSON.parse(JSON.stringify(m2.serialize())));
+    const back = [...m3.faces.values()].find(x => true);
+    ok(back, 'face restored');
+    eq(back.matId, 'mat_rt', 'matId survives the round-trip');
+    ok(m3.materials.has('mat_rt') && m3.materials.get('mat_rt').texture.kind === 'brick', 'registry + texture restored');
+  });
+
   test('attrJSON: row payloads survive an HTML attribute round-trip', () => {
     const payload = { matId: 'mat_"quoted"' };
     const attr = MD.attrJSON(payload);

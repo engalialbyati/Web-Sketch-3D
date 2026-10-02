@@ -3842,6 +3842,7 @@ class Model {
       userData: x.userData || null,
       alpha: x.alpha == null ? 1 : x.alpha, gid: x.gid || 0, loose: !!x.loose,
       layerId: x.layerId || '0',
+      matId: x.matId || null, // the named-material identity (textures live on it)
       extrude: x.extrude ? { axis: x.extrude.axis, anchor: x.extrude.anchor, anchorHoles: [...(x.extrude.anchorHoles || [])], sides: [...(x.extrude.sides || [])], cap: x.extrude.cap || null, extended: [...(x.extrude.extended || [])], through: x.extrude.through || null, culled: [...(x.extrude.culled || [])] } : null,
     }]));
     let mx = 0;
