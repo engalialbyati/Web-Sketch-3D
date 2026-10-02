@@ -3410,26 +3410,45 @@ class Model {
    *  stays (SketchUp parity). Returns { faces } or { error }. */
   // ---- sweep bend validation (pipes/elbows) --------------------------------
   // A swept profile collapses on the inner side of a bend when the bend
-  // radius R <= the profile's effective radius r (its max extent around the
-  // path). Detects tessellated ARC bends (chains of equal small turns —
-  // single sharp turns are MITERS the sweep construction handles) and
-  // returns the too-tight ones with the profile's r.
+  // radius R <= the profile's extent TOWARD THAT BEND's inside (its radial
+  // reach at the bend — a tall wall profile bent in plan only rides the bend
+  // with its thickness, not its height). Detects tessellated ARC bends
+  // (chains of equal small turns — single sharp turns are MITERS the sweep
+  // construction handles) and returns the too-tight ones, each with its own
+  // radial reach r.
   _sweepBendCheck(f, path) {
     const ring = this.pts(f.loop);
-    const u0 = G.norm(G.sub(path[1], path[0]));
-    let rEff = 0;
-    for (const p of ring) {
-      const w = G.sub(p, path[0]);
-      const d = G.len(G.sub(w, G.mul(u0, G.dot(w, u0)))); // distance to the path line
-      if (d > rEff) rEff = d;
-    }
+    if (!ring.length) return { rEff: 0, tight: [] };
+    const c = ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
+    const O = G.mul(c, 1 / ring.length);
+    let nrm = G.loopNormal(ring);
+    if (G.isZero(nrm)) return { rEff: 0, tight: [] };
+    nrm = G.norm(nrm);
+    const u = G.norm(G.sub(ring[0], O));
+    const v = G.cross(nrm, u);
+    // rigid placement offsets, in the profile frame
+    const off0 = G.sub(O, path[0]);
+    const du = G.dot(off0, u), dv = G.dot(off0, v), dw = G.dot(off0, nrm);
+    const local = ring.map(p => G.v(G.dot(G.sub(p, O), u), G.dot(G.sub(p, O), v), 0));
     const dirs = [];
     for (let i = 1; i < path.length; i++) {
       const d = G.sub(path[i], path[i - 1]);
       const L = G.len(d);
       if (L > 1e-9) dirs.push(G.mul(d, 1 / L));
     }
+    if (dirs.length < 2) return { rEff: 0, tight: [] };
     const turn = (a, b) => Math.acos(Math.max(-1, Math.min(1, G.dot(a, b))));
+    // parallel-transport frames — the same construction the sweep uses, so
+    // the per-bend radial reach is measured in the frame that actually
+    // carries the profile there
+    const rot = (T, U, a, b, ang) => {
+      const ax = G.norm(G.cross(a, b));
+      if (G.isZero(ax)) return { T, U };
+      return { T: G.rotatePoint(T, G.v(0, 0, 0), ax, ang), U: G.rotatePoint(U, G.v(0, 0, 0), ax, ang) };
+    };
+    const F = [{ T: nrm, U: u }];
+    for (let k = 1; k < dirs.length; k++)
+      F.push(rot(F[k - 1].T, F[k - 1].U, dirs[k - 1], dirs[k], turn(dirs[k - 1], dirs[k])));
     const tight = [];
     let i = 0;
     while (i < dirs.length - 1) {
@@ -3445,8 +3464,28 @@ class Model {
       // chain = segments i..j; R from the chord/turn relation
       const chord = G.len(G.sub(path[i + 1], path[i]));
       const R = chord / (2 * Math.sin(t0 / 2));
-      if (R <= rEff + 1e-9) tight.push({ k0: i, k1: j, R });
+      // the bend's radial unit (toward the arc center): the part of d1 that
+      // is perpendicular to d0
+      const turnDir = G.norm(G.sub(dirs[i + 1], G.mul(dirs[i], G.dot(dirs[i + 1], dirs[i]))));
+      const Fr = F[i];
+      const tU = G.dot(turnDir, Fr.U), tV = G.dot(turnDir, G.cross(Fr.T, Fr.U));
+      let rBend = 0;
+      for (const q of local) {
+        // dw rides the tangent — second-order for the fold; the in-plane
+        // offset (du+q.x, dv+q.y) projected on the radial direction is what
+        // closes up when R shrinks
+        const r2 = (du + q.x) * tU + (dv + q.y) * tV;
+        if (r2 > rBend) rBend = r2;
+      }
+      if (R <= rBend + 1e-9) tight.push({ k0: i, k1: j, R, r: rBend });
       i = j + 1;
+    }
+    // rEff stays as the global in-plane bound (fallback for callers without
+    // a specific bend)
+    let rEff = 0;
+    for (const q of local) {
+      const r2 = Math.hypot(du + q.x, dv + q.y);
+      if (r2 > rEff) rEff = r2;
     }
     return { rEff, tight };
   }
@@ -3513,9 +3552,10 @@ class Model {
       const w = G.sub(B, A);
       const s = G.dot(G.cross(w, bdir), n2) / (n2l * n2l);
       const C = G.add(A, G.mul(a, s));
-      // the replacement bend: the standard tangent fillet at Rnew between
-      // the two leg lines (self-contained — the kernel never leans on UI
-      // modules): d = R/tan(θ/2), center on the interior bisector
+      // the replacement bend: the standard tangent fillet at this bend's own
+      // minimum between the two leg lines (self-contained — the kernel never
+      // leans on UI modules): d = R/tan(θ/2), center on the interior bisector
+      const Rnew = b.Rmin;
       const theta = Math.acos(Math.max(-1, Math.min(1, G.dot(a, bdir)))); // the TURN angle
       const d = Rnew / Math.tan(theta / 2);
       const bis = G.norm(G.add(a, bdir));
@@ -3557,13 +3597,15 @@ class Model {
     if (!f) return { error: 'profile face is gone' };
     if ((f.holes || []).length) return { error: 'profiles with openings cannot sweep yet' };
     if (!path || path.length < 2) return { error: 'path is too short' };
-    // ---- bend guard: R_bend must exceed the profile radius, else the inner
-    // side of the sweep collapses. Auto-size to the standard minimum
-    // (R >= 1.5·diameter, R >= r + inner allowance) when the straight legs
-    // can carry it; otherwise refuse with the exact minimum.
+    // ---- bend guard: R_bend must exceed the profile's radial reach AT that
+    // bend, else the inner side collapses. Auto-size each tight bend to the
+    // standard minimum (R >= 1.5·diameter, R >= r + inner allowance) when its
+    // straight legs can carry it; otherwise refuse with the exact minimum.
     const bend = this._sweepBendCheck(f, path);
     if (bend.tight.length) {
-      const Rmin = Math.max(1.5 * 2 * bend.rEff, bend.rEff + Math.max(0.05, bend.rEff));
+      for (const b of bend.tight)
+        b.Rmin = Math.max(1.5 * 2 * b.r, b.r + Math.max(0.05, b.r));
+      const Rmin = Math.max(...bend.tight.map(b => b.Rmin));
       let fixed = null;
       if (opts.autoSizeBend !== false) fixed = this._sweepResizeBends(path, bend.tight, Rmin);
       if (fixed) {

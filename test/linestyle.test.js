@@ -278,8 +278,8 @@ module.exports = h => {
     const r = m.sweepFaceAlongPath(prof.id, path);
     ok(r.error, 'refused');
     ok(/Fillet radius too small/.test(r.error), 'the exact validation message');
-    ok(/1\.20/.test(r.error), 'states the minimum radius (1.2 m = 1.5·D)');
-    near(r.minBend, 1.2, 1e-9, 'minBend = 1.5 × diameter');
+    ok(/1\.1[0-9]/.test(r.error), 'states the per-bend minimum radius (~1.16 m = 1.5·D)');
+    near(r.minBend, 1.16, 0.05, 'minBend = 1.5 × the profile\'s radial reach');
     ok(m.faces.has(prof.id), 'the profile survives a refused sweep untouched');
     w.vclean('sweep refuse');
   });
@@ -304,5 +304,26 @@ module.exports = h => {
     ok(!r.resized, 'no auto-size fired');
     eq(m.shellOpenEdges(r.faces), 0, 'watertight');
     w.vclean('sweep generous');
+  });
+
+  test('a TALL wall profile on a plan curve is NOT flagged (per-bend radial reach)', () => {
+    const w = makeWorld(), { G, m } = w;
+    // 0.2 m thick × 3 m tall wall profile standing ON the path — only the
+    // thickness rides a plan bend; the height must not trigger the guard
+    // (the old global-extent measure demanded R >= 9 m here)
+    const prof = m.addFaceFromRings([
+      G.v(0, 0, 0), G.v(0, 0.2, 0), G.v(0, 0.2, 3), G.v(0, 0, 3)]);
+    const path = [];
+    for (let i = 0; i <= 4; i++) path.push(G.v(-2 + i * 0.5, 0, 0));
+    for (let i = 1; i <= 8; i++) {
+      const t = i / 8 * Math.PI / 2;
+      path.push(G.v(Math.sin(t), 1 - Math.cos(t), 0)); // plan bend R=1
+    }
+    for (let i = 1; i <= 4; i++) path.push(G.v(1, 1 + i * 0.5, 0));
+    const r = m.sweepFaceAlongPath(prof.id, path);
+    ok(!r.error, 'sweeps without refusal (' + (r.error || 'ok') + ')');
+    ok(!r.resized, 'no auto-size needed');
+    eq(m.shellOpenEdges(r.faces), 0, 'watertight curved wall');
+    w.vclean('sweep wall profile');
   });
 };
