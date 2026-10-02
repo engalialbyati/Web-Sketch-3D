@@ -8529,6 +8529,41 @@ class App {
     this.updateInfo();
     return true;
   }
+  // Revit's Edit Type: the type's DEFAULT parameters (what new placements
+  // get). The instance values in the properties panel stay untouched —
+  // the same type/instance separation Revit makes.
+  editTypeDialog(ent) {
+    const info = this.elements ? this.elements.catalogInfoFor(ent) : null;
+    const cat = this.elements && this.elements._catalog;
+    const t = info && info.typeId && cat && cat.types ? cat.types.find(x => x.id === info.typeId) : null;
+    if (!t) { this.toast('No catalog type behind this element — its instance parameters are the design', true); return; }
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const defs = t.defaults || {};
+    const keys = Object.keys(defs).filter(k => typeof defs[k] === 'number'
+      || (typeof defs[k] === 'string' && defs[k] && !/^(asset|lib:|fam_)/.test(k) && k !== 'kind' && k !== 'scriptId'));
+    const rows = keys.length ? keys.map(k => `
+      <div class="pp-row"><span class="pp-lab">${esc(k)}</span>
+        <input class="pp-in" data-td="${esc(k)}" type="${typeof defs[k] === 'number' ? 'number' : 'text'}" step="any" value="${esc(defs[k])}"></div>`).join('')
+      : '<p class="dim" style="margin:0;font-size:12px">This type carries no editable defaults.</p>';
+    this.dialog(`Type: ${esc(t.name)}`, `
+      <p class="dim" style="margin:0 0 10px;font-size:12px">Defaults for NEW ${(info.categoryName || ent.type).toLowerCase()} placements of “${esc(t.name)}”. This element keeps its own instance values.</p>
+      ${rows}`, [
+        ['Save Defaults', () => {
+          const box = document.getElementById('dialog-backdrop');
+          const next = { ...defs };
+          box.querySelectorAll('[data-td]').forEach(inp => {
+            next[inp.dataset.td] = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
+          });
+          t.defaults = next;
+          if (this.db && this.db.putType) this.db.putType(t).catch(() => { });
+          this.toast(`Type “${t.name}” defaults saved — new placements use them`);
+          return true;
+        }],
+        ['Cancel', null],
+      ]);
+  }
+
+
   updateInfo() {
     const el = document.getElementById('entityinfo');
     const model = this.model;
@@ -8716,124 +8751,195 @@ class App {
       const q = this.elementQuantities(ent);
       const fam = (info && info.familyName) || '—';
       const siblings = this.elements ? this.elements.siblingTypes(ent) : [];
-      const typeOpts = siblings.length
-        ? `<select id="gi-type">${siblings.map(t =>
-          `<option value="${t.id}"${info && t.id === info.typeId ? ' selected' : ''}>${t.name}</option>`).join('')}</select>`
-        : `<span>${(info && info.typeName) || '—'}</span>`;
       const lvl = ent.params && ent.params.baseLevel ? this.levelManager.getLevel(ent.params.baseLevel) : null;
       const p = ent.params || {};
       // lineage badge: this element is a PIECE of a split original — it
       // fuses/heals only within its own lineage (pieces of wall_7 never
       // merge with wall_9, however perfectly they touch)
       const lineage = p.merge && p.merge.group ? p.merge.group : null;
-      // editable instance parameters (Revit method) + Edit Boundary eligibility
       const fields = this._bimParamFields(ent);
-      const fieldKeys = new Set(fields.map(f => f.key));
       const canBoundary = ['floor', 'slab', 'roof'].includes(ent.type)
         && Array.isArray(p.regions) && p.regions.length > 0;
-      const rows = [];
-      if (lvl) rows.push(['Base Level', lvl.name]);
-      if (p.height != null && !fieldKeys.has('height') && ent.type !== 'door' && ent.type !== 'window') rows.push(['Height', fmtLen(p.height)]);
-      if (p.thickness != null && !fieldKeys.has('thickness')) rows.push(['Thickness', fmtLen(p.thickness)]);
-      if (p.width != null && !fieldKeys.has('width')) rows.push(['Width', fmtLen(p.width)]);
-      if (p.rotation && !fieldKeys.has('rotation')) rows.push(['Rotation', (p.rotation * 180 / Math.PI).toFixed(1) + '°']);
-      if (p.locationLine && !fieldKeys.has('locationLine')) rows.push(['Location Line', { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face' }[p.locationLine] || p.locationLine]);
+
+      // ---- Revit Properties layout: parameters grouped into collapsible
+      // sections; edits are STAGED and committed by Apply (one transaction)
+      const CKEYS = new Set(['topConstraint', 'locationLine', 'sillHeight', 'offsetX', 'offsetY', 'offsetLateral']);
+      const MKEYS = new Set(['layers']);
+      const IKEYS = ent.type === 'room' ? new Set(['name', 'number', 'department', 'zone']) : new Set();
+      const sect = f => IKEYS.has(f.key) ? 'identity' : MKEYS.has(f.key) ? 'materials'
+        : CKEYS.has(f.key) ? 'constraints' : 'dimensions';
+      const grps = { constraints: [], dimensions: [], materials: [], identity: [] };
+      for (const f of fields) grps[sect(f)].push(f);
+      // stairs: their own editable dimensions ride in Dimensions too
+      if (ent.type === 'stairs' && window.StairsFeature) {
+        const st = (key, label, step, val) => grps.dimensions.push({ key, label, kind: 'number', step, value: val, stair: true });
+        st('width', 'Width m', 0.05, +(+p.width || 1.2).toFixed(2));
+        st('riser', 'Riser m', 0.005, +(+p.riser || 0.175).toFixed(3));
+        st('tread', 'Tread m', 0.01, +(+p.tread || 0.28).toFixed(2));
+        if (p.run === 'u') { st('landingDepth', 'Landing m', 0.05, +(+p.landingDepth || 1.2).toFixed(2)); st('uGap', 'U Gap m', 0.05, +(+p.uGap || 0.1).toFixed(2)); }
+        st('railHeight', 'Rail Height m', 0.05, +(+p.railHeight || 0.9).toFixed(2));
+        grps.dimensions.push({ key: 'handrail', label: 'Handrail', kind: 'check', value: p.handrail !== false, stair: true });
+      }
+      // read-only rows, each in its Revit section
+      if (lvl) grps.constraints.push({ ro: ['Base Level', lvl.name] });
+      if (p.hostWallId) grps.constraints.push({ ro: ['Host', p.hostWallId] });
+      if (p.fixed) {
+        if (p.height != null) grps.dimensions.push({ ro: ['Height', fmtLen(p.height)] });
+        if (p.thickness != null) grps.dimensions.push({ ro: ['Thickness', fmtLen(p.thickness)] });
+        if (p.width != null) grps.dimensions.push({ ro: ['Width', fmtLen(p.width)] });
+        if (p.rotation != null) grps.dimensions.push({ ro: ['Rotation', (p.rotation * 180 / Math.PI).toFixed(1) + '°'] });
+        if (p.locationLine != null) grps.dimensions.push({ ro: ['Location Line',
+          { centerline: 'Centerline', exterior: 'Exterior face', interior: 'Interior face', center: 'Center', left: 'Left Face', right: 'Right Face' }[p.locationLine] || p.locationLine] });
+      }
+      grps.dimensions.push({ ro: ['Faces', q.faces] });
+      grps.dimensions.push({ ro: ['Area', q.openings > 0.0005 ? q.area.toFixed(2) + ' m² (net)' : q.area.toFixed(2) + ' m²'] });
+      if (q.volume != null) grps.dimensions.push({ ro: ['Volume', q.volume.toFixed(3) + ' m³'] });
+      if (q.bbox) grps.dimensions.push({ ro: ['Bounding box', q.bbox.size.map(x => x.toFixed(2)).join(' × ') + ' m'] });
+      const matNames = new Map(); // what this element is painted with
+      for (const fid of (ent.faces || [])) {
+        const f = model.faces.get(fid);
+        if (f && f.matId) matNames.set(f.matId, (model.materials && model.materials.get(f.matId) || {}).name || f.matId);
+      }
+      for (const [mid, nm] of matNames) grps.materials.push({ ro: ['Paint', nm] });
+      const layerIds = new Set();
+      for (const fid of (ent.faces || [])) { const f = model.faces.get(fid); if (f && f.layerId) layerIds.add(f.layerId); }
+      grps.identity.push({ ro: ['Family', fam] });
+      if (layerIds.size) grps.identity.push({ ro: ['Layer', [...layerIds].join(', ')] });
+      grps.identity.push({ ro: ['Element Id', ent.id] });
+
+      let ppClosed = {};
+      try { ppClosed = JSON.parse(localStorage.getItem('websketch3d.pp.grps') || '{}'); } catch (e) { }
+      const fRow = f => {
+        const tag = f.stair ? 'data-st="' + f.key + '" data-k="stair"' : 'data-pf="' + f.key + '" data-k="bim"';
+        if (f.kind === 'select') return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
+          + '<select class="pp-in" ' + tag + '>' + f.options.map(([val, lab]) =>
+            '<option value="' + val + '"' + (f.value === val ? ' selected' : '') + '>' + lab + '</option>').join('') + '</select></div>';
+        if (f.kind === 'check') return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
+          + '<input class="pp-in pp-chk" type="checkbox" ' + tag + (f.value ? ' checked' : '') + '></div>';
+        if (f.kind === 'text') return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
+          + '<input class="pp-in" ' + tag + ' type="text" value="' + String(f.value).replace(/"/g, '&quot;') + '"></div>';
+        return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
+          + '<input class="pp-in" ' + tag + ' type="number" step="' + f.step + '" value="' + f.value + '"></div>';
+      };
+      const roRow = r => '<div class="pp-row"><span class="pp-lab">' + r[0] + '</span><span class="pp-ro">' + r[1] + '</span></div>';
+      const grpHtml = (id, title) => {
+        const rows = grps[id].map(x => x.ro ? roRow(x.ro) : fRow(x)).join('');
+        return rows ? '<div class="pp-grp' + (ppClosed[id] ? ' closed' : '') + '" data-g="' + id + '">'
+          + '<div class="pp-gh"><span>' + title + '</span><span class="pp-chev">▾</span></div>'
+          + '<div class="pp-gb">' + rows + '</div></div>' : '';
+      };
       el.innerHTML = `
-        <div class="gi-name"><span class="gi-cat">${(info && info.categoryName) || ent.type}</span> <span class="gi-eid">${ent.id}</span></div>
-        ${lineage ? `<div class="stats dim">Piece of ${lineage} — heals only within this lineage</div>` : ''}
-        ${p.fixed ? `<div class="stats dim">Fixed element — the drawn geometry is the design${p.name ? ` · “${p.name}”` : ''}</div>` : ''}
-        <div class="stats">${fam}</div>
-        <div class="gi-typerow"><span class="gi-tylab">Type</span>${typeOpts}</div>
-        <div class="stats">${q.faces} faces · ${q.openings > 0.0005
-          ? `${q.area.toFixed(2)} m² net <span class="dim">(gross ${q.gross.toFixed(2)} − openings ${q.openings.toFixed(2)})</span>`
-          : q.area.toFixed(2) + ' m²'}${q.volume != null ? ' · ' + q.volume.toFixed(3) + ' m³' : ''}</div>
-        ${q.bbox ? `<div class="stats dim">Bounding box ${q.bbox.size.map(x => x.toFixed(2)).join(' × ')} m</div>` : ''}
-        ${rows.length ? `<div class="gi-params">${rows.map(r => `<div class="gi-prow"><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}</div>` : ''}
-        ${fields.length ? `
-          <div class="gi-params" id="gi-pfld">
-            ${fields.map(f => f.kind === 'select'
-              ? `<div class="gi-prow"><span>${f.label}</span><select data-pf="${f.key}">${f.options.map(([val, lab]) =>
-                `<option value="${val}"${f.value === val ? ' selected' : ''}>${lab}</option>`).join('')}</select></div>`
-              : f.kind === 'text'
-                ? `<div class="gi-prow"><span>${f.label}</span><input data-pf="${f.key}" type="text" value="${String(f.value).replace(/"/g, '&quot;')}"></div>`
-              : `<div class="gi-prow"><span>${f.label}</span><input data-pf="${f.key}" type="number" step="${f.step}" value="${f.value}"></div>`).join('')}
-            <div class="dim" style="margin-top:2px">Edit a value — the element regenerates from its parameters</div>
-          </div>` : ''}
-        ${ent.type === 'stairs' && window.StairsFeature ? `
-          <div class="gi-params" id="gi-stair">
-            <div class="gi-prow"><span>Width m</span><input data-st="width" type="number" step="0.05" value="${(+p.width || 1.2).toFixed(2)}"></div>
-            <div class="gi-prow"><span>Riser m</span><input data-st="riser" type="number" step="0.005" value="${(+p.riser || 0.175).toFixed(3)}"></div>
-            <div class="gi-prow"><span>Tread m</span><input data-st="tread" type="number" step="0.01" value="${(+p.tread || 0.28).toFixed(2)}"></div>
-            ${p.run === 'u' ? `<div class="gi-prow"><span>Landing m</span><input data-st="landingDepth" type="number" step="0.05" value="${(+p.landingDepth || 1.2).toFixed(2)}"></div>
-            <div class="gi-prow"><span>U Gap m</span><input data-st="uGap" type="number" step="0.05" value="${(+p.uGap || 0.1).toFixed(2)}"></div>` : ''}
-            <div class="gi-prow"><span>Rail Height m</span><input data-st="railHeight" type="number" step="0.05" value="${(+p.railHeight || 0.9).toFixed(2)}"></div>
-            <div class="gi-prow"><span>Handrail</span><input data-st="handrail" type="checkbox" ${p.handrail !== false ? 'checked' : ''}></div>
-            <div class="dim" style="margin-top:2px">Edit a value — the stair (and its host opening) regenerate</div>
-          </div>` : ''}
-        ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
-        <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
-        <button class="mini-btn" id="gi-del">Delete</button>
-        <div class="dim" style="margin-top:4px">Hold <b>Ctrl</b> (or <b>Tab</b>) to query individual faces (m²) and edges (m)</div>`;
+        <div class="pp">
+          <div class="pp-cat">${(info && info.categoryName) || ent.type}<span class="pp-eid">${ent.id}</span></div>
+          ${lineage ? `<div class="pp-note">Piece of ${lineage} — heals only within this lineage</div>` : ''}
+          ${p.fixed ? `<div class="pp-note">Fixed element — the drawn geometry is the design${p.name ? ` · “${p.name}”` : ''}</div>` : ''}
+          <div class="pp-typerow">
+            ${siblings.length
+              ? `<select id="gi-type" class="pp-typesel">${siblings.map(t =>
+                `<option value="${t.id}"${info && t.id === info.typeId ? ' selected' : ''}>${t.name}</option>`).join('')}</select>`
+              : `<span class="pp-typesel pp-ro">${(info && info.typeName) || ent.type}</span>`}
+            <button class="mini-btn" id="gi-edittype">Edit Type…</button>
+          </div>
+          ${grpHtml('constraints', 'Constraints')}
+          ${grpHtml('dimensions', 'Dimensions')}
+          ${grpHtml('materials', 'Materials and Finishes')}
+          ${grpHtml('identity', 'Identity Data')}
+          <div class="pp-actions">
+            ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
+            <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
+            <button class="mini-btn" id="gi-del">Delete</button>
+          </div>
+          <div class="pp-applybar" id="gi-applybar" hidden>
+            <span class="pp-dirty" id="gi-dirty"></span>
+            <button class="mini-btn primary" id="gi-apply">Apply</button>
+          </div>
+          <div class="dim" style="margin-top:6px">Enter applies · Hold <b>Ctrl</b> (or <b>Tab</b>) to query faces (m²) and edges (m)</div>
+        </div>`;
       // insertion-offset quick actions (framing justification)
       if (ent.type === 'beam' || ent.type === 'column') {
         const flushBtns = ent.type === 'beam'
           ? '<button class="mini-btn" data-flush="left">&#9668; Flush</button> <button class="mini-btn" data-flush="right">Flush &#9658;</button>'
           : '<button class="mini-btn" data-flush="-x">&#9668;X</button> <button class="mini-btn" data-flush="x">X&#9658;</button> <button class="mini-btn" data-flush="-y">&#9668;Y</button> <button class="mini-btn" data-flush="y">Y&#9658;</button>';
         const box2 = document.createElement('div');
-        box2.className = 'gi-params';
+        box2.className = 'pp-actions';
         box2.style.marginTop = '4px';
-        box2.innerHTML = flushBtns + '<div class="dim" style="margin-top:2px">Flush this face with the crossing element (auto ' + '\u0394' + ')</div>';
-        el.appendChild(box2);
+        box2.innerHTML = flushBtns + '<div class="dim" style="flex-basis:100%;margin-top:2px">Flush this face with the crossing element (auto Δ)</div>';
+        el.querySelector('.pp').appendChild(box2);
         box2.querySelectorAll('[data-flush]').forEach(b2 =>
           b2.addEventListener('click', () => this.flushAlign(ent.id, b2.dataset.flush)));
       }
       const bndBtn = el.querySelector('#gi-boundary');
       if (bndBtn) bndBtn.addEventListener('click', () => this.bim.editBoundary(ent.id));
-      const pfBox = el.querySelector('#gi-pfld');
-      if (pfBox) pfBox.querySelectorAll('[data-pf]').forEach(inp => {
-        inp.addEventListener('change', () => {
-          const key = inp.dataset.pf;
-          const v = inp.type === 'number' ? parseFloat(inp.value) : inp.value;
-          // offsets are SIGNED displacements (+/-): only the >= 0 gate is waived
-          const signedKey = /^(offset|offsetLateral)/.test(key);
-          if (inp.type === 'number' && (!isFinite(v) || (v < 0 && !signedKey)
-            || (v <= 0 && !signedKey && key !== 'sillHeight'))) return;
-          const ok = this.transaction.run('edit element params', () => {
-            if (!this._applyBimParam(ent, key, v)) throw new Error('regeneration failed');
-            return true;
-          });
-          if (ok) {
-            this.selectElement(ent.id); // keep it selected across the rebuild
-            this.updateInfo();
-            this.toast(`${ent.type} ${key} → ${inp.type === 'number' ? v : v}`);
-          }
+      // STAGED edits, Revit-style: values pile up, Apply commits them all in
+      // ONE transaction (Enter works too); changing selection discards them
+      this._eiPending = {};
+      const applybar = el.querySelector('#gi-applybar');
+      const dirtyEl = el.querySelector('#gi-dirty');
+      const applybarRefresh = () => {
+        const n = Object.keys(this._eiPending).length;
+        applybar.hidden = !n;
+        if (n) dirtyEl.textContent = n + ' pending change' + (n > 1 ? 's' : '');
+      };
+      const applyNow = () => {
+        const pend = this._eiPending;
+        const keys = Object.keys(pend);
+        if (!keys.length) return;
+        const stairPatch = {};
+        for (const k of keys) if (pend[k].kind === 'stair') stairPatch[k] = pend[k].value;
+        const ok = this.transaction.run('apply properties', () => {
+          if (Object.keys(stairPatch).length
+            && !window.StairsFeature.rebuildStairEntity(this, ent.id, stairPatch)) throw new Error('stairs regeneration failed');
+          for (const k of keys) if (pend[k].kind === 'bim' && !this._applyBimParam(ent, k, pend[k].value))
+            throw new Error('regeneration failed for ' + k);
+          return true;
         });
+        if (ok) {
+          this._eiPending = {};
+          this.selectElement(ent.id); // keep the selection across the rebuild
+          this.updateInfo();
+          this.toast(keys.length + ' propert' + (keys.length > 1 ? 'ies' : 'y') + ' applied');
+        } else this.toast('Apply failed — values rejected, everything rolled back', true);
+      };
+      el.querySelectorAll('[data-pf],[data-st]').forEach(inp => {
+        const stage = () => {
+          const key = inp.dataset.pf || inp.dataset.st;
+          let v;
+          if (inp.type === 'checkbox') v = inp.checked;
+          else if (inp.type === 'number') v = parseFloat(inp.value);
+          else v = inp.value;
+          if (inp.type === 'number') {
+            // offsets are SIGNED displacements (+/-): only the >= 0 gate is waived
+            const signedKey = /^(offset|offsetLateral)/.test(key);
+            if (!isFinite(v) || (v < 0 && !signedKey) || (v <= 0 && !signedKey && key !== 'sillHeight')) {
+              inp.classList.add('pp-bad');
+              return;
+            }
+            inp.classList.remove('pp-bad');
+          }
+          this._eiPending[key] = { kind: inp.dataset.k, value: v };
+          applybarRefresh();
+        };
+        inp.addEventListener('input', stage);
+        inp.addEventListener('change', stage); // selects + checkboxes
+        inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); applyNow(); } });
       });
+      el.querySelector('#gi-apply').addEventListener('click', applyNow);
+      // collapsible sections (state remembered)
+      el.querySelectorAll('.pp-gh').forEach(h => h.addEventListener('click', () => {
+        const g = h.closest('.pp-grp');
+        g.classList.toggle('closed');
+        try {
+          const st = JSON.parse(localStorage.getItem('websketch3d.pp.grps') || '{}');
+          st[g.dataset.g] = g.classList.contains('closed');
+          localStorage.setItem('websketch3d.pp.grps', JSON.stringify(st));
+        } catch (e) { }
+      }));
+      el.querySelector('#gi-edittype').addEventListener('click', () => this.editTypeDialog(ent));
       const tsel = el.querySelector('#gi-type');
       if (tsel) tsel.addEventListener('change', () => {
         if (p.fixed) { this.toast('Fixed element — its geometry is the drawn design', true); tsel.value = info.typeId; return; }
         const t = siblings.find(x => x.id === tsel.value);
         if (t) this.applyElementType(ent, t);
-      });
-      // STAIRS: editable dimensions + the Handrail checkbox — every edit
-      // regenerates the stair and re-cuts its host opening
-      const stairBox = el.querySelector('#gi-stair');
-      if (stairBox) stairBox.querySelectorAll('[data-st]').forEach(inp => {
-        const apply = () => {
-          const key = inp.dataset.st;
-          let v = inp.type === 'checkbox' ? inp.checked : parseFloat(inp.value);
-          if (inp.type !== 'checkbox' && (!isFinite(v) || v <= 0)) return;
-          const patch = { [key]: v };
-          const res = this.transaction.run('edit stairs', () =>
-            window.StairsFeature.rebuildStairEntity(this, ent.id, patch));
-          if (res) {
-            this.selectElement(ent.id);
-            this.updateInfo();
-            this.toast(`Stairs ${key} → ${inp.type === 'checkbox' ? (v ? 'on' : 'off') : v}`
-              + (res.warnings && res.warnings.length ? ' (⚠ ' + res.warnings.join('; ') + ')' : ''));
-          }
-        };
-        inp.addEventListener(inp.type === 'checkbox' ? 'change' : 'change', apply);
       });
       el.querySelector('#gi-eip').addEventListener('click', () => this.enterEditInPlace(ent.id));
       el.querySelector('#gi-del').addEventListener('click', () => {
