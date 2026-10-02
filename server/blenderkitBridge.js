@@ -49,11 +49,19 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const os = require('os'); // /api/render's temp dir (a missing import 500'd the route)
 const path = require('path');
 const { Readable } = require('stream');
 
 const PORT = Number(process.env.PORT) || 3001;
 const BLENDER_TIMEOUT_MS = Number(process.env.BLENDER_TIMEOUT_MS) || 180_000;
+// Download guards: BlenderKit files are 2-80 MB on their CDN and a stalled
+// connection used to hang /api/convert — and the card's "Downloading…" —
+// FOREVER. Headers must land in 30 s, the stream may trickle but never go
+// silent longer than 90 s, and the whole file caps at 5 minutes.
+const DL_HEADERS_MS = Number(process.env.DL_HEADERS_MS) || 30_000;
+const DL_STALL_MS = Number(process.env.DL_STALL_MS) || 90_000;
+const DL_CAP_MS = Number(process.env.DL_CAP_MS) || 300_000;
 const BLENDERKIT_API = 'https://www.blenderkit.com/api/v1';
 const CACHE_DIR = path.join(__dirname, '..', 'cache');
 
@@ -61,14 +69,24 @@ const CACHE_DIR = path.join(__dirname, '..', 'cache');
 // traversal vector once it lands in `cache/${id}.blend`.
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 
-// Blender resolution: explicit env override -> PATH -> the standard macOS
-// app-bundle location (blender is rarely on PATH for launcher-started
-// shells on a Mac).
+// Blender resolution: explicit env override -> PATH (`where` on Windows,
+// `which` elsewhere) -> the standard install locations (macOS app bundle,
+// C:\Program Files\Blender Foundation). Returns '' when nothing is found.
 function resolveBlender() {
   if (process.env.BLENDER_PATH) return process.env.BLENDER_PATH;
+  const found = whichSync();
+  if (found) return found;
   const mac = '/Applications/Blender.app/Contents/MacOS/Blender';
   try { if (fs.existsSync(mac)) return mac; } catch (e) { /* inaccessible */ }
-  return 'blender'; // resolved by spawn() against PATH
+  try {
+    const root = 'C:/Program Files/Blender Foundation';
+    if (fs.existsSync(root)) {
+      const ver = fs.readdirSync(root).filter(d => /^Blender \d/.test(d)).sort().pop();
+      const exe = ver && path.join(root, ver, 'blender.exe');
+      if (exe && fs.existsSync(exe)) return exe;
+    }
+  } catch (e) { /* inaccessible */ }
+  return 'blender'; // last resort: resolved by spawn() against PATH
 }
 
 // Is a Blender binary findable at all? Drives the fail-fast guard for
@@ -76,13 +94,30 @@ function resolveBlender() {
 // converted) and the /api/health capability report.
 function blenderKnown() {
   if (process.env.BLENDER_PATH) return true;
-  const mac = '/Applications/Blender.app/Contents/MacOS/Blender';
-  try { if (fs.existsSync(mac)) return true; } catch (e) { /* inaccessible */ }
-  return !!whichSync();
+  const found = whichSync();
+  if (found) return true;
+  for (const p of ['/Applications/Blender.app/Contents/MacOS/Blender']) {
+    try { if (fs.existsSync(p)) return true; } catch (e) { /* inaccessible */ }
+  }
+  try {
+    const root = 'C:/Program Files/Blender Foundation';
+    if (fs.existsSync(root) && fs.readdirSync(root).some(d => /^Blender \d/.test(d)
+      && fs.existsSync(path.join(root, d, 'blender.exe')))) return true;
+  } catch (e) { /* inaccessible */ }
+  return false;
 }
 function whichSync() {
   const { execFileSync } = require('child_process');
-  try { return execFileSync('which', ['blender']).toString().trim(); } catch (e) { return ''; }
+  const tries = process.platform === 'win32'
+    ? [['where', ['blender']], ['which', ['blender']]] : [['which', ['blender']]];
+  for (const [cmd, args] of tries) {
+    try {
+      const out = execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] }).toString().trim();
+      const first = out.split(/\r?\n/)[0];
+      if (first) return first;
+    } catch (e) { /* keep trying */ }
+  }
+  return '';
 }
 
 const fail = (res, code, error, detail) =>
@@ -144,7 +179,7 @@ async function fetchAssetFile(downloadUrl, dest) {
     // only the API resolver takes scene_uuid — appending it to the signed
     // assets.blenderkit.com URL would invalidate the signature (403)
     if (u.pathname.startsWith('/api/')) u.searchParams.set('scene_uuid', SCENE_UUID);
-    const res = await fetch(u, { headers: UA, redirect: 'manual' });
+    const res = await fetch(u, { headers: UA, redirect: 'manual', signal: AbortSignal.timeout(DL_HEADERS_MS) });
     if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
       url = new URL(res.headers.get('location'), u).toString();
       continue;
@@ -161,12 +196,27 @@ async function fetchAssetFile(downloadUrl, dest) {
     }
     await fsp.mkdir(path.dirname(dest), { recursive: true });
     const part = dest + '.part';
-    // fetch() gives a web ReadableStream — adapt it before piping to disk
+    // fetch() gives a web ReadableStream — adapt it before piping to disk.
+    // Watchdogs end a stalled CDN connection instead of hanging the
+    // request (and the UI's "Downloading…") forever: silence for 90 s or
+    // 5 minutes total destroys the stream with a 502-grade error.
     await new Promise((resolve, reject) => {
       const out = fs.createWriteStream(part);
-      Readable.fromWeb(res.body).pipe(out);
-      out.on('finish', resolve);
-      out.on('error', reject);
+      const body = Readable.fromWeb(res.body);
+      const stallMsg = `download stalled — no data for ${Math.round(DL_STALL_MS / 1000)} s`;
+      const stallErr = () => Object.assign(new Error(stallMsg), { upstreamTimeout: true });
+      let idle = setTimeout(() => body.destroy(stallErr()), DL_STALL_MS);
+      const rearm = () => { clearTimeout(idle); idle = setTimeout(() => body.destroy(stallErr()), DL_STALL_MS); };
+      const cap = setTimeout(
+        () => body.destroy(Object.assign(new Error(`download exceeded ${Math.round(DL_CAP_MS / 60000)} min`), { upstreamTimeout: true })),
+        DL_CAP_MS,
+      );
+      const done = () => { clearTimeout(idle); clearTimeout(cap); };
+      body.on('data', rearm);
+      out.on('finish', () => { done(); resolve(); });
+      out.on('error', e => { done(); out.destroy(); reject(e); });
+      body.on('error', e => { done(); out.destroy(); fsp.unlink(part).catch(() => {}); reject(e); });
+      body.pipe(out);
     });
     await fsp.rename(part, dest);
     return;
@@ -247,7 +297,7 @@ function convert(id) {
       const blend = path.join(CACHE_DIR, `${id}.blend`);
       try {
         // 1. asset details -> downloadable files
-        const res = await fetch(`${BLENDERKIT_API}/assets/${id}/`, { headers: UA });
+        const res = await fetch(`${BLENDERKIT_API}/assets/${id}/`, { headers: UA, signal: AbortSignal.timeout(DL_HEADERS_MS) });
         if (res.status === 404) throw Object.assign(new Error('asset not found on BlenderKit'), { status: 404 });
         if (!res.ok) throw Object.assign(new Error(`BlenderKit API HTTP ${res.status}`), { status: 502 });
         let asset;
@@ -318,7 +368,7 @@ app.get('/api/search', async (req, res) => {
   u.searchParams.set('is_free', 'true');
   if (page > 1) u.searchParams.set('page', String(page));
   try {
-    const up = await fetch(u, { headers: UA });
+    const up = await fetch(u, { headers: UA, signal: AbortSignal.timeout(DL_HEADERS_MS) });
     if (!up.ok) return fail(res, 502, `BlenderKit search HTTP ${up.status}`);
     const data = annotateResults(await up.json());
     res.json(data);
@@ -341,7 +391,7 @@ const LIB_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i; // catalogue ids — also the path 
 async function libCached(rel) {
   const dst = path.join(LIB_CACHE, ...rel.split('/').filter(s => s && s !== '.' && s !== '..'));
   try { return await fsp.readFile(dst); } catch (e) { /* miss */ }
-  const up = await fetch(`${LIB_BASE}/${rel}`, { headers: UA });
+  const up = await fetch(`${LIB_BASE}/${rel}`, { headers: UA, signal: AbortSignal.timeout(DL_HEADERS_MS) });
   if (!up.ok) throw new Error(`library HTTP ${up.status}`);
   const buf = Buffer.from(await up.arrayBuffer());
   await fsp.mkdir(path.dirname(dst), { recursive: true });
@@ -386,6 +436,8 @@ app.get('/api/convert', async (req, res) => {
     res.sendFile(glb);
   } catch (err) {
     const tail = (err.stderr || '').split('\n').filter(Boolean).slice(-6).join('\n');
+    if (err.upstreamTimeout || err.name === 'TimeoutError' || err.name === 'AbortError')
+      return fail(res, 504, `BlenderKit download timed out: ${err.message}`, name);
     if (err.code === 'ETIMEDOUT')
       return fail(res, 504, `Blender conversion timed out after ${Math.round(BLENDER_TIMEOUT_MS / 1000)} s`, name);
     if (err.code === 'ENOENT')
