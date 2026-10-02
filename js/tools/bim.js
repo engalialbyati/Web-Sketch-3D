@@ -213,7 +213,7 @@ static gridColumnTrim(G, A, B, colA, colB) {
     const chained = this.engine && this.engine.chainStart ? ' (chained — Esc breaks)' : '';
     const gridHint = this.app.gridManager && this.app.gridManager.grids.length
       ? ' Snap to grid intersections; a wall between two carrying columns runs face-to-face between them (3 m − 0.2 − 0.2).' : '';
-    return `Wall: ${fmtLen(o.thickness)} thick, ${h}, baseline on the ${loc}. Draw with the palette primitives${chained}.${gridHint} VCB: "length" / "radius".`;
+    return `Wall: ${fmtLen(o.thickness)} thick, ${h}, baseline on the ${loc}. Draw with the palette primitives${chained}.${gridHint} VCB: "length" / "radius". Ctrl = no snapping.`;
   }
   _pt(ev) {
     const anchor = this.engine.stage === 1 ? this.engine.p1 : this.engine.chainStart;
@@ -230,8 +230,17 @@ static gridColumnTrim(G, A, B, colA, colB) {
     }
     if (this.engine.chainStart) snaps.push({ p: this.engine.chainStart, kind: 'endpoint', label: 'Chain Start' });
     this.app._liveSnaps = snaps;
-    const p = this.app.inferPoint(ev, anchor).p;
     const z = this.app.levelManager.getElevation(this.app.bimOptions.baseLevel);
+    // CTRL = osnap override (AutoCAD): a raw point on the base plane, no
+    // snapping at all — the escape hatch on dense models
+    if (ev && ev.ctrlKey) {
+      const { ro, rd } = this.app.view.clientToWorldRay(ev.clientX, ev.clientY);
+      if (Math.abs(rd.z) > 1e-9) {
+        const t = (z - ro.z) / rd.z;
+        return G.add(ro, G.mul(rd, t));
+      }
+    }
+    const p = this.app.inferPoint(ev, anchor).p;
     return G.v(p.x, p.y, z);
   }
   deactivate() {
