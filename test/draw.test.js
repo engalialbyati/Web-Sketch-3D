@@ -6,7 +6,8 @@ module.exports = h => {
   function loadModelExtra() {
     // single audited loader (harness)
     const L = h.loadModel(['js/tools/base.js', 'js/tools/draw.js']);
-    return { G: L.window.G, DG: L.window.DrawGeom, SV: L.window.SketchValidator };
+    return { G: L.window.G, DG: L.window.DrawGeom, SV: L.window.SketchValidator,
+             Model: L.window.Model, applyFillet: L.window.applyFilletToModel };
   }
   const extra = loadModelExtra(); const DG = extra.DG; const SketchValidator = extra.SV;
   const { G: Gi } = { G };
@@ -80,7 +81,7 @@ module.exports = h => {
   test('fillet corner: tangent points and center for a right angle', () => {
     const corner = G2.v(0, 0, 0), pA = G2.v(2, 0, 0), pB = G2.v(0, 2, 0);
     const f = DG.filletCorner(G2, corner, pA, pB, 0.5);
-    ok(f, 'fillet exists');
+    ok(f && !f.error, 'fillet exists');
     near(f.d, 0.5, 1e-9, 'tangent distance r/tan(45°) = r');
     near(f.t1.x, 0.5, 1e-9, 't1 on the x edge');
     near(f.t2.y, 0.5, 1e-9, 't2 on the y edge');
@@ -91,9 +92,91 @@ module.exports = h => {
     near(G2.dist(f.pts[f.pts.length - 1], f.t2), 0, 1e-9, 'arc ends at t2');
   });
 
+  test('fillet sweeps the MINOR interior angle, bulging toward the corner (regression: inverted notch)', () => {
+    // right angle at the origin: the arc must quarter-sweep INSIDE the
+    // wedge — the old inverted direction swept the complementary ~270°
+    // and notched outside the corner
+    const f = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(2, 0, 0), G2.v(0, 2, 0), 0.5);
+    near(f.span, Math.PI / 2, 1e-6, 'sweep = the 90° interior angle, not 270°');
+    const mid = f.pts[Math.floor(f.pts.length / 2)];
+    near(mid.x, 0.5 - 0.5 * Math.SQRT1_2, 1e-6, 'arc midpoint faces the corner (x)');
+    near(mid.y, 0.5 - 0.5 * Math.SQRT1_2, 1e-6, 'arc midpoint faces the corner (y)');
+    ok(G2.dist(G2.v(0, 0, 0), mid) < 0.5, 'the arc rounds INTO the wedge, not away');
+    // every arc point stays inside the wedge quadrant
+    for (const p of f.pts) ok(p.x >= -1e-9 && p.y >= -1e-9, 'arc point in x>=0, y>=0');
+  });
+
+  test('fillet orientation mirrors correctly (both winding orders round inward)', () => {
+    // mirrored legs: u1 = +y, u2 = +x (cross < 0) — same interior rounding
+    const f = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(0, 2, 0), G2.v(2, 0, 0), 0.5);
+    near(f.span, Math.PI / 2, 1e-6, 'mirrored corner also quarter-sweeps');
+    const mid = f.pts[Math.floor(f.pts.length / 2)];
+    near(mid.x, 0.5 - 0.5 * Math.SQRT1_2, 1e-6, 'midpoint faces the corner (x)');
+    near(mid.y, 0.5 - 0.5 * Math.SQRT1_2, 1e-6, 'midpoint faces the corner (y)');
+  });
+
+  test('fillet handles acute and obtuse interior angles', () => {
+    // obtuse 135°: u2 at 135° from +x — the arc is the shallow exterior
+    // turn (π − θ = 45°) hugging the corner
+    const ob = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(3, 0, 0), G2.v(-2, 2, 0), 0.4);
+    ok(ob && !ob.error, 'obtuse fillet exists');
+    near(ob.span, Math.PI / 4, 1e-6, 'obtuse sweep = π − θ = 45°');
+    const obMid = ob.pts[Math.floor(ob.pts.length / 2)];
+    ok(G2.dist(G2.v(0, 0, 0), obMid) < 0.1, 'obtuse arc hugs the shallow corner');
+    // acute 30°: u2 at 30° from +x — the arc wraps the sharp point (π − θ = 150°)
+    const ac = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(3, 0, 0), G2.v(3 * Math.cos(Math.PI / 6), 3 * Math.sin(Math.PI / 6), 0), 0.2);
+    ok(ac && !ac.error, 'acute fillet exists');
+    near(ac.span, 5 * Math.PI / 6, 1e-6, 'acute sweep = π − θ = 150°');
+    near(ac.d, 0.2 / Math.tan(Math.PI / 12), 1e-9, 'acute tangent distance r/tan(15°)');
+    // tangency: each radius has length r and is perpendicular to its leg
+    const r1 = G2.sub(ac.t1, ac.center), r2 = G2.sub(ac.t2, ac.center);
+    near(G2.len(r1), 0.2, 1e-9, '|radius to t1| = r');
+    near(G2.len(r2), 0.2, 1e-9, '|radius to t2| = r');
+    near(r1.x, 0, 1e-9, 'radius to t1 ⊥ the +x leg');
+    const u2 = G2.norm(G2.v(Math.cos(Math.PI / 6), Math.sin(Math.PI / 6), 0));
+    near(G2.dot(u2, r2), 0, 1e-9, 'radius to t2 ⊥ the 30° leg');
+  });
+
+  test('fillet edge cases: parallel legs and oversized radius report WHY', () => {
+    const par = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(2, 0, 0), G2.v(0.5, 0, 0), 0.5);
+    ok(par && par.error === 'parallel', 'collinear legs report parallel');
+    const big = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(0.2, 0, 0), G2.v(0, 2, 0), 0.5);
+    ok(big && big.error === 'radius', 'short leg reports radius');
+    near(big.maxR, 0.2, 1e-9, 'maxR = short leg × tan(theta/2) — the actionable bound');
+  });
+
   test('fillet refuses radii larger than the edges allow', () => {
     const f = DG.filletCorner(G2, G2.v(0, 0, 0), G2.v(0.2, 0, 0), G2.v(0, 2, 0), 0.5);
-    eq(f, null, 'edge too short for the tangent distance');
+    ok(f && f.error === 'radius', 'edge too short for the tangent distance');
+  });
+
+  test('applyFilletToModel: CROSSING lines trim their inside fragments to the tangents', () => {
+    const m = new extra.Model();
+    const e1 = m.addEdge(G2.v(-2, 0, 0), G2.v(4, 0, 0));
+    const e2 = m.addEdge(G2.v(0, -2, 0), G2.v(0, 4, 0));
+    const c = DG.cornerFromEdges(G2, m.vp(e1.a), m.vp(e1.b), m.vp(e2.a), m.vp(e2.b));
+    ok(c, 'edges cross');
+    const f = DG.filletCorner(G2, c.corner, c.pA, c.pB, 0.6);
+    ok(f && !f.error, 'fillet exists');
+    extra.applyFillet(m, { ...f, edgeA: e1, edgeB: e2 });
+    // the arc curve exists and stays inside the NE quadrant
+    const arcs = [...m.edges.values()].filter(e => e.curveId);
+    ok(arcs.length >= 6, `arc chains (${arcs.length} edges)`);
+    for (const e of arcs) for (const vi of [e.a, e.b]) {
+      const p = m.vp(vi);
+      ok(p.x >= -1e-6 && p.y >= -1e-6, 'arc vertex inside the filleted quadrant');
+    }
+    // no straight edge passes THROUGH the corner as an interior point — the
+    // inside fragments are reaped, the outer legs may only END there
+    for (const e of [...m.edges.values()]) {
+      if (e.curveId) continue;
+      ok(G2.distToSeg(G2.v(0, 0, 0), m.vp(e.a), m.vp(e.b)) > 1e-6
+        || G2.dist(G2.v(0, 0, 0), m.vp(e.a)) < 1e-6 || G2.dist(G2.v(0, 0, 0), m.vp(e.b)) < 1e-6,
+        'straight edge does not cross the corner interiorly');
+    }
+    // the outer legs survive: all four far endpoints are still reachable
+    const far = [G2.v(-2, 0, 0), G2.v(4, 0, 0), G2.v(0, -2, 0), G2.v(0, 4, 0)];
+    for (const p of far) ok([...m.vertices.values()].some(v => G2.dist(v, p) < 1e-9), 'outer endpoint kept');
   });
 
   test('corner from two edges: intersection and far endpoints', () => {

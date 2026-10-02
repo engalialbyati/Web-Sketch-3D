@@ -65,25 +65,41 @@ class DrawGeom {
     return { pts, center: G.v(center.x, center.y, center.z), radius, span };
   }
 
-  // Tangent-arc fillet at a corner: edges corner->pA and corner->pB, radius r.
-  // Tangent points sit d = r/tan(theta/2) from the corner; the arc center is
-  // on the bisector at h = r/sin(theta/2). Null for near-parallel edges or a
-  // radius larger than an edge allows.
+  // Tangent-arc fillet at a corner — AutoCAD semantics. Legs run corner P
+  // toward pA and corner P toward pB; radius r; all in the legs' (sketch)
+  // plane. Pure 2D construction in world x/y:
+  //   u1, u2   unit directions from P along both legs
+  //   theta    interior angle acos(u1·u2)
+  //   ub       interior bisector (u1+u2)/||u1+u2||
+  //   d        = r / tan(theta/2)          tangent distance from P
+  //   C        = P + (r / sin(theta/2))·ub arc center, inside the wedge
+  //   T1/T2    = P + d·u1 / P + d·u2       trim targets on each leg
+  // The arc sweeps ONLY the minor interior angle between T1 and T2: the
+  // 2D cross product u1×u2 picks the rotation direction whose SHORT way
+  // runs through the corner-facing side (the old sign was inverted — the
+  // arc notched OUTSIDE the corner and swept the complementary ~270°).
+  // Returns the fillet, or { error: 'parallel' } / { error:'radius', maxR }
+  // for the degenerate cases (callers toast the reason).
   static filletCorner(G, corner, pA, pB, r) {
-    const uA = G.norm(G.sub(pA, corner)), uB = G.norm(G.sub(pB, corner));
-    if (!uA || !uB) return null;
-    const theta = Math.acos(Math.max(-1, Math.min(1, G.dot(uA, uB))));
-    if (theta < 0.05 || Math.PI - theta < 0.05) return null;
+    const u1 = G.norm(G.sub(pA, corner)), u2 = G.norm(G.sub(pB, corner));
+    if (!u1 || !u2 || !(r > 1e-9)) return { error: 'radius', maxR: 0 };
+    const theta = Math.acos(Math.max(-1, Math.min(1, G.dot(u1, u2))));
+    if (theta < 0.05 || Math.PI - theta < 0.05) return { error: 'parallel' };
     const d = r / Math.tan(theta / 2);
-    if (G.dist(corner, pA) <= d + 1e-9 || G.dist(corner, pB) <= d + 1e-9) return null;
-    const bis = G.norm(G.add(uA, uB));
-    const center = G.add(corner, G.mul(bis, r / Math.sin(theta / 2)));
-    const t1 = G.add(corner, G.mul(uA, d)), t2 = G.add(corner, G.mul(uB, d));
-    const dir = G.cross(uA, uB).z >= 0 ? 1 : -1;
-    const arc = DrawGeom.arcSweep(G, center, r,
-      Math.atan2(t1.y - center.y, t1.x - center.x),
-      Math.atan2(t2.y - center.y, t2.x - center.x), dir);
-    return { center, radius: r, t1, t2, d, pts: arc.pts };
+    const lenA = G.dist(corner, pA), lenB = G.dist(corner, pB);
+    if (lenA <= d + 1e-9 || lenB <= d + 1e-9)
+      return { error: 'radius', maxR: Math.min(lenA, lenB) * Math.tan(theta / 2) };
+    const ub = G.norm(G.add(u1, u2));
+    const C = G.add(corner, G.mul(ub, r / Math.sin(theta / 2)));
+    const T1 = G.add(corner, G.mul(u1, d)), T2 = G.add(corner, G.mul(u2, d));
+    // start/end angles measured at the arc center; the 2D cross decides the
+    // sweep direction so T1→T2 takes the SHORT way, bulging toward the corner
+    const startAngle = Math.atan2(T1.y - C.y, T1.x - C.x);
+    const endAngle = Math.atan2(T2.y - C.y, T2.x - C.x);
+    const cross2 = u1.x * u2.y - u1.y * u2.x;
+    const dir = cross2 >= 0 ? -1 : 1;
+    const arc = DrawGeom.arcSweep(G, C, r, startAngle, endAngle, dir);
+    return { corner, center: C, radius: r, t1: T1, t2: T2, d, theta, pts: arc.pts, span: arc.span };
   }
 
   // Location-line offset (Revit): D = p2 - p1 in the draw plane; the in-plane
@@ -466,7 +482,9 @@ class DrawPrimitiveEngine {
         return true;
       }
     }
-    if (this.primitive === 'fillet' && this.edgeA) {
+    if (this.primitive === 'fillet') {
+      // the radius is typeable ANY time the fillet primitive is armed —
+      // before the first pick, between picks, or while previewing
       const r = parseLen(s);
       if (r != null && r > 1e-4) {
         this.filletRadius = r;
@@ -807,7 +825,7 @@ class DrawPrimitiveEngine {
     if (!c) return;
     const r = this.filletRadius || 0.25;
     const f = DrawGeom.filletCorner(G, c.corner, c.pA, c.pB, r);
-    if (f) {
+    if (f && !f.error) {
       view.previewLoop(f.pts, this.cfg.color);
       view.stickyLabel(c.corner, `R ${fmtLen(f.radius)}`, '#6a1fb0', 0, -20);
     }
@@ -818,7 +836,7 @@ class DrawPrimitiveEngine {
     if (!e) { if (!this.edgeA) app.toast('Hover a line first'); return; }
     if (!this.edgeA) {
       this.edgeA = e;
-      app.setStatus('Fillet: hover the second intersecting line (radius via drag or typed + Enter).');
+      app.setStatus('Fillet: hover the second intersecting line (type a radius + Enter, or drag, to change it).');
       return;
     }
     const A = app.model.vp(this.edgeA.a), A2 = app.model.vp(this.edgeA.b);
@@ -827,7 +845,14 @@ class DrawPrimitiveEngine {
     if (!c) { app.toast('Lines do not intersect'); return; }
     const r = this.filletRadius || 0.25;
     const f = DrawGeom.filletCorner(G, c.corner, c.pA, c.pB, r);
-    if (!f) { app.toast('No tangent arc at this radius'); return; }
+    if (!f || f.error) {
+      // say WHY, and what value would work — the actionable failures
+      if (f && f.error === 'parallel') app.toast('Lines are (nearly) parallel — there is no corner to fillet', true);
+      else if (f && f.error === 'radius' && f.maxR > 0)
+        app.toast(`Radius ${fmtLen(r)} is too large for these legs — type a radius up to ${fmtLen(f.maxR)} + Enter`, true);
+      else app.toast('No tangent arc at this radius', true);
+      return;
+    }
     this.cfg.onCommit({
       kind: 'fillet',
       pts: f.pts, raw: f.pts, closed: false,
@@ -843,7 +868,10 @@ class DrawPrimitiveEngine {
 function applyFilletToModel(model, f) {
   const mk = p => model.vertexAt(p);
   const idC = mk(f.corner);
-  for (const P of [f.t1, f.t2]) {
+  // split at the tangent points AND at the corner itself — crossing lines
+  // (an X) carry no vertex at the corner, so their inside-the-fillet
+  // fragments could never be reaped and poked through the arc
+  for (const P of [f.t1, f.t2, f.corner]) {
     for (const e of [...model.edges.values()]) {
       if (e.curveId) continue;
       const a = model.vp(e.a), b = model.vp(e.b);
