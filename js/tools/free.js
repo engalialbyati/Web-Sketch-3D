@@ -3,6 +3,14 @@
 // tools/free/* — SketchUp-style direct-modeling tools. Namespace: FreeTools.
 // Inner logic unchanged; all classes share the Tool lifecycle contract.
 // ---------------------------------------------------------------------------
+// Real 3D snap kinds — points measured ON existing geometry (an edge's
+// interior, an endpoint, a crossing, a center) rather than plane inference.
+// When a tool's FIRST point is one of these, the sketch plane re-anchors
+// through it, so drawing continues AT that height instead of dropping back
+// to the base level: start a rectangle on a 3 m line → it draws at 3 m.
+const SNAP3D = new Set(['edge', 'endpoint', 'midpoint', 'intersection', 'center', 'perpendicular']);
+const snap3dReanchor = (plane, p) =>
+  plane && p ? { n: plane.n, d: G.dot(plane.n, p) } : plane;
 // ---- Revit-method guard ----------------------------------------------------
 // Faces/edges of registered BIM elements are a parametric CACHE — they
 // regenerate from the element's parameters. Freeform edits that would corrupt
@@ -900,8 +908,11 @@ class LineTool extends Tool {
     if (ev.button !== 0) return;
     const { p } = this._point(ev);
     if (!this.anchor) {
-      // capture the drawing plane from the first point: the ground (z = 0)
-      // or the picked face's plane; everything after stays on it
+      // capture the drawing plane from the first point: the ground (z = 0),
+      // the picked face's plane — or, when the first point snapped onto real
+      // geometry (a line's interior, an elevated endpoint), a horizontal
+      // plane THROUGH that point: drawing continues at the snapped height
+      // instead of dropping back to the base level
       const app = this.app;
       const inf = app.inferPoint(ev);
       if (inf.kind === 'ground') this.plane = { n: G.v(0, 0, 1), d: 0 };
@@ -909,7 +920,8 @@ class LineTool extends Tool {
         const fid = app.view.pickFaceAt(app.view.eventPt(ev));
         const f = fid != null ? app.model.faces.get(fid) : null;
         if (f) this.plane = app.model.facePlane(f);
-      } else this.plane = null;
+      } else if (SNAP3D.has(inf.kind)) this.plane = { n: G.v(0, 0, 1), d: p.z };
+      else this.plane = null;
       this.anchor = p; this.status(); return;
     }
     this._commit(p);
@@ -978,6 +990,10 @@ class RectTool extends Tool {
       const pick = this._planePick(ev);
       this.plane = pick.plane;
       const inf = app.inferPoint(ev, null);
+      // FIRST corner on real geometry (a line's interior, an elevated
+      // endpoint): the plane re-anchors through it — the rectangle draws
+      // AT that height, not flattened to the base level
+      if (SNAP3D.has(inf.kind)) this.plane = snap3dReanchor(this.plane, inf.p);
       this.p1 = projectToPlane(inf.p, this.plane);
       this.status();
     } else {
@@ -1134,9 +1150,12 @@ class CircleTool extends Tool {
     if (!this.center) {
       const fid = app.view.pickFaceAt(app.view.eventPt(ev));
       this.plane = fid != null ? app.model.facePlane(app.model.faces.get(fid)) : { n: G.v(0, 0, 1), d: 0 };
+      const inf = app.inferPoint(ev, null);
+      // CENTER on real geometry: the plane re-anchors through it — the
+      // circle/polygon draws AT that height, not on the base level
+      if (SNAP3D.has(inf.kind)) this.plane = snap3dReanchor(this.plane, inf.p);
       this._ground = this.plane; // V cycles back here from the vertical plane
       this._vert = false;
-      const inf = app.inferPoint(ev, null);
       this.center = projectToPlane(inf.p, this.plane);
       this.status();
     } else {
@@ -1282,9 +1301,13 @@ class ArcTool extends Tool {
     if (!this.s) {
       const fid = app.view.pickFaceAt(app.view.eventPt(ev));
       this.plane = fid != null ? app.model.facePlane(app.model.faces.get(fid)) : { n: G.v(0, 0, 1), d: 0 };
+      const inf = app.inferPoint(ev, null);
+      // START on real geometry: the plane re-anchors through it — the arc
+      // draws AT that height, not flattened to the base level
+      if (SNAP3D.has(inf.kind)) this.plane = snap3dReanchor(this.plane, inf.p);
       this._ground = this.plane; // V cycles back here from the vertical plane
       this._vert = false;
-      this.s = projectToPlane(app.inferPoint(ev, null).p, this.plane);
+      this.s = projectToPlane(inf.p, this.plane);
       // PLACED-POINT MARKERS (like the line tool's visible points): the
       // start — and below the end — carry an endpoint square until commit
       app.view.setSnapMarks([{ p: this.s, kind: 'endpoint' }]);

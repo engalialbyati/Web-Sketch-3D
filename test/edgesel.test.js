@@ -231,4 +231,57 @@ module.exports = h => {
     ok(app2.growEdgeRun(-1), 'shrink removes the head');
     ok(!app2.sel.edges.has(c.id) && app2.sel.edges.has(b.id), 'c dropped, a+b remain');
   });
+
+  // ---- drawing FROM a line: the sketch plane re-anchors to the line's height
+  // (SketchUp behavior — the first point on real geometry continues there,
+  // not back on the base level)
+  test('line tool: starting ON a 3 m line continues at 3 m', () => {
+    const m2 = new Model();
+    const app2 = {
+      model: m2, sel: { edges: new Set(), faces: new Set() },
+      inferPoint: () => ({ kind: 'edge', p: G.v(2, 2, 3), label: 'On Edge' }),
+      view: { pickFaceAt: () => null, setSnapMarks() { }, clearPreview() { }, invalidate() { },
+        showSnapDot() { }, previewLine() { }, previewFill() { }, stickyLabel() { },
+        polarGuides() { }, toScreen: () => ({ x: 0, y: 0, visible: true }) },
+      run: (l, fn) => fn(m2),
+      setStatus() { }, toast() { },
+      lockAxis: null, axisLocks: new Set(), lockedPlane: () => null,
+    };
+    const lt = Object.create(FT.LineTool.prototype);
+    lt.app = app2; lt.activate();
+    lt.onDown({ button: 0, clientX: 100, clientY: 100 });
+    ok(Math.abs(lt.anchor.z - 3) < 1e-9, 'anchor sits ON the line (z=3)');
+    ok(lt.plane && Math.abs(lt.plane.d - 3) < 1e-9, 'plane re-anchored through the line');
+    // the NEXT click (a plain ground point) keeps the line's height
+    app2.inferPoint = () => ({ kind: 'ground', p: G.v(6, 2, 0), label: 'Ground' });
+    lt.onDown({ button: 0, clientX: 300, clientY: 100 });
+    eq(m2.edges.size, 1, 'segment committed');
+    const pts = [...m2.edges.values()].flatMap(e => [m2.vp(e.a), m2.vp(e.b)]);
+    ok(pts.every(p2 => Math.abs(p2.z - 3) < 1e-9), 'the segment stays at the line\'s height');
+  });
+
+  test('rect and circle: the first point on a line draws AT that elevation', () => {
+    const m2 = new Model();
+    const app2 = {
+      model: m2, sel: { edges: new Set(), faces: new Set() },
+      inferPoint: () => ({ kind: 'edge', p: G.v(2, 2, 3), label: 'On Edge' }),
+      view: { pickFaceAt: () => null, eventPt: () => ({ x: 0, y: 0 }), setSnapMarks() { }, clearPreview() { }, invalidate() { },
+        showSnapDot() { }, previewLine() { }, previewLoop() { }, previewFill() { }, stickyLabel() { } },
+      run: (l, fn) => fn(m2),
+      setStatus() { }, toast() { },
+      lockAxis: null, axisLocks: new Set(), lockedPlane: () => null,
+    };
+    const rt = Object.create(FT.RectTool.prototype);
+    rt.app = app2; rt.activate();
+    rt.onDown({ button: 0, clientX: 100, clientY: 100 });
+    ok(Math.abs(rt.p1.z - 3) < 1e-9, 'rect corner ON the line (z=3)');
+    ok(rt.plane && Math.abs(rt.plane.d - 3) < 1e-9, 'rect plane re-anchored');
+    const ct = Object.create(FT.CircleTool.prototype);
+    ct.app = app2; ct.activate();
+    ct.onDown({ button: 0, clientX: 100, clientY: 100 });
+    ok(Math.abs(ct.center.z - 3) < 1e-9, 'circle center ON the line (z=3)');
+    ok(ct.plane && Math.abs(ct.plane.d - 3) < 1e-9, 'circle plane re-anchored');
+    const tess = ct._tess(G.v(4, 2, 3));
+    ok(tess.pts.every(p2 => Math.abs(p2.z - 3) < 1e-9), 'the circle tessellates at the line\'s height');
+  });
 };
