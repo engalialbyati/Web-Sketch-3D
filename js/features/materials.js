@@ -308,16 +308,33 @@
       const from2 = p => ({ x: o.x + p.x * u.x + p.y * v.x, y: o.y + p.x * u.y + p.y * v.y, z: o.z + p.x * u.z + p.y * v.z });
       const uv = p => [p.x / mat.texture.size, p.y / mat.texture.size];
       const pos = [], uvs = [];
-      const emit = ring2 => {
-        for (let i = 1; i + 1 < ring2.length; i++) {
+      // HOLE-AWARE triangulation: a fanned outer ring paints a SOLID quad
+      // across every opening — a textured wall covered its windows. Same
+      // ShapeUtils path the face renderer itself uses.
+      const contour = outer.map(t2);
+      const holes = (f.holes || []).map(h => m.pts(h).map(t2));
+      let tris;
+      try {
+        tris = THREE.ShapeUtils.triangulateShape(
+          contour.map(p => new THREE.Vector2(p.x, p.y)),
+          holes.map(h => h.map(p => new THREE.Vector2(p.x, p.y))));
+      } catch (e) { tris = []; }
+      if (!tris.length) { // degenerate hole layout: fan the outer ring only
+        for (let i = 1; i + 1 < contour.length; i++)
           for (const idx of [0, i, i + 1]) {
-            const p3 = from2(ring2[idx]);
+            const p3 = from2(contour[idx]);
             pos.push(p3.x, p3.y, p3.z);
-            uvs.push(...uv(ring2[idx]));
+            uvs.push(...uv(contour[idx]));
           }
+      } else {
+        const all = contour.concat(...holes);
+        for (const t of tris) for (const idx of t) {
+          const p2 = all[idx];
+          const p3 = from2(p2);
+          pos.push(p3.x, p3.y, p3.z);
+          uvs.push(...uv(p2));
         }
-      };
-      emit(outer.map(t2));
+      }
       if (!pos.length) continue;
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
