@@ -622,6 +622,10 @@ class LevelManager {
   get levels() { return this.model.levels; }
   getLevel(id) { return this.levels.find(l => l.id === id) || null; }
   getElevation(id) {
+    // BASE LEVEL "None": the free sketch elevation — captured live from the
+    // current snap height (hover a 1.5 m wall top, the base plane sits at
+    // 1.5 m; no level binding, exactly the "draw from where I point" flow)
+    if (id === 'none') return this._freeBaseZ || 0;
     const l = this.getLevel(id);
     return l ? l.elevation : 0;
   }
@@ -3087,12 +3091,14 @@ class App {
     if (!base) return;
     // ids the model no longer knows (deleted level, undo across a delete)
     // fall back to safe selections instead of silently desyncing the selects
+    // ('none' — the free base elevation — is always valid)
     const ids = new Set(this.levelManager.levels.map(l => l.id));
-    if (!ids.has(this.bimOptions.baseLevel)) this.bimOptions.baseLevel = this.levelManager.levels[0].id;
+    if (this.bimOptions.baseLevel !== 'none' && !ids.has(this.bimOptions.baseLevel)) this.bimOptions.baseLevel = this.levelManager.levels[0].id;
     if (this.bimOptions.topConstraint !== 'unconnected' && !ids.has(this.bimOptions.topConstraint))
       this.bimOptions.topConstraint = 'unconnected';
     const opt = (v, t, sel) => `<option value="${v}"${sel ? ' selected' : ''}>${t}</option>`;
-    base.innerHTML = this.levelManager.levels.map(l => opt(l.id, `${l.name} (${l.elevation.toFixed(2)} m)`, l.id === this.bimOptions.baseLevel)).join('');
+    base.innerHTML = opt('none', 'None — draw at the picked height', this.bimOptions.baseLevel === 'none')
+      + this.levelManager.levels.map(l => opt(l.id, `${l.name} (${l.elevation.toFixed(2)} m)`, l.id === this.bimOptions.baseLevel)).join('');
     top.innerHTML = opt('unconnected', 'Unconnected', this.bimOptions.topConstraint === 'unconnected') +
       this.levelManager.levels.map(l => opt(l.id, `Up to ${l.name} (${l.elevation.toFixed(2)} m)`, l.id === this.bimOptions.topConstraint)).join('');
     if (!base.dataset.bound) {
@@ -7388,6 +7394,15 @@ class App {
   }
   inferPoint(ev, anchor) {
     const inf = this._inferPointRaw(ev, anchor);
+    // BASE LEVEL "None": the free sketch elevation follows the current snap
+    // height — real-geometry snaps carry it (a wall-top face at 1.5 m), the
+    // ground keeps 0. Every plane/height consumer reads it through
+    // getElevation('none'), so all tools follow without per-tool changes.
+    if (this.mode === 'bim' && this.bimOptions && this.bimOptions.baseLevel === 'none'
+      && this.levelManager && inf && inf.p && isFinite(inf.p.z)
+      && ['endpoint', 'midpoint', 'intersection', 'center', 'edge', 'face', 'ground'].includes(inf.kind)) {
+      this.levelManager._freeBaseZ = inf.p.z;
+    }
     const locks = this.axisLocks;
     if (anchor && locks.size && locks.size < 3) {
       if (locks.size === 2) {
@@ -9132,6 +9147,8 @@ class App {
       }
       // read-only rows, each in its Revit section
       if (lvl) grps.constraints.push({ ro: ['Base Level', lvl.name] });
+      else if (ent.params && ent.params.baseLevel === 'none')
+        grps.constraints.push({ ro: ['Base Level', `None — free at ${fmtLen(this.levelManager.getElevation('none'))}`] });
       if (p.hostWallId) grps.constraints.push({ ro: ['Host', p.hostWallId] });
       if ((ent.type === 'door' || ent.type === 'window') && p.height != null)
         grps.dimensions.push({ ro: ['Head Height', fmtLen((+p.sillHeight || 0) + (+p.height || 0))] });
@@ -10669,6 +10686,7 @@ function vpCursor(toolId) {
 // exported for the headless suite (class declarations never attach to the
 // sandbox global) — the live instance is window.app, built on DOM ready
 window.App = App;
+window.LevelManager = LevelManager;
 
 window.addEventListener('DOMContentLoaded', () => {
   try { window.app = new App(); }

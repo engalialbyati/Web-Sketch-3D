@@ -90,4 +90,33 @@ module.exports = h => {
     eq(rebuildCalls, 0, 'no rebuild for a data-only edit on a fixed element');
     eq(fw.params.mark, 'CW-1', 'mark stored');
   });
+
+  test('BASE LEVEL "None": the free sketch elevation follows the snap height', () => {
+    ok(w.LevelManager, 'LevelManager exported');
+    const lm = new w.LevelManager(m);
+    m.levels.push({ id: 'lvl_2', name: 'L2', elevation: 3 }); // levels proxy the model
+    eq(lm.getElevation('lvl_2'), 3, 'a real level reads its elevation');
+    eq(lm.getElevation('none'), 0, 'None with no captured height falls back to 0');
+    lm._freeBaseZ = 1.5; // e.g. hovering a 1.5 m wall top
+    eq(lm.getElevation('none'), 1.5, 'None reads the captured free height');
+    // the inferPoint capture: a real-geometry snap sets it, axis noise does not
+    // (inferPoint's display tail needs the full view — the capture itself
+    // happens first, so the assert runs regardless of the tail's error)
+    const cap = Object.assign(Object.create(w.App.prototype), {
+      model: m, mode: 'bim', axisLocks: new Set(), levelManager: lm,
+      bimOptions: { baseLevel: 'none' },
+      _inferPointRaw: () => ({ p: G.v(2, 2, 1.5), kind: 'face' }),
+      view: {},
+    });
+    lm._freeBaseZ = 0;
+    try { cap.inferPoint({ clientX: 10, clientY: 10 }, null); } catch (e) { }
+    eq(lm.getElevation('none'), 1.5, 'a face snap at 1.5 m moves the None base plane');
+    const ax = Object.assign(Object.create(cap), { _inferPointRaw: () => ({ p: G.v(2, 2, 9), kind: 'axis' }) });
+    try { ax.inferPoint({ clientX: 10, clientY: 10 }, null); } catch (e) { }
+    eq(lm.getElevation('none'), 1.5, 'non-snap inference leaves the captured height alone');
+    // a level-bound base ignores the capture entirely
+    const bound = Object.assign(Object.create(cap), { bimOptions: { baseLevel: 'lvl_2' } });
+    try { bound.inferPoint({ clientX: 10, clientY: 10 }, null); } catch (e) { }
+    eq(lm.getElevation('lvl_2'), 3, 'level-bound base never moves');
+  });
 };

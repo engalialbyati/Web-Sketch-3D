@@ -505,17 +505,18 @@ app.post('/api/render',
     fs.writeFileSync(inPath, buf);
     const py = `
 import bpy, math
+from mathutils import Vector
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=${JSON.stringify(inPath)})
 # glTF node already carries the Z-up -> Y-up rotation
 cam_data = bpy.data.cameras.new('Cam')
 cam = bpy.data.objects.new('Cam', cam_data)
-bpy.data.collections[0].objects.link(cam)
+bpy.context.scene.collection.objects.link(cam)
 cx, cy, cz = ${cam.px}, ${cam.py}, ${cam.pz}
 tx, ty, tz = ${cam.tx}, ${cam.ty}, ${cam.tz}
 cam.location = (cx, cz, -cy)
 d = bpy.ops.object
-direction = (tx - cx, tz - cz, -(ty - cy))
+direction = Vector((tx - cx, tz - cz, -(ty - cy)))
 rot_quat = direction.to_track_quat('-Z', 'Y')
 cam.rotation_euler = rot_quat.to_euler()
 cam_data.lens = ${Number(cam.fovmm) > 1 ? Number(cam.fovmm) : 50}
@@ -528,11 +529,11 @@ bpy.context.scene.render.film_transparent = False
 if ${night ? 'True' : 'False'}:
     for i, x in enumerate((-6, 6)):
         l = bpy.data.lights.new('L%d' % i, 'AREA'); l.energy = 3000
-        lo = bpy.data.objects.new('L%d' % i, l); bpy.data.collections[0].objects.link(lo)
+        lo = bpy.data.objects.new('L%d' % i, l); bpy.context.scene.collection.objects.link(lo)
         lo.location = (x, 8, 5); lo.rotation_euler = (math.radians(45), 0, math.radians(-30 if x < 0 else 30))
 else:
     sun = bpy.data.lights.new('Sun', 'SUN'); sun.energy = 3.2
-    so = bpy.data.objects.new('Sun', sun); bpy.data.collections[0].objects.link(so)
+    so = bpy.data.objects.new('Sun', sun); bpy.context.scene.collection.objects.link(so)
     so.rotation_euler = (math.radians(50), 0, math.radians(35))
 bpy.context.scene.world = bpy.data.worlds.new('W')
 bpy.context.scene.world.color = (0.75, 0.8, 0.88) if not ${night ? 'True' : 'False'} else (0.02, 0.03, 0.06)

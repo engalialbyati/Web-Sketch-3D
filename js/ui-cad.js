@@ -205,10 +205,13 @@
 
   // fill level-dependent selects anywhere in the bar
   function fillLevelSelects(root) {
+    // "None" — no level binding: the sketch elevation follows the height you
+    // point at (hover a 1.5 m wall top, draw the floor at 1.5 m)
+    const noneOpt = '<option value="none">None — picked height</option>';
     const opts = app.levelManager.levels.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
     root.querySelectorAll('select[data-opt="baseLevel"]').forEach(s => {
       const cur = app.bimOptions.baseLevel;
-      s.innerHTML = opts;
+      s.innerHTML = noneOpt + opts;
       if ([...s.options].some(o => o.value === cur)) s.value = cur;
     });
     root.querySelectorAll('select[data-opt="topConstraint"]').forEach(s => {
@@ -389,7 +392,8 @@
     const tool = app.tool ? app.tool.id : '';
     const isBimTool = ['wall', 'floor', 'door', 'window', 'opening', 'draw', 'convert'].includes(tool);
     const fams = (app.families ? app.families.list : []).filter(f => f.kind === 'door' || f.kind === 'window');
-    const lvlOpts = app.levelManager.levels.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+    const lvlOpts = '<option value="none">None — picked height</option>'
+      + app.levelManager.levels.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
     let h = `<div class="pp-head"><div class="pp-title">${toolName(tool)}</div><div class="pp-sub">${app.mode === 'bim' ? 'Precise Drawing' : 'Free Drawing'}</div></div>`;
     if (isBimTool) {
       h += `<div class="pp-group">Constraints</div>`
