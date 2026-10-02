@@ -2835,6 +2835,10 @@ class App {
     // they close — opt-in, remembered across sessions
     this.autoFaceOn = false;
     try { this.autoFaceOn = localStorage.getItem('websketch3d.autoface') === '1'; } catch (e) { }
+    // DRAW METHODS per tool — the Options Bar's Method dropdown (circle:
+    // center|two-point, arc: bulge|radius); remembered across sessions
+    this.drawMethods = { circle: 'center', arc: 'bulge' };
+    try { Object.assign(this.drawMethods, JSON.parse(localStorage.getItem('websketch3d.drawMethods') || '{}')); } catch (e) { }
     this.gridSnap = false; // F9: snap drawing points to the 1 m grid
     this.shadowsOn = true; this.fogOn = true; this.xrayOn = false;
     try { this.perfHudOn = !!localStorage.getItem('websketch3d.perfhud'); } catch (e) { this.perfHudOn = false; }

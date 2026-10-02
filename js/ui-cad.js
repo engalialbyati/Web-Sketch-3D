@@ -92,6 +92,11 @@
         <select id="ob-type"></select>
       </div>
       <div class="ob-sep"></div>
+      <div class="ob-group ob-method">
+        <span class="ob-lab">Method</span>
+        <select id="ob-method"></select>
+      </div>
+      <div class="ob-sep ob-method-sep"></div>
       <div class="ob-group ob-wall">
         <span class="ob-lab">Base Level</span><select data-opt="baseLevel"></select>
         <span class="ob-lab">Top</span>
@@ -130,7 +135,10 @@
     ob = {
       bar,
       typeSel: bar.querySelector('#ob-type'),
+      methodSel: bar.querySelector('#ob-method'),
       gWall: bar.querySelector('.ob-wall'),
+      gMethod: bar.querySelector('.ob-method'),
+      gMethodSep: bar.querySelector('.ob-method-sep'),
       gHosted: bar.querySelector('.ob-hosted'),
       gConvert: bar.querySelector('.ob-convert'),
       gDraw: bar.querySelector('#ob-drawslot'),
@@ -158,6 +166,18 @@
       } else if (v.startsWith('fam:')) {
         app.bimOptions.family = v.slice(4);
       }
+    });
+    // the METHOD selector (free Circle/Arc): which construction the tool uses
+    ob.methodSel.addEventListener('change', () => {
+      const t = app.tool ? app.tool.id : '';
+      const v = ob.methodSel.value;
+      // an empty value means the options had not been (re)populated yet —
+      // never store it over a real method
+      if (!v || (t !== 'circle' && t !== 'arc')) return;
+      app.drawMethods[t] = v;
+      try { localStorage.setItem('websketch3d.drawMethods', JSON.stringify(app.drawMethods)); } catch (e) { }
+      if (app.tool.activate) app.tool.activate(); // restart the construction
+      if (app.tool.status) app.tool.status();
     });
     bindAll(bar);
     // SDK feature fields: data-feat="<featureId>" inputs write the feature's
@@ -224,7 +244,19 @@
   function renderOptionsBar() {
     const tool = app.tool ? app.tool.id : '';
     const bim = app.mode === 'bim';
-    ob.bar.classList.toggle('visible', bim);
+    // the Method dropdown also brings the bar up for the free circle/arc
+    // tools — the only options they carry
+    const methodTool = !bim && (tool === 'circle' || tool === 'arc');
+    ob.bar.classList.toggle('visible', bim || methodTool);
+    if (methodTool) {
+      const opts = tool === 'circle'
+        ? [['center', 'Center, Radius'], ['two-point', 'Start, End (2 points)']]
+        : [['bulge', 'Start, End, Bulge'], ['radius', 'Start, End, Radius']];
+      const cur = (app.drawMethods && app.drawMethods[tool]) || opts[0][0];
+      ob.methodSel.innerHTML = opts.map(([v, l]) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`).join('');
+    }
+    if (ob.gMethod) ob.gMethod.style.display = methodTool ? '' : 'none';
+    if (ob.gMethodSep) ob.gMethodSep.style.display = methodTool ? '' : 'none';
     if (!bim) return;
     const o = app.bimOptions || {};
     const sketchTools = ['draw', 'wall', 'floor', 'roof'].includes(tool);

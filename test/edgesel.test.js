@@ -2,7 +2,7 @@
 // tools/free.js EdgeSelectTool — the EDGES-ONLY selection mode: clicks and
 // box drags pick edges (chain-aware), never faces/elements/annotations.
 module.exports = h => {
-  const { test, ok, eq } = h;
+  const { test, ok, eq, near } = h;
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 
   function loadES() {
@@ -283,5 +283,85 @@ module.exports = h => {
     ok(ct.plane && Math.abs(ct.plane.d - 3) < 1e-9, 'circle plane re-anchored');
     const tess = ct._tess(G.v(4, 2, 3));
     ok(tess.pts.every(p2 => Math.abs(p2.z - 3) < 1e-9), 'the circle tessellates at the line\'s height');
+  });
+
+  // ---- METHOD dropdown: circle Start-End (2 points), arc Start-End-Radius ----
+  function methodApp(m2, drawMethods, cur) {
+    return {
+      model: m2, sel: { edges: new Set(), faces: new Set() }, drawMethods,
+      inferPoint: () => ({ kind: 'ground', p: { ...cur.v } }),
+      view: { pickFaceAt: () => null, eventPt: () => ({ x: 0, y: 0 }),
+        setSnapMarks() { }, clearSnapMarks() { }, clearPreview() { }, invalidate() { },
+        showSnapDot() { }, previewLine() { }, previewLoop() { }, previewFill() { }, stickyLabel() { },
+        hudLabel() { }, toScreen: () => ({ x: 0, y: 0, visible: true }) },
+      run: (l, fn) => fn(m2),
+      setStatus() { }, toast() { },
+      lockAxis: null, axisLocks: new Set(), lockedPlane: () => null,
+    };
+  }
+
+  test('circle METHOD Start-End: the two clicks span the diameter', () => {
+    const m2 = new Model();
+    const cur = { v: G.v(0, 0, 0) };
+    const app2 = methodApp(m2, { circle: 'two-point' }, cur);
+    const ct = Object.create(FT.CircleTool.prototype);
+    ct.app = app2; ct.polygon = false; ct.sides = 24; ct.activate();
+    cur.v = G.v(0, 0, 0);
+    ct.onDown({ button: 0 });
+    ok(ct.center && ct.center.x === 0, 'first click = diameter start');
+    cur.v = G.v(4, 0, 0);
+    ct.onMove({});
+    ct.onDown({ button: 0 });
+    const meta = [...m2.curves.values()].find(c => c.type === 'circle');
+    ok(meta, 'circle curve committed');
+    near(meta.radius, 2, 1e-9, 'radius = half the span');
+    near(meta.center.x, 2, 1e-9, 'center at the midpoint (x)');
+    near(meta.center.y, 0, 1e-9, 'center at the midpoint (y)');
+    // a typed radius spans the diameter along the drag direction
+    const ct2 = Object.create(FT.CircleTool.prototype);
+    ct2.app = app2; ct2.polygon = false; ct2.sides = 24; ct2.activate();
+    cur.v = G.v(1, 1, 0);
+    ct2.onDown({ button: 0 });
+    cur.v = G.v(4, 1, 0); // dragging +x
+    ct2.onMove({});
+    ok(ct2.onVCB('1.5'), 'typed radius accepted');
+    const meta2 = [...m2.curves.values()].filter(c => c.type === 'circle')[1];
+    ok(meta2, 'second circle committed');
+    near(meta2.radius, 1.5, 1e-9, 'typed radius honored');
+    near(meta2.center.x, 1 + 1.5, 1e-9, 'diameter spans 2r along the drag');
+  });
+
+  test('arc METHOD Start-End-Radius: the typed radius locks the arc', () => {
+    const m2 = new Model();
+    const cur = { v: G.v(0, 0, 0) };
+    const app2 = methodApp(m2, { arc: 'radius' }, cur);
+    const at = Object.create(FT.ArcTool.prototype);
+    at.app = app2; at.activate();
+    cur.v = G.v(0, 0, 0);
+    at.onDown({ button: 0 }); // start
+    cur.v = G.v(4, 0, 0);
+    at.onDown({ button: 0 }); // end (chord 4)
+    cur.v = G.v(2, 1, 0);     // bulge side: above
+    at.onMove({});
+    ok(at.s && at.e && at.bulge, 'stages advanced');
+    eq(m2.edges.size, 0, 'nothing committed before the radius is typed');
+    ok(at.onVCB('3'), 'typed radius accepted');
+    ok(at._radius === 3, 'radius locked, arc NOT committed yet');
+    at.onMove({}); // constrained preview — side from the cursor
+    const sag = 3 - Math.sqrt(3 * 3 - 4); // 3 − √5
+    near(at.bulge.y, sag, 1e-9, 'the apex sits exactly on the R circle');
+    near(at.bulge.x, 2, 1e-9, 'apex on the chord midpoint');
+    at.onDown({ button: 0 }); // commit
+    const meta = [...m2.curves.values()].find(c => c.type === 'arc');
+    ok(meta, 'arc committed');
+    near(meta.radius, 3, 1e-9, 'committed arc carries the typed radius');
+    // flipping the drag side mirrors the arc
+    const at2 = Object.create(FT.ArcTool.prototype);
+    at2.app = app2; at2.activate();
+    cur.v = G.v(0, 0, 0); at2.onDown({ button: 0 });
+    cur.v = G.v(4, 0, 0); at2.onDown({ button: 0 });
+    cur.v = G.v(2, -1, 0); at2.onMove({}); // below
+    at2.onVCB('3'); at2.onMove({});
+    near(at2.bulge.y, -sag, 1e-9, 'the other side mirrors the apex');
   });
 };

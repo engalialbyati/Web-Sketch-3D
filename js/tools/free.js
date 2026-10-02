@@ -1108,10 +1108,16 @@ class CircleTool extends Tool {
     this.polygon = polygon;
     this.sides = polygon ? 6 : 24;
   }
-  activate() { this.center = null; this.plane = null; this.r = 0; this._pts = null; this._vert = false; }
+  activate() { this.center = null; this.plane = null; this.r = 0; this._pts = null; this._vert = false; this._p2 = null; }
   cleanup() { super.cleanup(); this.activate(); }
+  get method() { return (this.app.drawMethods && this.app.drawMethods.circle) || 'center'; }
   get hint() {
     const nm = this.polygon ? 'Polygon' : 'Circle';
+    if (this.method === 'two-point' && !this.polygon) {
+      return this.center
+        ? 'Circle (2 points): click the END of the diameter — the two clicks span it (type a radius + Enter). V flips the plane vertical. Esc cancels.'
+        : 'Circle (2 points): click the START of the diameter (on the ground or on a face). Method: Options Bar ▸ Method.';
+    }
     return this.center
       ? `${nm}: click to set the radius (type a value + Enter; "1,12" = radius,sides). V flips the plane vertical. Esc cancels.`
       : `${nm}: click to set the center point (on the ground or on a face).`;
@@ -1135,14 +1141,18 @@ class CircleTool extends Tool {
     }
   }
   _tess(p2) {
-    const { u, v } = G.basisForNormal(this.plane.n);
     const r = G.dist(this.center, p2);
+    return { r, pts: this._tessAround(this.center, r) };
+  }
+  // circle around an arbitrary center (the 2-point method's midpoint)
+  _tessAround(c, r) {
+    const { u, v } = G.basisForNormal(this.plane.n);
     const pts = [];
     for (let i = 0; i < this.sides; i++) {
       const t = i / this.sides * Math.PI * 2;
-      pts.push(G.add(G.add(this.center, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
+      pts.push(G.add(G.add(c, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
     }
-    return { r, pts };
+    return pts;
   }
   onDown(ev) {
     if (ev.button !== 0) return;
@@ -1158,6 +1168,11 @@ class CircleTool extends Tool {
       this._vert = false;
       this.center = projectToPlane(inf.p, this.plane);
       this.status();
+    } else if (this.method === 'two-point' && !this.polygon) {
+      // 2-POINT method: the second click ends the diameter
+      const inf = app.inferPoint(ev, this.center);
+      const p = this._p2 != null ? this._p2 : projectToPlane(inf.p, this.plane);
+      this._commit2p(p);
     } else {
       if (this._r == null) { // click landed without a prior mouse move
         const inf = app.inferPoint(ev, this.center);
@@ -1181,9 +1196,26 @@ class CircleTool extends Tool {
     if (lp) this.plane = lp;
     const inf = app.inferPoint(ev, this.center);
     const p = projectToPlane(inf.p, this.plane);
+    view.clearPreview();
+    if (this.method === 'two-point' && !this.polygon) {
+      // 2-POINT preview: the two clicks span the DIAMETER — midpoint center,
+      // half-distance radius
+      this._p2 = p;
+      const mid = G.mul(G.add(this.center, p), 0.5);
+      const r = G.dist(this.center, p) / 2;
+      this._r = r;
+      const pts = this._tessAround(mid, r);
+      view.previewLoop(pts, 0x2b2b2b);
+      view.previewLine([this.center, p], 0x8a8a8a, true);
+      view.previewFill([{ outer: pts }], 0x2f6fdb, 0.08);
+      const s = view.toScreen(p);
+      view.stickyLabel(p, `Ø ${fmtLen(r * 2)}  ·  ${this.sides} sides`, '#333', 0, 0);
+      showCursorCoords(view, s, inf, p);
+      view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
+      return;
+    }
     const { r, pts } = this._tess(p);
     this._r = r;
-    view.clearPreview();
     view.previewLoop(pts, 0x2b2b2b);
     view.previewLine([this.center, pts[0]], 0x8a8a8a, true);
     if (!this.polygon) view.previewFill([{ outer: pts }], 0x2f6fdb, 0.08);
@@ -1194,20 +1226,28 @@ class CircleTool extends Tool {
     view.hudLabel(sc.x, sc.y - 16, fmtCoord(this.center), '#5a3fa0');
     view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
   }
-  _commit(r) {
+  _commit(r) { this._commitCore(this.center, r); }
+  // 2-POINT method: the two clicks span the diameter — center at the
+  // midpoint, radius = half the span
+  _commit2p(end) {
+    const d = G.dist(this.center, end);
+    if (d < 1e-6) { this.app.toast('Diameter is too small'); return; }
+    this._commitCore(G.mul(G.add(this.center, end), 0.5), d / 2);
+  }
+  _commitCore(center, r) {
     const app = this.app;
     if (!r || r < 1e-6) { app.toast('Radius is too small'); return; }
     const { u, v } = G.basisForNormal(this.plane.n);
     const pts = [];
     for (let i = 0; i <= this.sides; i++) {
       const t = i / this.sides * Math.PI * 2;
-      pts.push(G.add(G.add(this.center, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
+      pts.push(G.add(G.add(center, G.mul(u, Math.cos(t) * r)), G.mul(v, Math.sin(t) * r)));
     }
     app.run(this.polygon ? 'polygon' : 'circle', m => {
       // WIRES ONLY in free space — the face is created explicitly via
       // Create Face; drawn ON a face the closed loop DIVIDES it (the
       // circle/polygon becomes its own face, the host keeps the remainder)
-      m.addPolyline(pts, { type: this.polygon ? 'polygon' : 'circle', center: G.clone(this.center), radius: r, normal: G.clone(this.plane.n), sides: this.sides });
+      m.addPolyline(pts, { type: this.polygon ? 'polygon' : 'circle', center: G.clone(center), radius: r, normal: G.clone(this.plane.n), sides: this.sides });
       m.divideFaceWithLoop(pts.slice(0, this.sides)); // drop the closing repeat
     });
     this.activate();
@@ -1231,6 +1271,15 @@ class CircleTool extends Tool {
       const s = parseInt(parts[1]);
       if (s >= 3 && s <= 256) this.sides = s;
     }
+    // 2-POINT method: a typed radius spans the diameter along the current
+    // drag direction (fallback: the plane's first basis axis)
+    if (this.method === 'two-point' && !this.polygon) {
+      const dirRaw = this._p2 != null ? G.sub(this._p2, this.center) : G.basisForNormal(this.plane.n).u;
+      const L = G.len(dirRaw);
+      if (L < 1e-9) return false;
+      this._commit2p(G.add(this.center, G.mul(dirRaw, (2 * r) / L)));
+      return true;
+    }
     this._commit(r);
     return true;
   }
@@ -1240,14 +1289,17 @@ class CircleTool extends Tool {
 class ArcTool extends Tool {
   static id = 'arc';
   activate() {
-    this.s = null; this.e = null; this.plane = null; this.bulge = null; this._vert = false;
+    this.s = null; this.e = null; this.plane = null; this.bulge = null; this._vert = false; this._radius = null;
     this.app.view.clearSnapMarks(); // placed-point markers follow the tool's life
   }
   cleanup() { super.cleanup(); this.activate(); }
+  get method() { return (this.app.drawMethods && this.app.drawMethods.arc) || 'bulge'; }
   get hint() {
     if (!this.s) return 'Arc: click the start point.';
     if (!this.e) return 'Arc: click the end point (chord). V flips the plane vertical (arcs in Z).';
-    return 'Arc: move to set the bulge, click to finish. Type radius or bulge + Enter.';
+    return this.method === 'radius'
+      ? 'Arc (radius): the arc is LOCKED to the typed radius — move to pick the bulge side, click to finish. Type a radius + Enter (min = half the chord).'
+      : 'Arc: move to set the bulge, click to finish. Type radius or bulge + Enter.';
   }
   // V cycles the sketch plane: ground (or picked face) ↔ a vertical plane —
   // WITHOUT moving the placed points. The vertical plane is built THROUGH
@@ -1371,7 +1423,10 @@ class ArcTool extends Tool {
       return;
     }
     const inf = app.inferPoint(ev, this.s);
-    const bulgePt = projectToPlane(inf.p, this.plane);
+    let bulgePt = projectToPlane(inf.p, this.plane);
+    // RADIUS method: once a radius is typed the arc is LOCKED to it — the
+    // drag only picks the bulge side (the apex sits exactly on the R circle)
+    if (this.method === 'radius' && this._radius != null) bulgePt = this._radiusBulge(bulgePt);
     const arc = this._arc(bulgePt);
     this.bulge = bulgePt;
     this._arcData = arc;
@@ -1380,10 +1435,25 @@ class ArcTool extends Tool {
       const half = G.dist(this.s, this.e) / 2;
       const sag = arc.radius - Math.sqrt(Math.max(arc.radius * arc.radius - half * half, 0));
       const s = view.toScreen(bulgePt);
-      view.stickyLabel(bulgePt, `r ${fmtLen(arc.radius)} · bulge ${fmtLen(sag)}`, '#333', 0, 0);
+      view.stickyLabel(bulgePt, this._radius != null && this.method === 'radius'
+        ? `R ${fmtLen(this._radius)} (locked) — move picks the side`
+        : `r ${fmtLen(arc.radius)} · bulge ${fmtLen(sag)}`, '#333', 0, 0);
       showCursorCoords(view, s, inf, bulgePt);
     }
     view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
+  }
+  // The RADIUS method's constrained bulge point: on the typed radius's arc,
+  // on the side the cursor is dragging toward
+  _radiusBulge(rawBulge) {
+    const chord = G.dist(this.s, this.e);
+    const half = chord / 2;
+    const R = this._radius;
+    if (!(R >= half + 1e-9)) return rawBulge; // untyped/too small: free drag
+    const dir = G.norm(G.cross(this.plane.n, G.sub(this.e, this.s)));
+    const mid = G.mul(G.add(this.s, this.e), 0.5);
+    const side = Math.sign(G.dot(G.sub(rawBulge, mid), dir)) || 1;
+    const sag = R - Math.sqrt(Math.max(R * R - half * half, 0));
+    return G.add(mid, G.mul(dir, side * sag));
   }
   _commit(bulgePt) {
     const app = this.app;
@@ -1493,6 +1563,22 @@ class ArcTool extends Tool {
     const val = parseLen(text);
     if (val == null) return false;
     const chord = G.dist(this.s, this.e);
+    // RADIUS method: a typed radius LOCKS the arc (drag picks the side,
+    // the click commits) instead of committing immediately
+    if (this.method === 'radius') {
+      if (val < chord / 2 - 1e-9) {
+        this.app.toast(`Radius must be at least half the chord (${fmtLen(chord / 2)})`, true);
+        return true;
+      }
+      this._radius = val;
+      this.bulge = this._radiusBulge(this.bulge);
+      this._arcData = this._arc(this.bulge);
+      const app = this.app, view = app.view;
+      view.clearPreview();
+      if (this._arcData) view.previewLine(this._arcData.pts, 0x2b2b2b);
+      this.app.setStatus(`Arc radius ${fmtLen(val)} locked — move to pick the side, click to finish`);
+      return true;
+    }
     const { u, v } = G.basisForNormal(this.plane.n);
     const mid = G.mul(G.add(this.s, this.e), 0.5);
     const dir = G.norm(G.cross(this.plane.n, G.sub(this.e, this.s)));
