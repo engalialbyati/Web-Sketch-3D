@@ -117,6 +117,7 @@ const ICONS = {
   circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/></svg>',
   polygon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4l7 5-2.6 8H7.6L5 9z"/></svg>',
   arc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18a12 12 0 0 1 16-9"/><circle cx="4" cy="18" r="1.7" fill="currentColor" stroke="none"/><circle cx="20" cy="9" r="1.7" fill="currentColor" stroke="none"/></svg>',
+  fillet: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4v10a6 6 0 0 0 6 6h10"/><circle cx="4" cy="4" r="1.5" fill="currentColor" stroke="none"/><circle cx="20" cy="20" r="1.5" fill="currentColor" stroke="none"/></svg>',
   pushpull: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="13" width="14" height="7"/><path d="M12 11V4"/><path d="M8.5 7.5L12 4l3.5 3.5"/></svg>',
   extrude: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 17c5-9 11-9 16 0"/><path d="M4 17v4M20 17v4M4 21h16"/><path d="M12 10V4"/><path d="M9.5 6.5L12 4l2.5 2.5"/></svg>',
   offset: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16"/><rect x="8" y="8" width="8" height="8" stroke-dasharray="2 2"/></svg>',
@@ -228,6 +229,7 @@ const TOOL_DEFS = {
     { id: 'edgeselect', label: 'Edge Select', key: 'K' },
     'sep',
     { id: 'draw', label: 'Draw', key: 'D' },
+    { id: 'fillet', label: 'Fillet', key: '' },
     { id: 'wall', label: 'Wall', key: 'L' },
     { id: 'floor', label: 'Floor', key: 'R' },
     { id: 'room', label: 'Room', key: '' },
@@ -338,7 +340,7 @@ const RIBBON_GROUPS = {
 const RIBBON_TABS = {
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon'] },
+    { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'fillet'] },
     { title: 'Sketch', tools: ['draw'] },
     { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
@@ -3033,6 +3035,10 @@ class App {
       if (!chip) return;
       this.bimOptions.primitive = chip.dataset.prim;
       this._refreshDrawPalette();
+      // keep the Draw tab's Fillet shortcut in step with the strip (lit only
+      // while the fillet primitive is actually selected)
+      document.querySelectorAll('#toolbar .tbtn[data-tool="fillet"]').forEach(b =>
+        b.classList.toggle('active', chip.dataset.prim === 'fillet'));
       if (this.tool && this.tool.engine && this.tool.engine.reset) this.tool.engine.reset();
       this.tool && this.tool.status && this.tool.status();
     });
@@ -4836,6 +4842,14 @@ class App {
   }
 
   setTool(id) {
+    // FILLET (Draw tab ▸ 2D Curves): one-click entry into the sketch
+    // engine's fillet primitive — activates Draw with Fillet preselected,
+    // the same state the Fillet chip in the Draw & Measure strip sets
+    if (id === 'fillet') {
+      this.bimOptions.primitive = 'fillet';
+      this._refreshDrawPalette();
+      id = 'draw';
+    }
     // cross-tab pick: a tool ABSENT from the current engine mode switches to
     // the mode it lives in (setMode applies the pending tool once the mode's
     // state is ready). Tools present here — including shared ones like
@@ -4865,7 +4879,9 @@ class App {
     this.view.clearPreview();
     this.view.hideSnapDot();
     document.querySelectorAll('#toolbar .tbtn[data-tool]').forEach(b =>
-      b.classList.toggle('active', b.dataset.tool === id));
+      b.classList.toggle('active', b.dataset.tool === id
+        // the Fillet shortcut lights while the sketch engine runs its fillet
+        || (b.dataset.tool === 'fillet' && id === 'draw' && this.bimOptions.primitive === 'fillet')));
     this.setStatus(this.tool.hint);
     vpCursor(this.tool.id);
     this._refreshDrawPalette && this._refreshDrawPalette();
@@ -5136,7 +5152,7 @@ class App {
       ]],
       ['Draw', [
         ['Line', 'toolLine', 'L'], ['Arc', 'toolArc', 'A'], ['Circle', 'toolCircle', 'C'],
-        ['Polygon', 'toolPolygon', ''], ['Rectangle', 'toolRect', 'R'],
+        ['Polygon', 'toolPolygon', ''], ['Rectangle', 'toolRect', 'R'], ['Fillet', 'toolFillet', ''],
       ]],
       ['Tools', [
         ['Select', 'toolSelect', 'Space'], ['Eraser', 'toolEraser', 'E'],
@@ -5558,7 +5574,7 @@ class App {
       viewLeft: () => A.setStandardView('left'),
       viewRight: () => A.setStandardView('right'),
       zoomExtents: () => A.view.zoomExtents(),
-      toolLine: () => A.setTool('line'), toolArc: () => A.setTool('arc'),
+      toolLine: () => A.setTool('line'), toolArc: () => A.setTool('arc'), toolFillet: () => A.setTool('fillet'),
       toolCircle: () => A.setTool('circle'), toolPolygon: () => A.setTool('polygon'),
       toolRect: () => A.setTool('rect'), toolSelect: () => A.setTool('select'),
       toolEraser: () => A.setTool('eraser'), toolPaint: () => A.setTool('paint'),
