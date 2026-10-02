@@ -2534,6 +2534,42 @@ class Viewport {
     ctx.font = '600 12.5px system-ui, sans-serif';
     for (const it of this.hudItems) this._drawHudItem(ctx, it.sx, it.sy, it.text, it.color);
     this.hudItems = [];
+    // TEMPORARY DIMENSION (Revit): one selected parametric wall shows its
+    // length as an inline dimension above the wall — set from
+    // onSelectionChanged (wallTempDim = { a, b, len }), re-projected every
+    // frame like the osnap glyphs
+    if (this.wallTempDim) {
+      const td = this.wallTempDim;
+      const sa = this.toScreen(td.a), sb = this.toScreen(td.b);
+      const off = 26; // px above the wall
+      const nx = -(sb.y - sa.y), ny = sb.x - sa.x;
+      const nl = Math.hypot(nx, ny) || 1;
+      const o = { x: nx / nl * off, y: ny / nl * off };
+      const a2 = { x: sa.x + o.x, y: sa.y + o.y }, b2 = { x: sb.x + o.x, y: sb.y + o.y };
+      ctx.strokeStyle = '#0a66c2'; ctx.fillStyle = '#0a66c2'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(a2.x, a2.y); ctx.lineTo(b2.x, b2.y); ctx.stroke();
+      for (const p of [a2, b2]) { ctx.beginPath(); ctx.arc(p.x, p.y, 2.6, 0, 7); ctx.fill(); }
+      // extension ticks from the wall ends to the dim line
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(sa.x, sa.y); ctx.lineTo(a2.x, a2.y); ctx.moveTo(sb.x, sb.y); ctx.lineTo(b2.x, b2.y); ctx.stroke();
+      ctx.setLineDash([]);
+      const mx = (a2.x + b2.x) / 2, my = (a2.y + b2.y) / 2;
+      const label = fmtLen(td.len);
+      ctx.font = '600 12px system-ui, sans-serif';
+      const tw = ctx.measureText(label).width;
+      const bw = tw + 30, bh = 18;
+      ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#0a66c2'; ctx.lineWidth = 1;
+      ctx.strokeRect(mx - bw / 2, my - bh / 2, bw, bh);
+      ctx.fillRect(mx - bw / 2, my - bh / 2, bw, bh);
+      ctx.fillStyle = '#0a66c2';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(label, mx + 8, my + 1);
+      ctx.font = '11px system-ui';
+      ctx.fillText('✎', mx - bw / 2 + 9, my + 1);
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      // the chip is the click target — ResizeTool/SelectTool hit-test it
+      this.wallTempDimHit = { x: mx - bw / 2, y: my - bh / 2, w: bw, h: bh };
+    } else if (this.wallTempDimHit) this.wallTempDimHit = null;
     this._repushSnapGlyph();
     // tool-placed point marks (arc start/end …): re-projected every frame
     // so they survive a resting mouse and camera moves, like sticky labels

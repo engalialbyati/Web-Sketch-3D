@@ -433,10 +433,12 @@ class DrawPrimitiveEngine {
       // one Esc breaks the chain (the tool stays active); a second exits
       this.chainStart = null;
       if (this.cfg.onModeChange) this.cfg.onModeChange();
-      this.app.setStatus('Chain broken — click to start fresh.');
+      this.app.setStatus('Chain broken — click to start fresh, Esc again to Select.');
       return true;
     }
-    return false;
+    // nothing in progress: Esc returns to Select (Revit's post-draw state)
+      this.app.setTool('select');
+      return true;
   }
   onVCB(text) {
     const s = String(text).trim();

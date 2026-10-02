@@ -270,6 +270,7 @@ class Model {
     return id;
   }
   _vhAdd(id, v, cell) {
+    if (!this._vh) return; // invalidated — the next vertexAt rebuilds lazily
     const k = Math.floor(v.x / cell) + '|' + Math.floor(v.y / cell) + '|' + Math.floor(v.z / cell);
     let arr = this._vh.get(k);
     if (!arr) this._vh.set(k, arr = []);

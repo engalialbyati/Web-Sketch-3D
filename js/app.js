@@ -1078,7 +1078,13 @@ class BimEntityManager {
   // Shape-handle edits on a straight wall: stretch an endpoint (or translate
   // the whole wall). Vertices split by baseline projection into start-side /
   // end-side groups; each group translates rigidly.
-  stretchWall(id, { newEnd = null, newBase = null, deltaAll = null }) {
+  stretchWall(id, opts = {}) {
+    const ok = this._stretchWallRaw(id, opts);
+    const A = window.app;
+    if (ok && A && A.view && A.view.wallTempDim && A.view.wallTempDim.wallId === id && A.onSelectionChanged) A.onSelectionChanged();
+    return ok;
+  }
+  _stretchWallRaw(id, { newEnd = null, newBase = null, deltaAll = null }) {
     const ent = this.getEntityById(id);
     if (!ent || ent.type !== 'wall' || ent.params.closed || !ent.params.base || !ent.params.end) return false;
     const m = this.model;
@@ -5118,6 +5124,7 @@ class App {
         ['Load 5-Story Building', 'demo5', ''],
         ['Load Revit Test Building (Grids)', 'demor5', ''],
         ['Load MNL-66 Reinforcement Demo', 'demomnl66', ''],
+        ['Load Villa Demo (courtyard + fence)', 'demovilla', ''],
         '-', ['Sections & Views…', 'viewsDlg', ''],
         '-', ['Analytical Model', 'analytical', ''], ['Export Analytical CSV…', 'analyticalCsv', ''],
         ['Truss Generator…', 'trussDlg', ''], ['Property Lines…', 'propDlg', ''],
@@ -5315,6 +5322,33 @@ class App {
   // pier, lapped column splices, far-side beam development, punched
   // slab, wall openings with trim steel, SOG apron). X-Ray comes on so
   // the cages read through the concrete.
+  loadVillaDemo() {
+    const go = () => {
+      const ModelCls = Model;
+      this.bindModel(new ModelCls());
+      this.undoStack = []; this.redoStack = [];
+      this.exitGroup(); this.clearSelection();
+      if (!window.VillaDemo) { this.toast('villa demo feature not loaded', true); return; }
+      const done = counts => {
+        this.onLevelsChanged();
+        if (this.bim && this.bim._hostsDirty) this.bim._hostsDirty.clear();
+        this.view.rebuild();
+        this.updateInfo();
+        this.refreshGroups();
+        if (this.elements && this.elements.refresh) this.elements.refresh();
+        this.view.zoomExtents();
+        this.toast('Villa demo loaded — '
+          + Object.entries(counts || {}).map(([k, n]) => n + ' ' + k + 's').join(', '));
+        this._saveAutosave();
+      };
+      const fail = e => this.toast('Villa demo failed: ' + (e.message || e), true);
+      try { done(window.VillaDemo.build(this)); } catch (e) { fail(e); }
+    };
+    const hasWork = this.model.faces.size > 0 || this.bim.entities.length > 0;
+    if (hasWork) this.confirmDialog('Load the villa demo? Unsaved changes will be lost.', go);
+    else go();
+  }
+
   loadMnl66Demo() {
     const done = counts => {
       this.onLevelsChanged();
@@ -5413,6 +5447,7 @@ class App {
       demo5: () => A.loadDemo5Building(),
       demor5: () => A.loadRevitTestBuilding(),
       demomnl66: () => A.loadMnl66Demo(),
+      demovilla: () => A.loadVillaDemo(),
       openScript: () => { if (this.scriptElements) this.scriptElements.openEditor(); },
       solidUnion: () => A.runSolidOp('union'),
       solidSubtract: () => A.runSolidOp('subtract'),
@@ -5823,6 +5858,25 @@ class App {
     const canvas = this.view.canvas;
     canvas.addEventListener('pointerdown', (ev) => {
       this.view.invalidate();
+      // TEMP-DIM ✎ chip: click arms wall-length typing (Revit's editable
+      // temp dimension) — works from any tool
+      if (ev.button === 0 && this.view.wallTempDimHit && this.view.wallTempDim) {
+        const q = this.view.eventPt(ev);
+        const h = this.view.wallTempDimHit;
+        if (q.x >= h.x && q.x <= h.x + h.w && q.y >= h.y && q.y <= h.y + h.h) {
+          const ent = this.bim.getEntityById(this.view.wallTempDim.wallId);
+          if (ent) {
+            if (this.mode !== 'bim') this.setMode('bim');
+            this.setTool('select');
+            this.tool._awaitLen = ent;
+            this.setStatus('Wall length: type the new length + Enter (Esc cancels)');
+            if (this.vcbEl) this.vcbEl.focus();
+            ev.preventDefault();
+            ev.stopPropagation();
+            return;
+          }
+        }
+      }
       try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* capture is optional; some synthetic/stylus pointers have no id */ }
       if (ev.button === 1) {
         if (!ev.shiftKey && this.selectionFocus) {
@@ -8626,6 +8680,22 @@ class App {
   }
   onSelectionChanged() {
     this.view.updateSelectionVisuals();
+    // TEMPORARY DIMENSION (Revit): exactly one non-fixed parametric wall
+    // selected → show its length inline above the wall (the ✎ chip arms
+    // Resize with the value pre-typed)
+    this.view.wallTempDim = null;
+    {
+      const single = this.singleElementSelection();
+      if (single && single.type === 'wall' && !single.params.closed
+        && single.params.base && single.params.end && !single.params.fixed) {
+        const A = G.v(...single.params.base), B = G.v(...single.params.end);
+        const topZ = Math.max(A.z, B.z);
+        this.view.wallTempDim = {
+          a: G.v(A.x, A.y, topZ), b: G.v(B.x, B.y, topZ),
+          len: G.dist(A, B), wallId: single.id,
+        };
+      }
+    }
     if (this.view.updateAssetSelection && this.assets)
       this.view.updateAssetSelection(this.selAssets, this.assets);
     this.updateInfo();
@@ -8765,7 +8835,10 @@ class App {
     let list;
     if (fixed) list = [];
     else switch (ent.type) {
-      case 'wall': list = [topSel, !constrained ? num('height', 'Height m', 0.05) : null, num('thickness', 'Thickness m', 0.01), loc,
+      case 'wall': list = [topSel, !constrained ? num('height', 'Height m', 0.05) : null,
+        (p.base && p.end && !p.closed) ? { key: 'length', label: 'Length m', kind: 'number', step: 0.05,
+          value: +(G.dist(G.v(p.base[0], p.base[1], p.base[2]), G.v(p.end[0], p.end[1], p.end[2]))).toFixed(3) } : null,
+        num('thickness', 'Thickness m', 0.01), loc,
         { key: 'layers', label: 'Layers (name:t, …)', kind: 'text',
           value: String(Array.isArray(p.layers) && p.layers.length
             ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
@@ -8825,6 +8898,13 @@ class App {
       p[key] = v;
       if (this.model && this.model.touch) this.model.touch();
       return true;
+    }
+    // LENGTH (walls): Revit's editable temp dimension — the base stays
+    // anchored, the end slides to the new length (openings re-cut)
+    if (key === 'length' && ent.type === 'wall' && ent.params.base && ent.params.end && !ent.params.closed) {
+      const b2 = G.v(ent.params.base[0], ent.params.base[1], ent.params.base[2]);
+      const d2 = G.norm(G.sub(G.v(ent.params.end[0], ent.params.end[1], 0), G.v(b2.x, b2.y, 0)));
+      return this.bim.stretchWall(ent.id, { newEnd: G.add(b2, G.mul(d2, Math.max(0.1, v))) });
     }
     if (key === 'topConstraint') return this._setTopConstraint(ent, v);
     if (key === 'height' && ent.type === 'column') p.heightNominal = null; // explicit edit wins
