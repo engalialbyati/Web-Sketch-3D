@@ -2850,6 +2850,7 @@ class App {
     this._initMenus();
     this._initSwatches();
     this._initEntityInfoPanel();
+    this._initMaterialsPanel();
     this._initPointer();
     this._initKeys();
     this._initDialogs();
@@ -5103,6 +5104,7 @@ class App {
       ['View', [
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
         ['Entity Info', 'entityInfoShow'],
+        ['Materials', 'materialsShow'],
         ['Bar Bending Schedule', 'bbsDlg'],
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
@@ -5384,6 +5386,12 @@ class App {
         if (p && p.setVisible) { p.setVisible(true); A.toast('Entity Info restored — drag its title bar to dock left/right or float it'); }
         else A.toast('Entity Info panel is not available in this build', true);
       },
+      materialsShow: () => {
+        const p = window.__materialsPanel;
+        if (p && p.setVisible) { p.setVisible(true); A.toast('Materials panel restored'); }
+        else if (window.MaterialsFeature) MaterialsFeature.materialsDialog(A);
+        else A.toast('Materials panel is not available in this build', true);
+      },
       renderDay: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, false); },
       renderNight: () => { if (window.RenderFeature) RenderFeature.renderWithBlender(A, true); },
       surveyCsv: () => { if (window.RenderFeature) RenderFeature.importSurveyCsvFile ? RenderFeature.importSurveyCsvFile(A) : A.toast('Use Tools ▸ Import Survey CSV', true); },
@@ -5599,6 +5607,31 @@ class App {
     if (card && !card.querySelector('[id]')) card.remove(); // only the header is left
     window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Entity Info', side: 'right' });
   }
+  // The Materials tray card joins Entity Info as a DOCKABLE panel — the two
+  // live in ONE connected column (Revit's Properties side), divided by a
+  // draggable splitter. Same adoption trick: #swatches keeps its id.
+  _initMaterialsPanel() {
+    if (!window.DockPanels) return;
+    const node = document.getElementById('swatches');
+    if (!node || node.closest('.dk-panel')) return; // already adopted
+    const card = node.closest('.panel');
+    const p = document.createElement('div');
+    p.id = 'materialspanel';
+    p.innerHTML = `
+      <div class="dk-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Materials</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide (reopen from the gear menu)">✕</button>
+      </div>
+      <div class="dk-body"></div>`;
+    document.getElementById('viewport').appendChild(p);
+    p.querySelector('.dk-body').appendChild(node); // adopt: same id, same writers
+    if (card && !card.querySelector('[id]')) card.remove();
+    window.__materialsPanel = DockPanels.make(p, { key: 'materials', title: 'Materials', side: 'right' });
+  }
+
   _initSwatches() {
     const wrap = document.getElementById('swatches');
     wrap.innerHTML = ''; // full rebuild: registry materials come and go

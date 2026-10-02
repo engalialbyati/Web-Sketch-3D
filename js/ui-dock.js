@@ -130,7 +130,7 @@
 
   function rebuildSplitters(side) {
     const col = cols && cols[side];
-    if (!col || side !== 'right') return; // only right col uses splitters
+    if (!col) return;
     // Remove old splitters
     col.querySelectorAll('.dk-splitter').forEach(s => s.remove());
     // Get visible, non-collapsed panels
@@ -165,6 +165,7 @@
     }
   }
 
+  function rebuildAll() { rebuildSplitters('left'); rebuildSplitters('right'); }
   function wireSplitter(spl, above, below, side, allPanels) {
     let drag = null;
     spl.addEventListener('pointerdown', ev => {
@@ -245,7 +246,7 @@
       if (st.visible) apply();
       persist();
       // Rebuild splitters after visibility change
-      if (st.dock === 'right') rebuildSplitters('right');
+      if (st.dock === 'right') rebuildAll();
       if (opts.onVisibility && st.visible) opts.onVisibility();
     };
 
@@ -254,7 +255,7 @@
       const prev = st.dock;
       st.dock = side;
       apply(); persist();
-      if (prev === 'right' || side === 'right') rebuildSplitters('right');
+      if (prev === 'right' || side === 'right') rebuildAll();
     };
 
     function apply() {
@@ -313,7 +314,7 @@
         }
         drag = null;
         apply(); persist();
-        if (st.dock === 'right') rebuildSplitters('right');
+        if (st.dock === 'right') rebuildAll();
       };
       head.addEventListener('pointerup', end);
       head.addEventListener('pointercancel', end);
@@ -321,14 +322,14 @@
         if (ev.target.closest('.dk-btn')) return;
         const prev = st.dock;
         st.dock = 'left'; apply(); persist();
-        if (prev === 'right') rebuildSplitters('right');
+        if (prev === 'right') rebuildAll();
       });
     }
 
     head.querySelector('.dk-x')?.addEventListener('click',   () => setVisible(false));
     head.querySelector('.dk-min')?.addEventListener('click',  () => {
       st.collapsed = !st.collapsed; apply(); persist();
-      if (st.dock === 'right') rebuildSplitters('right');
+      if (st.dock === 'right') rebuildAll();
     });
     head.querySelector('.dk-dockl')?.addEventListener('click', () => dock('left'));
     head.querySelector('.dk-dockr')?.addEventListener('click', () => dock('right'));
@@ -337,7 +338,7 @@
     apply();
     if (st.dock === 'right') {
       // defer splitter rebuild until all panels have been registered
-      setTimeout(() => rebuildSplitters('right'), 0);
+      setTimeout(() => rebuildAll(), 0);
     }
 
     const api = { setVisible, dock, isVisible: () => st.visible, el: panel, key: opts.key };
