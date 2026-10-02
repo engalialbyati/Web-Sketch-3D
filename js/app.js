@@ -6247,7 +6247,16 @@ class App {
     const v = this.view;
     const cur = '#' + v.rebarRibbonMat.uniforms.uColor.value.getHexString();
     const alpha = Math.round((v.xrayAlpha != null ? v.xrayAlpha : 0.28) * 100);
+    const quality = v.quality || 'enhanced';
     this.dialog('Display Settings', `
+      <div class="ob-lab">Rendering quality</div>
+      <div style="display:flex;align-items:center;gap:10px;margin:4px 0 6px">
+        <select id="ds-quality" style="flex:1;padding:6px 8px">
+          <option value="enhanced"${quality === 'enhanced' ? ' selected' : ''}>Enhanced — filmic + sky lighting</option>
+          <option value="standard"${quality === 'standard' ? ' selected' : ''}>Standard — flat (previous look)</option>
+        </select>
+      </div>
+      <p class="dim" style="margin:0 0 14px;font-size:12px">Enhanced adds ACES tone mapping and image-based lighting from the sky (reflections on downloaded models, softer rebar metals) at no per-frame cost. Drawing colors stay exact.</p>
       <div class="ob-lab">Rebar color</div>
       <div style="display:flex;align-items:center;gap:10px;margin:4px 0 14px">
         <input type="color" id="ds-rebar" value="${cur}" style="width:52px;height:34px;padding:0;border:1px solid var(--line,#ccc);border-radius:4px;background:transparent">
@@ -6262,7 +6271,8 @@ class App {
     `, [
       ['Reset Defaults', () => {
         this._applyDisplaySettings('#3b4046', 28);
-        try { localStorage.removeItem('websketch3d.rebarColor'); localStorage.removeItem('websketch3d.xrayAlpha'); } catch (e) { }
+        if (this.view.setRenderQuality) this.view.setRenderQuality('enhanced');
+        try { localStorage.removeItem('websketch3d.rebarColor'); localStorage.removeItem('websketch3d.xrayAlpha'); localStorage.removeItem('websketch3d.quality'); } catch (e) { }
         return false; // stay open so the reset is visible on the controls
       }],
       ['Done', null],
@@ -6274,6 +6284,9 @@ class App {
     range.addEventListener('input', () => {
       out.textContent = range.value + '%';
       this._applyDisplaySettings(null, +range.value);
+    });
+    document.getElementById('ds-quality').addEventListener('change', ev => {
+      if (this.view.setRenderQuality) this.view.setRenderQuality(ev.target.value);
     });
   }
   _applyDisplaySettings(color, alphaPct) {

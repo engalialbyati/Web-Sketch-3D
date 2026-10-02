@@ -203,10 +203,47 @@ class Viewport {
       sp.renderOrder = 20;
       this.axesGroup.add(sp);
     };
-    label('X', G.v(12.6, 0, 0), 0xd23c2e);
-    label('Y', G.v(0, 12.6, 0), 0x3d9e4e);
-    label('Z', G.v(0, 0, 12.6), 0x3e66c4);
-    this.scene.add(this.axesGroup);
+      label('X', G.v(12.6, 0, 0), 0xd23c2e);
+      label('Y', G.v(0, 12.6, 0), 0x3d9e4e);
+      label('Z', G.v(0, 0, 12.6), 0x3e66c4);
+      this.scene.add(this.axesGroup);
+
+      // rendering quality from the last session (Display Settings)
+      let q = 'enhanced';
+      try { q = localStorage.getItem('websketch3d.quality') || 'enhanced'; } catch (e) { }
+      this.setRenderQuality(q);
+  }
+
+  // ------------------------------------------------------------ render quality
+  // 'enhanced' — the light-but-good look: ACES filmic tone mapping for the
+  // built-in materials (the kernel's custom face shader is untouched, so
+  // drawing colors stay exact) + image-based lighting baked ONCE from the
+  // live sky via PMREM. PBR content (downloaded models, rebar solids) gets
+  // soft sky reflections and ambient without a single extra draw call per
+  // frame. 'standard' is the previous flat output.
+  setRenderQuality(mode) {
+    this.quality = mode === 'standard' ? 'standard' : 'enhanced';
+    if (this.quality === 'enhanced') {
+      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      this.renderer.toneMappingExposure = 1.1;
+      if (!this._ibl) {
+        try {
+          const pmrem = new THREE.PMREMGenerator(this.renderer);
+          const sc = new THREE.Scene();
+          sc.add(new THREE.Mesh(this.sky.geometry, this.sky.material));
+          // the sky sphere is R=1900 — fromScene's default far (100) would
+          // miss it entirely and bake a black environment
+          this._ibl = pmrem.fromScene(sc, 0.08, 1, 2500).texture;
+          pmrem.dispose();
+        } catch (e) { this._ibl = null; }
+      }
+      this.scene.environment = this._ibl || null;
+    } else {
+      this.renderer.toneMapping = THREE.NoToneMapping;
+      this.scene.environment = null;
+    }
+    try { localStorage.setItem('websketch3d.quality', this.quality); } catch (e) { }
+    this.invalidate();
   }
 
   // -------------------------------------------------------------- model groups
