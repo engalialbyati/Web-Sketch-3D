@@ -124,4 +124,80 @@ module.exports = h => {
     eq(app.sel.edges.size, 0, 'selection cleared');
     eq(t._bandStart, null, 'band closed');
   });
+
+  // ---- Shift+'+' / '−' edge run growth (app.growEdgeRun) ----
+  const { loadModel } = h;
+  const L = loadModel(['js/tools/base.js', 'js/tools/draw.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/db.js', 'js/lib/three.min.js', 'js/app.js', 'js/assets.js', 'js/tools/assets.js', 'js/features/onlinelib.js']);
+  const w2 = L.window;
+  const runApp = () => {
+    const m2 = new w2.Model();
+    const app2 = Object.assign(Object.create(w2.App.prototype), {
+      model: m2, sel: { edges: new Set(), faces: new Set() },
+      view: { rebuild() { }, invalidate() { }, clearPins() { }, clearPreview() { }, updateSelectionVisuals() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m2),
+      transaction: { run: (l, fn) => fn(m2) },
+    });
+    return { app2, m2, G: w2.G };
+  };
+
+  test('Shift++ grows IN LINE — the perpendicular branch never joins the run', () => {
+    const { app2, m2, G } = runApp();
+    const a = m2.addEdge(G.v(0, 0, 0), G.v(3, 0, 0));   // seed
+    const b = m2.addEdge(G.v(3, 0, 0), G.v(6, 0, 0));   // collinear continuation
+    const c = m2.addEdge(G.v(3, 0, 0), G.v(3, 3, 0));   // perpendicular at the joint
+    app2.sel.edges = new Set([a.id]);
+    ok(app2.growEdgeRun(1), 'grow succeeded');
+    ok(app2.sel.edges.has(b.id), 'the collinear edge joined');
+    ok(!app2.sel.edges.has(c.id), 'the perpendicular edge stayed out');
+    eq(app2.growEdgeRun(1), false, 'free end: run is blocked');
+    eq(app2.sel.edges.size, 2, 'nothing added when blocked');
+  });
+
+  test('a corner stops the run; Shift+− steps it back', () => {
+    const { app2, m2, G } = runApp();
+    const a = m2.addEdge(G.v(0, 0, 0), G.v(3, 0, 0));
+    const b = m2.addEdge(G.v(3, 0, 0), G.v(6, 0, 0));
+    const c = m2.addEdge(G.v(6, 0, 0), G.v(6, 3, 0));   // 90° corner
+    app2.sel.edges = new Set([a.id]);
+    app2.growEdgeRun(1);
+    eq(app2.growEdgeRun(1), false, 'corner refuses to extend');
+    ok(!app2.sel.edges.has(c.id), 'corner edge not selected');
+    ok(app2.growEdgeRun(-1), 'shrink works');
+    eq(app2.sel.edges.size, 1, 'back to the seed');
+    eq(app2.growEdgeRun(-1), false, 'cannot shrink past the seed');
+    eq(app2.sel.edges.size, 1, 'seed survives');
+  });
+
+  test('tangent arc segments chain — the run walks a curved edge', () => {
+    const { app2, m2, G } = runApp();
+    // an 8-segment quarter arc: consecutive segments deflect 11.25° (< 30°)
+    const pts = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8 * Math.PI / 2;
+      pts.push(G.v(5 * Math.cos(t), 5 * Math.sin(t), 0));
+    }
+    for (let i = 0; i < 8; i++) m2.addEdge(pts[i], pts[i + 1]);
+    const seed = m2.findEdge(m2.vertexAt(pts[0]), m2.vertexAt(pts[1]));
+    app2.sel.edges = new Set([seed.id]);
+    let grew = 0;
+    for (let i = 0; i < 20 && app2.growEdgeRun(1); i++) grew++;
+    eq(grew, 7, 'the whole arc chained (7 more segments)');
+    eq(app2.sel.edges.size, 8, 'all 8 arc segments selected');
+  });
+
+  test('the run grows from the selection order — the last picked edge is the head', () => {
+    const { app2, m2, G } = runApp();
+    const a = m2.addEdge(G.v(0, 0, 0), G.v(1, 0, 0));
+    const b = m2.addEdge(G.v(1, 0, 0), G.v(2, 0, 0));
+    const c = m2.addEdge(G.v(2, 0, 0), G.v(3, 0, 0));
+    // pick a THEN b (toggle order = run order): growth continues past b
+    app2.sel.edges = new Set([a.id]);
+    app2._edgeRunLogPush(a.id);
+    app2.sel.edges.add(b.id); app2._edgeRunLogPush(b.id);
+    ok(app2.growEdgeRun(1), 'grow');
+    ok(app2.sel.edges.has(c.id), 'continued from the HEAD (b), not the tail');
+    ok(app2.growEdgeRun(-1), 'shrink removes the head');
+    ok(!app2.sel.edges.has(c.id) && app2.sel.edges.has(b.id), 'c dropped, a+b remain');
+  });
 };

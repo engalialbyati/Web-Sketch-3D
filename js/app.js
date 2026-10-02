@@ -6060,6 +6060,19 @@ class App {
         return;
       }
       if (k === 'Delete' || k === 'Backspace') { ev.preventDefault(); this.deleteSelection(); return; }
+      // EDGE RUN: Shift+'+' extends the edge selection along the line (the
+      // next collinear edge, never a perpendicular branch); Shift+'−' steps
+      // the run back. Numpad +/- work without Shift. Must run BEFORE the
+      // digit branch — a bare '-' would otherwise fall into the VCB.
+      {
+        const plus = (ev.shiftKey && (k === '+' || k === '=')) || ev.code === 'NumpadAdd';
+        const minus = (ev.shiftKey && (k === '-' || k === '_')) || ev.code === 'NumpadSubtract';
+        if ((plus || minus) && this.sel && this.sel.edges.size) {
+          ev.preventDefault();
+          this.growEdgeRun(plus ? 1 : -1);
+          return;
+        }
+      }
       if (k.toLowerCase() === 'f' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
         // F frames the selection (orbit then pivots on it); falls back to
         // zoom extents with nothing selected. Tools that own 'f' win.
@@ -8215,9 +8228,83 @@ class App {
       if (this.sel.faces.has(id)) this.sel.faces.delete(id); else this.sel.faces.add(id);
     }
     for (const id of picked.edges) {
-      if (this.sel.edges.has(id)) this.sel.edges.delete(id); else this.sel.edges.add(id);
+      if (this.sel.edges.has(id)) this.sel.edges.delete(id);
+      else { this.sel.edges.add(id); this._edgeRunLogPush(id); }
     }
     this.onSelectionChanged();
+  }
+  // Selection order for the edge run: every toggled-IN edge is appended; a
+  // replaced selection simply orphans the old ids (growEdgeRun filters).
+  _edgeRunLogPush(id) {
+    if (!this._edgeRunLog) this._edgeRunLog = [];
+    this._edgeRunLog.push(id);
+  }
+  // ---------------------------------------------------------- edge run grow
+  // Shift + '+' / '−': walk the edge selection ALONG THE LINE. Dense near-
+  // parallel edges (a slab outline, rebar chairs) become a one-key run:
+  // grow adds the most collinear unselected edge at the run's head — never
+  // a perpendicular branch (30° deflection max, so tangent arc segments
+  // chain too) — and shrink steps the run back one edge. dir: +1 grow, -1
+  // step back. Returns true when the selection changed.
+  growEdgeRun(dir = 1) {
+    const m = this.model;
+    if (!this.sel.edges.size) return false;
+    if (!this._edgeRunLog) this._edgeRunLog = [];
+    this._edgeRunLog = this._edgeRunLog.filter(id => this.sel.edges.has(id));
+    for (const id of this.sel.edges) if (!this._edgeRunLog.includes(id)) this._edgeRunLog.push(id);
+    const run = this._edgeRunLog;
+    const hint = `Edge run: ${this.sel.edges.size + (dir > 0 ? 1 : 0)} selected — Shift++ extends in line, Shift+− steps back`;
+    if (dir < 0) {
+      if (run.length <= 1) { this.toast('The run is at its seed edge', true); return false; }
+      this.sel.edges.delete(run.pop());
+      this.onSelectionChanged();
+      this.setStatus(`Edge run: ${this.sel.edges.size} selected — Shift++ extends in line, Shift+− steps back`);
+      return true;
+    }
+    const last = m.edges.get(run[run.length - 1]);
+    if (!last) return false;
+    const prev = run.length >= 2 ? m.edges.get(run[run.length - 2]) : null;
+    // vertex adjacency over ALL edges (welded kernel: shares are real)
+    const byV = new Map();
+    for (const e of m.edges.values())
+      for (const v of [e.a, e.b]) {
+        let arr = byV.get(v); if (!arr) byV.set(v, arr = []);
+        arr.push(e);
+      }
+    const MAX_DEFLECT = Math.PI / 6; // "in line": ≤30° — perpendiculars and corners lose
+    // Best continuation AT one end of the head edge: incoming direction runs
+    // through the end vertex; candidates are scored by their deflection.
+    const bestAt = endV => {
+      const other = last.a === endV ? last.b : last.a;
+      const d = G.norm(G.sub(m.vp(endV), m.vp(other))); // travel direction through endV
+      let best = null, bestAng = MAX_DEFLECT;
+      for (const cand of byV.get(endV) || []) {
+        if (cand.id === last.id || this.sel.edges.has(cand.id)) continue;
+        const far = cand.a === endV ? cand.b : cand.a;
+        const d2 = G.sub(m.vp(far), m.vp(endV));
+        const L = G.len(d2);
+        if (L < 1e-9) continue;
+        const ang = Math.acos(Math.max(-1, Math.min(1, G.dot(d, G.mul(d2, 1 / L)))));
+        if (ang < bestAng) { bestAng = ang; best = cand; }
+      }
+      return best;
+    };
+    // with no history both ends are candidates — the straighter continuation
+    // wins; once the run has ≥2 edges it only ever grows at the head
+    let pick;
+    if (prev) {
+      const shared = (prev.a === last.a || prev.b === last.a) ? last.a : last.b;
+      pick = bestAt(shared === last.a ? last.b : last.a);
+    } else {
+      const ca = bestAt(last.a), cb = bestAt(last.b);
+      pick = ca && cb ? ca : (ca || cb); // ties are geometrically impossible
+    }
+    if (!pick) { this.toast('No further edge in line — the run has reached a corner or a free end'); return false; }
+    this.sel.edges.add(pick.id);
+    this._edgeRunLogPush(pick.id);
+    this.onSelectionChanged();
+    this.setStatus(hint);
+    return true;
   }
   // ------------------------------------------------------------- asset select
   selectAsset(id, mode = 'replace') {
