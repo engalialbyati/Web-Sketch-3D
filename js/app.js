@@ -258,6 +258,17 @@ const TOOL_DEFS = {
     'sep',
     { id: 'door', label: 'Door', key: '' },
     { id: 'window', label: 'Window', key: '' },
+    // reinforcement detailing (formerly the 'design' mode — rebar is a BIM
+    // activity; the Detailing ribbon tab surfaces these)
+    { id: 'rebar-straight', label: 'Straight Rebar', key: '' },
+    { id: 'rebar-lshape', label: 'L-Shape Rebar', key: '' },
+    { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
+    { id: 'rebar-column', label: 'Column Reinforcement', key: '' },
+    { id: 'rebar-element', label: 'Element Reinforcement', key: '' },
+    { id: 'rebar-ushape', label: 'U-Shape Rebar', key: '' },
+    { id: 'rebar-bent', label: 'Bent-Shape Rebar', key: '' },
+    { id: 'rebar-helical', label: 'Helical Rebar', key: '' },
+    { id: 'rebar-bbs', label: 'Bar Bending Schedule', key: '' },
     { id: 'opening', label: 'Opening', key: '' },
     'sep',
     { id: 'pushpull', label: 'Push/Pull', key: 'P' },
@@ -273,23 +284,9 @@ const TOOL_DEFS = {
     { id: 'orbit', label: 'Orbit', key: 'O' },
     { id: 'pan', label: 'Pan', key: 'H' },
   ],
-  // Structural design ribbon — calculators over the same model. Rebar
-  // detailing tools live here and surface on the Detailing ribbon tab.
-  design: [
-    { id: 'select', label: 'Select', key: 'Space' },
-    { id: 'edgeselect', label: 'Edge Select', key: 'K' },
-    'sep',
-    { id: 'rebar-straight', label: 'Straight Rebar', key: '' },
-    { id: 'rebar-lshape', label: 'L-Shape Rebar', key: '' },
-    { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
-    { id: 'rebar-column', label: 'Column Reinforcement', key: '' },
-    { id: 'rebar-element', label: 'Element Reinforcement', key: '' },
-    { id: 'rebar-ushape', label: 'U-Shape Rebar', key: '' },
-    { id: 'rebar-bent', label: 'Bent-Shape Rebar', key: '' },
-    { id: 'rebar-helical', label: 'Helical Rebar', key: '' },
-    { id: 'rebar-bbs', label: 'Bar Bending Schedule', key: '' },
-  ],
 };
+// (the 'design' MODE is removed — rebar detailing is BIM work; its tools
+//  live in the bim list above and surface on the Detailing ribbon tab)
 
 // ---------------------------------------------------------------------------
 // Ribbon groups — the OpenCADStudio pattern: the toolbar renders NAMED
@@ -324,12 +321,6 @@ const RIBBON_GROUPS = {
     { title: 'Modify', tools: ['pushpull', 'move', 'mirror', 'array'] },
     { title: 'Tools', tools: ['eraser', 'trim', 'tape', 'measurearea'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
-    { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
-    { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
-    { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
-  ],
-  design: [
-    { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
     { title: 'Display', tools: ['shadows', 'xray', 'wire'] },
     { title: 'Palettes', tools: ['browser', 'layers', 'families', 'kit'] },
@@ -2833,7 +2824,7 @@ class App {
     this.hintEl = document.getElementById('hint');
     this.vcbEl = document.getElementById('vcb');
 
-    this.mode = 'free';         // 'free' (SketchUp-style) | 'bim' (Revit-style) | 'design' (structural design)
+    this.mode = 'free';         // 'free' (SketchUp-style) | 'bim' (Revit-style)
     this._initTools();
     this._initModes();
     this._initRibbonTabs();
@@ -2880,7 +2871,7 @@ class App {
     // needs every subsystem initialized.
     try {
       const savedMode = localStorage.getItem('websketch3d.mode');
-      const bootMode = TOOL_DEFS[savedMode] ? savedMode : 'bim';
+      const bootMode = TOOL_DEFS[savedMode] ? savedMode : 'bim'; // stale 'design' falls back to bim
       if (bootMode !== this.mode) this.setMode(bootMode);
     } catch (e) {
       if (this.mode !== 'bim') this.setMode('bim');
@@ -4555,15 +4546,13 @@ class App {
     document.querySelectorAll('#modetabs .mtab').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
-    document.body.classList.toggle('mode-design', mode === 'design');
+
     document.getElementById('bimoptions').classList.toggle('hidden', mode !== 'bim');
-    document.getElementById('designpanel').classList.toggle('hidden', mode !== 'design');
     this.view.showLevels(mode === 'bim');
     this.view.showGrids(mode === 'bim' && this.gridManager.grids.length > 0);
     this._buildToolbar();
     this.setTool(TOOL_DEFS[mode][0].id);
-    const modeName = mode === 'bim' ? 'Precise Drawing (BIM)'
-      : mode === 'design' ? 'Design' : 'Free Drawing';
+    const modeName = mode === 'bim' ? 'Precise Drawing (BIM)' : 'Free Drawing';
     this.setStatus(`Mode: ${modeName} — camera, selection, and model are preserved.`);
     // a tool picked from another ribbon tab asked for this mode first
     if (this._pendingTool) {
@@ -4772,7 +4761,7 @@ class App {
   _allToolDefs() {
     if (!this._allDefs) {
       this._allDefs = new Map();
-      for (const mode of ['free', 'bim', 'design'])
+      for (const mode of ['free', 'bim'])
         for (const t of TOOL_DEFS[mode])
           if (t !== 'sep' && !this._allDefs.has(t.id)) this._allDefs.set(t.id, t);
     }
@@ -4895,7 +4884,7 @@ class App {
     let groups, byId = new Map();
     if (tab) {
       groups = (tab.groups || []).map(g => ({ ...g }));
-      for (const mode of ['free', 'bim', 'design'])
+      for (const mode of ['free', 'bim'])
         for (const t of TOOL_DEFS[mode])
           if (t !== 'sep' && !byId.has(t.id)) byId.set(t.id, t);
       if (window.Engine) {
