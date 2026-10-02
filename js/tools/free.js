@@ -51,7 +51,7 @@ class SelectTool extends Tool {
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
     return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : (this.app.mode === 'bim'
       ? `Select: click selects whole ELEMENTS. Drag = window select (elements too). Faces and edges are selectable in Free Drawing — Measure Area still picks faces.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`
-      : `Select: click an edge or face. Drag = window select. Shift adds. Double-click a face selects its border too.`);
+      : `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds.`);
   }
   // ---- Revit shape handles for selected parametric walls -------------------
   _wallSel() {
@@ -479,14 +479,12 @@ class SelectTool extends Tool {
         const f = app.model.faces.get(pick.face);
         const ent = f && app.bim.getEntityForFace(f);
         const sub = ev.ctrlKey || app._tabHeld; // sub-element mode: the face itself
-        if (ent && !sub && !app._eip) {
-          // Revit element select: one click on any part = the whole element
+        if (ent && !sub && !app._eip && app.mode === 'bim') {
+          // PRECISE DRAWING: one click on any part = the whole element
           if (this._mod) app.selectElement(ent.id, 'toggle');
           else {
             app.selectElement(ent.id);
-            app.setStatus(`${ent.type} ${ent.id} selected${app.mode === 'bim'
-              ? ' — faces and edges are selectable in Free Drawing (Measure Area still picks faces)'
-              : ' — hold Ctrl (or Tab) to query its faces (m²) and edges (m)'}`);
+            app.setStatus(`${ent.type} ${ent.id} selected — faces and edges are selectable in Free Drawing (Measure Area still picks faces)`);
           }
         } else if (app.mode === 'bim' && !app._eip) {
           // PRECISE DRAWING: never a raw face — an unstamped face (or a
@@ -494,8 +492,18 @@ class SelectTool extends Tool {
           // selectable in FREE mode; Measure Area picks faces through its
           // own tool; Edit In Place keeps sub-element access while open.
           if (!this._mod) app.clearSelection();
+        } else if (ent && ev.altKey && !app._eip) {
+          // FREE DRAWING is FACE-first (SketchUp semantics): plain click
+          // selects the face; Alt+click opts into the whole element
+          if (this._mod) app.selectElement(ent.id, 'toggle');
+          else app.selectElement(ent.id);
         } else if (this._mod) app.toggleEntities({ edges: new Set(), faces: new Set([pick.face]) });
-        else { app.sel = { edges: new Set(), faces: new Set([pick.face]) }; app.onSelectionChanged(); }
+        else {
+          app.sel = { edges: new Set(), faces: new Set([pick.face]) };
+          app.onSelectionChanged();
+          if (ent && app.mode !== 'bim')
+            app.setStatus(`Face of ${ent.type} ${ent.id} — Alt+click selects the whole element · double-click edits in place`);
+        }
       } else if (pick.edges && pick.edges.length) {
         if (app.mode === 'bim' && !app._eip) {
           // PRECISE DRAWING: edges are Free-mode targets — never selected here
