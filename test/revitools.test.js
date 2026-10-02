@@ -149,4 +149,49 @@ module.exports = h => {
     near(p.z, R * Math.SQRT1_2, 1e-9, 'altitude lifts z');
     ok(p.z > 0 && p.y > 0, 'sun above the horizon, from the north');
   });
+
+  test('Rebuild from Parameters keeps hosted windows; adopt claims only new faces', () => {
+    const m = new Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const app = facade(m);
+    app.structural = null;
+    // a 6 m wall with a hosted window
+    const before = new Set(m.faces.keys());
+    const ring = w.BimTools.WallTool.bandRing(G, [G.v(0, 0, 0), G.v(6, 0, 0)], 0.2, 'centerline');
+    m.bimHold = true;
+    try { m.pushPull(m.addFaceFromRings(ring), 3); } finally { m.bimHold = false; }
+    const wallFaces = [...m.faces.keys()].filter(id => !before.has(id)).map(id => m.faces.get(id));
+    const roles = {}; for (const f of wallFaces) roles[f.id] = 'side';
+    const edges = [];
+    for (const f of wallFaces) for (const r of m.rings(f)) for (let i = 0; i < r.length; i++) {
+      const e = m.findEdge(r[i], r[(i + 1) % r.length]); if (e && !e.userData) edges.push(e.id);
+    }
+    const wall = app.bim.create('wall', { base: [0, 0, 0], end: [6, 0, 0], height: 3, thickness: 0.2, baseLevel: 'lvl_1' }, roles, [...new Set(edges)]);
+    // a free (unstamped) face that must NOT be swallowed by adopt
+    const free = m.addFaceFromRings([G.v(20, 20, 0), G.v(21, 20, 0), G.v(21, 21, 0), G.v(20, 21, 0)]);
+    const freeCount = m.faces.size;
+    // place a hosted window through the real cut
+    const spec = { distanceFromStart: 3, width: 1.2, height: 1.2, sillHeight: 0.9, depth: 0.2 };
+    m.bimHold = wall.id;
+    let info = null;
+    try { info = w.BimTools.HostedCut.cut(G, m, wall.params, spec); } finally { m.bimHold = false; }
+    ok(info && !info.error, 'window cut');
+    const winFaces = [...m.faces.keys()].filter(id => !before.has(id) && !wallFaces.includes(id)).map(id => m.faces.get(id));
+    app.bim.create('window', { hostWallId: wall.id, distanceFromStart: info.t, width: 1.2, height: 1.2, sillHeight: 0.9, depth: 0.2 }, {}, []);
+    const windowsBefore = app.bim.entities.filter(e => e.type === 'window').length;
+    const wallFacesBefore = wall.faces.length;
+    // REBUILD from parameters — the exact menu action path
+    const counts = app.rebuildFromParams();
+    const wallAfter = app.bim.getEntityById(wall.id);
+    ok(wallAfter, 'wall survives the rebuild');
+    ok(wallAfter.faces.length >= 4, 'wall re-extruded');
+    const windowsAfter = app.bim.entities.filter(e => e.type === 'window').length;
+    eq(windowsAfter, windowsBefore, 'the hosted window survives (re-cut, not orphaned)');
+    // the window opening exists: the wall must NOT be a solid 6-face prism
+    ok(wallAfter.faces.length > 6, 'the opening is re-cut into the rebuilt wall');
+    // the free face was NOT swallowed into any entity
+    const freeAfter = m.faces.get(free.id);
+    ok(freeAfter && !(freeAfter.userData && freeAfter.userData.bimEntityId), 'the free face stays free (no orphan adoption)');
+    ok(m.validate().ok, 'model valid after rebuild');
+  });
 };

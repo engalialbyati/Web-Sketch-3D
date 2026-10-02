@@ -3201,8 +3201,12 @@ class App {
       }
       for (const e of this.bim.entities) if (canRebuild(e)) { e.faces = []; e.edges = []; }
     };
-    const adopt = (mm, ent, rolesOf) => {
-      const nf = [...mm.faces.keys()].map(id => mm.faces.get(id)).filter(f => f && !f.userData);
+    // adopt() claims only faces BORN during this entity's rebuild — a
+    // whole-model unstamped sweep would swallow free faces and other
+    // entities' geometry (the orphan-face source)
+    const adopt = (mm, ent, rolesOf, before) => {
+      const nf = [...mm.faces.keys()].map(id => mm.faces.get(id))
+        .filter(f => f && !f.userData && (!before || !before.has(f.id)));
       const roles = {}; for (const f of nf) roles[f.id] = rolesOf(f, ent);
       const ne = [];
       for (const f of nf) for (const ring of mm.rings(f)) for (let i = 0; i < ring.length; i++) {
@@ -3228,18 +3232,31 @@ class App {
       if (ent.params && ent.params.fixed) return;
       try {
         if (d.type === 'foundation') {
+          const before = new Set(mm.faces.keys());
           this.structural.buildFooting(G, mm, d.params);
           adopt(mm, ent, (f) => { const c = mm.faceCentroid(f);
-            return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; });
+            return Math.abs(c.z + (d.params.thickness || 0.5)) < 1e-6 ? 'bottom' : Math.abs(c.z) < 1e-6 ? 'top' : 'side'; }, before);
         } else if (d.type === 'column') {
+          const before = new Set(mm.faces.keys());
           const b = d.params.base;
           ColumnFeature.placeColumn(G, mm, { x: b[0], y: b[1], z: b[2] }, d.params.width, d.params.depth, d.params.height, +d.params.rotation || 0,
             { bimEntityId: ent.id, bimType: 'column' });
           adopt(mm, ent, (f) => { const c = mm.faceCentroid(f);
-            return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; });
+            return Math.abs(c.z - b[2]) < 1e-6 ? 'bottom' : Math.abs(c.z - (b[2] + d.params.height)) < 1e-6 ? 'top' : 'side'; }, before);
         } else if (d.type === 'wall' && d.params.base && d.params.end) {
           const bp = d.params.base, ep = d.params.end;
           const wl = Math.hypot(ep[0] - bp[0], ep[1] - bp[1]) || 1;
+          // walls WITH hosted openings rebuild through the hosted path —
+          // the openings re-cut and re-register (the spans splitter would
+          // orphan them); plain walls with structural trims keep the split
+          const hostedCount = this.bim.entities.filter(e => e.params && e.params.hostWallId === d.id).length;
+          if (hostedCount) {
+            const before = new Set(mm.faces.keys());
+            this.bim.rebuildWallWithHosts(d.id);
+            void before; // rebuildWallWithHosts re-stamps its own faces
+            counts[d.type] = (counts[d.type] || 0) + 1;
+            return;
+          }
           const spans = [];
           let cur = 0;
           const tr = this.structural ? this.structural.wallPlanTrims(d.params) : null;
@@ -3257,12 +3274,14 @@ class App {
             adopt(mm, ent, () => 'exterior'); // sweep up any strays (holes from hosted cuts etc.)
           }
         } else if ((d.type === 'slab' || d.type === 'floor') && d.params.regions) {
+          const before = new Set(mm.faces.keys());
           for (const r of d.params.regions) {
             const f = mm.addFaceFromRings(r.outer.map(q => G.v(...q)), (r.holes || []).map(h => h.map(q => G.v(...q))));
             if (f) mm.pushPull(f, -(d.params.thickness || 0.2));
           }
-          adopt(mm, ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; });
+          adopt(mm, ent, (f) => { const c = mm.faceCentroid(f); return 'edge'; }, before);
         } else if (d.type === 'roof' && window.RoofFeature && d.params.regions) {
+          const before = new Set(mm.faces.keys());
           for (const r of d.params.regions) {
             const zr = (r.outer[0] && r.outer[0][2] != null) ? r.outer[0][2]
               : this.levelManager.getElevation(d.params.baseLevel);
@@ -3271,10 +3290,11 @@ class App {
               pitch: d.params.pitch || 15, overhang: d.params.overhang || 0,
               region: r, z: zr });
           }
-          adopt(mm, ent, () => 'body');
+          adopt(mm, ent, () => 'body', before);
         } else if (d.type === 'beam') {
+          const before = new Set(mm.faces.keys());
           this.structural.buildBeam(G, mm, d.params);
-          adopt(mm, ent, () => 'body');
+          adopt(mm, ent, () => 'body', before);
         } else if (d.type === 'room' && window.RoomFeature) {
           // re-detect the region from the stored seed (walls may have moved
           // since placement); the plate adopts below via `adopt`
@@ -3283,6 +3303,7 @@ class App {
           if (!dd.error) {
             const lv = this.levelManager.levels.find(l => l.id === (p2.levelId || p2.baseLevel));
             const z = ((lv && lv.elevation) || 0) + 0.002;
+            const beforeR = new Set(mm.faces.keys());
             const f = mm.addFaceFromRings(dd.ring.map(q => G.v(q[0], q[1], z)));
             if (f) {
               f.color = RoomFeature.roomColor(ent);
@@ -3292,7 +3313,7 @@ class App {
               p2.perimeter = dd.perimeter;
             }
           }
-          adopt(mm, ent, () => 'plate');
+          adopt(mm, ent, () => 'plate', beforeR);
         } else { skipped.push(d.type); return; }
         counts[d.type] = (counts[d.type] || 0) + 1;
       } catch (e) { /* one bad element never kills the repair */ }
