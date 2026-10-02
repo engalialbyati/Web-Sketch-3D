@@ -43,11 +43,6 @@ v0.9 makes the model behave like one continuous construction:
   Convert to Element claims it as a fixed element with full Revit instance
   data — curved walls from swept profiles list in the Element Browser and
   report quantities like any parametric element.
-- **Sweep bend validation & auto-sizing** (pipes/elbows): a bend radius
-  tighter than the profile collapses the inner side, so bends are checked
-  before geometry is built — auto-resized to the 1.5·D standard when the
-  straight legs allow it, refused with the exact minimum otherwise.
-  Collapsed sweeps are structurally impossible now.
 - **Selection that follows the line**: Shift+'+' extends an edge selection
   along the connected chain (straightest first, through corners),
   Shift+'−' steps it back — dense parallel outlines become one-key runs.

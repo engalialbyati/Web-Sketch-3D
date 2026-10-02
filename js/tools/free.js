@@ -3628,11 +3628,11 @@ class FollowMeTool extends Tool {
     }
     if (!this.hoverChain) { app.toast('Hover the path line to follow'); return; }
     const path = this.hoverChain.pts;
-    let err = null, made = [], resized = null;
+    let err = null, made = [];
     app.run('follow me', m => {
       const r = m.sweepFaceAlongPath(this.profile, path);
       if (r.error) err = r.error;
-      else { made = r.faces; resized = r.resized || null; }
+      else made = r.faces;
     });
     if (err) app.toast('Follow Me: ' + err, true);
     else {
@@ -3642,9 +3642,7 @@ class FollowMeTool extends Tool {
       const alive = made.filter(id => app.model.faces.has(id));
       app.sel = { faces: new Set(alive), edges: new Set() };
       app.onSelectionChanged();
-      app.toast(resized
-        ? `Followed the path — ${alive.length} faces; ${resized.length} bend${resized.length === 1 ? '' : 's'} auto-sized to R ${fmtLen(resized[0].to)} (the minimum for this profile — R was ${fmtLen(resized[0].from)})`
-        : `Followed the path — ${alive.length} faces selected — right-click ▸ Convert to Element…`);
+      app.toast(`Followed the path — ${alive.length} faces selected — right-click ▸ Convert to Element…`);
     }
     this.activate();
     app.view.clearPreview();

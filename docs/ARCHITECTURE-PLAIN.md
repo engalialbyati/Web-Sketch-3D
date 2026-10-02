@@ -99,26 +99,20 @@ the standard data, and it reports its quantities like any other element.
 
 ---
 
-## 5. Sweeps and pipes — the plumber's bend rule, enforced
+## 5. Sweeps and pipes — total freedom, with an eye open
 
 **Follow Me** sweeps a drawn cross-section along a line or curve — how you
-make pipes, ducts, curved walls, handrails, arches.
+make pipes, ducts, curved walls, handrails, arches. There is no restriction
+on what you sweep: any profile follows any path, however tight the bends —
+the model is yours to shape.
 
-Bends follow the rule every plumber knows: **a bend radius tighter than the
-pipe itself collapses on the inside**. The program checks this *before*
-building anything:
+One thing to know, the way a site engineer knows it: **a bend radius
+tighter than the pipe itself folds on the inside**. The program builds
+exactly what you ask, so if a sweep comes out pinched at a tight bend,
+either enlarge the bend or use a smaller profile — the geometry is still a
+valid, closed solid either way.
 
-- If your bend is too tight but there is straight length on either side, it
-  **re-sizes the bend automatically to the standard minimum** —
-  R ≥ 1.5 × diameter, the long-radius elbow standard — and tells you what
-  it did ("bend auto-sized from R 0.30 to R 1.20 m").
-- If there is nothing to re-size against (a closed ring, or the straights
-  are too short), it **refuses with the exact minimum**: "Fillet radius too
-  small for the selected profile size. Minimum radius is 1.20 m."
-
-The collapsed, self-intersecting geometry simply cannot occur.
-
-The same discipline applies to the **fillet tool** (rounding a corner
+The same precision applies to the **fillet tool** (rounding a corner
 between two lines): it always rounds *into* the corner with the exact
 radius you typed — on the ground or in a vertical plane — and trims both
 lines to the tangent points, like a proper curve set-out.
@@ -180,7 +174,7 @@ dialog tunes color and transparency for screenshots and reviews.
 | Draw a circle by two points | Circle tool → Options Bar ▸ Method ▸ **Start, End (2 points)** |
 | Draw an arc by radius | Arc tool → Method ▸ **Start, End, Radius** → two clicks, type R, pick the side |
 | Stand a shape vertically | Press **V** while drawing — it stands parallel to X or Y, never skewed |
-| Make a pipe / curved wall | Draw the cross-section, **Follow Me**, click the path; bends that are too tight fix themselves |
+| Make a pipe / curved wall | Draw the cross-section, **Follow Me**, click the path — any profile, any path |
 | Turn drawn geometry into an element | Select it (triple-click grabs the whole solid) → Convert to Element |
 | Clean presentation view | View ▸ Edges (off), then screenshot or walk through |
 | Run it as a desktop program | Download the installer from the GitHub Releases page |
@@ -198,7 +192,6 @@ dialog tunes color and transparency for screenshots and reviews.
 | validate() | The checking engineer who rejects bad geometry |
 | Level datum | Floor-to-floor elevation mark |
 | Fixed element | "What I drew is the design" — geometry claimed as an element |
-| Bend auto-sizing (1.5·D) | Long-radius elbow standard |
 | World-space material mapping | One pattern laid across the whole surface |
 | Soften edge | Hide the line, keep the joint |
 

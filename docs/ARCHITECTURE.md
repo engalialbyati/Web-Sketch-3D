@@ -13,10 +13,10 @@ natively.
 > explained for civil engineers, in construction terms, with no code.
 
 **Recent engine highlights** (details in the sections below): path sweeps
-with bend validation & auto-sizing (§6a), drawing from lines at any height
-and edge-run selection (§3), Revit-standard instance data and Base Level
-"None" (§7), swept solids claimed as fixed elements (§7a), one-world-space
-material mapping (§10a), and auto face creation (§5a).
+with mitered bends and rigid profile offset (§6), drawing from lines at any
+height and edge-run selection (§3), Revit-standard instance data and Base
+Level "None" (§7), swept solids claimed as fixed elements (§7a),
+one-world-space material mapping (§10a), and auto face creation (§5a).
 
 ## Table of contents
 
@@ -311,7 +311,7 @@ partitions), and `shellVolume` resolves each orientation tree's sign
 geometrically (ray-parity probe), so punched hosts + rising tubes measure
 exactly.
 
-### 6a. Path sweeps (Follow Me) — miter construction & bend validation
+### 6a. Path sweeps (Follow Me) — miter construction
 
 `sweepFaceAlongPath(profile, path)` extrudes a drawn profile along an edge
 chain with a **classic miter construction**: per-segment frames (parallel
@@ -321,26 +321,8 @@ profile keeps its **rigid drawn offset** from the path — placement rides
 along, it is never re-centered. The drawn profile is deleted before the
 loft so station 0 does not double-cover; caps close both ends;
 degenerate quads fall back to triangles/butterflies so reasonable shapes
-stay watertight.
-
-**Bend validation & auto-sizing** runs before any geometry is built:
-
-```mermaid
-flowchart TD
-    A["profile + path"] --> B["measure profile radius r<br/>(max extent around the path)<br/>+ every ARC bend radius R<br/>(equal-turn chains; sharp turns are miters)"]
-    B --> C{"any R <= r ?"}
-    C -- no --> D["build the mitered sweep"]
-    C -- yes --> E{"straight legs can carry<br/>Rmin = max(1.5·diameter, r+allowance)?"}
-    E -- yes --> F["AUTO-SIZE: rebuild each tight bend as a<br/>tangent fillet at Rmin (Kása circle fit →<br/>exact tangents) and sweep the resized path"]
-    E -- no --> G["REFUSE: 'Fillet radius too small for the<br/>selected profile size. Minimum radius is X m'<br/>— profile survives untouched"]
-```
-
-A Kása least-squares circle fit on each bend region yields exact endpoint
-tangents (chord estimates run half a step off); the replacement arc is
-tessellated in-plane, strictly forward-ordered, and each straight leg run
-is walked to its far end to prove the tangent points land on real geometry.
-Self-intersection is structurally impossible: no mesh is ever generated
-with R ≤ r.
+stay watertight. Sweeps are unconstrained: any profile follows any path,
+tight bends included.
 
 ## 7. Parametric BIM layer
 
@@ -530,7 +512,7 @@ so lighting and materials are unaffected by what you hide while modeling.
 and the pure modules are loaded into an isolated V8 context (`vm`) and
 driven through their public APIs. Suites cover the healing kernel (punch /
 trim / arrange / dissolve), push/pull semantics, path sweeps (miter
-watertightness, rigid offset, bend validation & auto-sizing), the fillet
+watertightness, rigid offset), the fillet
 construction (interior sweep, Z-plane, crossing-line trim), edge runs,
 materials (world-space UV continuity, group/selection painting), the
 Revit parameter schema (including Base Level "None"), hosted cuts,
