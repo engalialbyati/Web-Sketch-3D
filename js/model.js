@@ -3573,6 +3573,54 @@ class Model {
     return out;
   }
 
+  // The connected body of a seed face: every face reachable through shared
+  // edges (edge-to-edge adjacency, ignoring group borders — the body is a
+  // topological walk, not a membership query). This is SketchUp's
+  // triple-click: the way a swept or extruded solid is grabbed as ONE thing
+  // to group or convert to an element. Returns the faces plus the union of
+  // their edges, ready to drop into app.sel.
+  connectedFaces(faceId) {
+    const seed = this.faces.get(faceId);
+    if (!seed) return { faces: [], edges: [] };
+    const key = (a, b) => a < b ? a + '_' + b : b + '_' + a;
+    const byEdge = new Map();
+    for (const f of this.faces.values()) {
+      for (const ring of this.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          const k = key(ring[i], ring[(i + 1) % ring.length]);
+          let arr = byEdge.get(k);
+          if (!arr) byEdge.set(k, arr = []);
+          arr.push(f.id);
+        }
+      }
+    }
+    const seen = new Set([faceId]);
+    const queue = [faceId];
+    while (queue.length) {
+      const f = this.faces.get(queue.pop());
+      if (!f) continue;
+      for (const ring of this.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          for (const other of byEdge.get(key(ring[i], ring[(i + 1) % ring.length])) || []) {
+            if (!seen.has(other)) { seen.add(other); queue.push(other); }
+          }
+        }
+      }
+    }
+    const edges = new Set();
+    for (const id of seen) {
+      const f = this.faces.get(id);
+      if (!f) continue;
+      for (const ring of this.rings(f)) {
+        for (let i = 0; i < ring.length; i++) {
+          const e = this.findEdge(ring[i], ring[(i + 1) % ring.length]);
+          if (e) edges.add(e.id);
+        }
+      }
+    }
+    return { faces: [...seen], edges: [...edges] };
+  }
+
   // Even-odd ray crossing count of one face (outer + hole rings): 0 or 1.
   _rayCrossesFace(p, d, f) {
     const pts = this.pts(f.loop);

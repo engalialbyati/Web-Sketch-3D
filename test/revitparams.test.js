@@ -73,4 +73,21 @@ module.exports = h => {
     eq(rebuildCalls, 1, 'a geometric edit goes through the wall rebuild');
     eq(ent.params.height, 3.2, 'height param set');
   });
+
+  test('FIXED converted elements keep the Revit data fields, drop the geometric inputs', () => {
+    // the claim path (Follow Me sweep ▸ Convert to Element) registers fixed
+    // bodies — their geometry never regenerates, but they still carry Revit's
+    // standard instance data in the properties panel
+    const fw = bim.create('wall', { fixed: true, source: 'convert', name: 'Curved Wall 1', profile: [] }, {}, []);
+    const keys = app2._bimParamFields(fw).map(f => f.key);
+    for (const k of ['phaseCreated', 'phaseDemolished', 'mark', 'comments', 'structural', 'structuralUsage', 'roomBounding'])
+      ok(keys.includes(k), 'fixed wall still carries ' + k);
+    for (const gk of ['height', 'thickness', 'topConstraint', 'locationLine', 'layers'])
+      ok(!keys.includes(gk), 'fixed wall hides the geometric input ' + gk);
+    // and the data-only writes still apply without any regeneration attempt
+    rebuildCalls = 0;
+    ok(app2._applyBimParam(fw, 'mark', 'CW-1'), 'mark applied on the fixed element');
+    eq(rebuildCalls, 0, 'no rebuild for a data-only edit on a fixed element');
+    eq(fw.params.mark, 'CW-1', 'mark stored');
+  });
 };

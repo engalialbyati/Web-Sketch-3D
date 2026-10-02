@@ -5796,6 +5796,18 @@ class App {
       if (ev.button === 0) this.tool.onUp(ev);
     });
     canvas.addEventListener('dblclick', (ev) => { this.view.invalidate(); this.tool.onDoubleClick(ev); });
+    // TRIPLE-CLICK selects the connected body — the whole swept/extruded
+    // solid, not just the one face (the native click count arrives in
+    // ev.detail; 3 rapid clicks upgrade the single/double selection)
+    canvas.addEventListener('click', (ev) => {
+      if (ev.detail < 3 || this.mode !== 'free') return;
+      const q = this.view.eventPt(ev);
+      const fid = this.view.pickFaceAt(q);
+      if (fid != null && !this.isFaceLocked(this.model.faces.get(fid))) {
+        this.view.invalidate();
+        this.selectConnectedBody(fid);
+      }
+    });
     canvas.addEventListener('wheel', (ev) => {
       this.view.invalidate();
       ev.preventDefault();
@@ -6149,6 +6161,10 @@ class App {
       const f = this.model.faces.get(pick.face);
       const pent = f && this.bim.getEntityForFace(f);
       if (pent && !this._eip) items.push([`Edit In Place — ${pent.type} ${pent.id}`, () => this.enterEditInPlace(pent.id)]);
+      // the whole body from one click: swept/extruded solids grabbed as one
+      // (same as triple-clicking) — ready to group or convert to an element
+      if (f && this.mode === 'free' && !(f.userData && f.userData.bimEntityId))
+        items.push(['Select Connected Body', () => this.selectConnectedBody(pick.face)]);
       items.push([`Paint (${this.currentMaterial.name})`, () => {
         this.run('paint', m => { const ff = m.faces.get(pick.face); if (ff) { ff.color = this.currentMaterial.color; ff.alpha = this.currentMaterial.alpha; ff.matId = this.currentMaterial.matId || null; } m.touch(); });
       }]);
@@ -7841,6 +7857,18 @@ class App {
     }
     return best ? { edge: best, d: bd } : null;
   }
+  // Grab a whole swept/extruded body from one clicked face: every face
+  // reachable through shared edges (SketchUp's triple-click). This is how a
+  // Follow Me result — dozens of loose quad faces that are really ONE thing —
+  // gets selected to be grouped or converted to a BIM element.
+  selectConnectedBody(faceId) {
+    const body = this.model.connectedFaces(faceId);
+    if (!body.faces.length) return false;
+    this.sel = { faces: new Set(body.faces), edges: new Set(body.edges) };
+    this.onSelectionChanged();
+    this.setStatus(`Selected ${body.faces.length} faces — the connected body`);
+    return true;
+  }
   pickEntity(ev) {
     const q = this.view.eventPt(ev);
     // downloaded-asset instances are physical objects in front of the model:
@@ -8449,9 +8477,12 @@ class App {
 
   _bimParamFields(ent) {
     const p = ent.params || {};
-    // FIXED converted elements: the drawn geometry IS the design — no
-    // parametric regeneration, dimensions are display-only
-    if (p.fixed) return [];
+    // FIXED converted elements: the drawn geometry IS the design — the
+    // GEOMETRIC parametric inputs are suppressed (they regenerate the body);
+    // Revit's standard data fields appended below are data-only and still
+    // render, so a converted curved wall carries its Phasing/Identity/
+    // Structural data exactly like a parametric one
+    const fixed = !!p.fixed;
     const num = (key, label, step) => (p[key] != null
       ? { key, label, kind: 'number', step, value: +(+p[key]).toFixed(4) } : null);
     // offset fields ALWAYS render (default 0) - the num() 'exists' gate
@@ -8475,7 +8506,8 @@ class App {
             .concat(this.levelManager.levels.map(l => [l.id, l.name])) }
       : null;
     let list;
-    switch (ent.type) {
+    if (fixed) list = [];
+    else switch (ent.type) {
       case 'wall': list = [topSel, !constrained ? num('height', 'Height m', 0.05) : null, num('thickness', 'Thickness m', 0.01), loc,
         { key: 'layers', label: 'Layers (name:t, …)', kind: 'text',
           value: String(Array.isArray(p.layers) && p.layers.length
@@ -9062,9 +9094,17 @@ class App {
 
     // ----- plain selection -----
     if (!this.sel.faces.size && !this.sel.edges.size) {
-      el.innerHTML = `<div class="dim">Nothing selected</div>
-        <div class="stats">${model.faces.size} faces · ${model.edges.size} edges · ${model.vertices.size} vertices · ${model.groups.size} groups</div>
-        <div class="dim" style="margin-top:4px">Select faces ▸ Ctrl+G to group · select faces ▸ Give Thickness</div>`;
+      el.innerHTML = `
+        <div class="empty-info">
+          <div class="empty-info-ic">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+          </div>
+          <div class="empty-info-title">No Selection</div>
+          <div class="empty-info-desc">Click any element, face, or edge in the model to view and edit its parameters.</div>
+          <div class="stats" style="margin-top:6px;padding:6px 10px;background:#f8fafc;border-radius:6px;border:1px solid #e2e8f0;font-size:11px;color:#64748b">
+            ${model.faces.size} faces · ${model.edges.size} edges · ${model.vertices.size} vertices · ${model.groups.size} groups
+          </div>
+        </div>`;
       return;
     }
     // ---- LINE inspector (OpenCADStudio Properties parity): one selected

@@ -3508,14 +3508,22 @@ class FollowMeTool extends Tool {
     }
     if (!this.hoverChain) { app.toast('Hover the path line to follow'); return; }
     const path = this.hoverChain.pts;
-    let err = null, made = 0;
+    let err = null, made = [];
     app.run('follow me', m => {
       const r = m.sweepFaceAlongPath(this.profile, path);
       if (r.error) err = r.error;
-      else made = r.faces.length;
+      else made = r.faces;
     });
     if (err) app.toast('Follow Me: ' + err, true);
-    else app.toast(`Followed the path — ${made} faces`);
+    else {
+      // the swept body lands SELECTED — a sweep is always meant to become
+      // one thing (a group, a BIM element via Convert), and picking 30 loose
+      // faces by hand is not that
+      const alive = made.filter(id => app.model.faces.has(id));
+      app.sel = { faces: new Set(alive), edges: new Set() };
+      app.onSelectionChanged();
+      app.toast(`Followed the path — ${alive.length} faces selected — right-click ▸ Convert to Element…`);
+    }
     this.activate();
     app.view.clearPreview();
   }

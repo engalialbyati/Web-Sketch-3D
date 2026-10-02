@@ -189,4 +189,44 @@ module.exports = h => {
     ok(!m.faces.has(sq.id), 'profile consumed');
     w.vclean('follow me offset');
   });
+
+  test('connectedFaces grabs the whole swept body from any one face', () => {
+    const w = makeWorld(), { G, m } = w;
+    // the user's arc + rectangle: a vertical profile swept along a curved
+    // path — dozens of loose quads that are really ONE body to convert
+    const arc = [];
+    for (let i = 0; i <= 12; i++) {
+      const t = i / 12 * Math.PI / 2;
+      arc.push(G.v(5 * Math.cos(t), 5 * Math.sin(t), 0));
+    }
+    const rec = m.addFaceFromRings([
+      G.v(5, 0, 0), G.v(5, 0.2, 0), G.v(5, 0.2, 3), G.v(5, 0, 3)]);
+    const r = m.sweepFaceAlongPath(rec.id, arc);
+    ok(!r.error, 'arc sweep succeeded');
+    eq(m.shellOpenEdges(r.faces), 0, 'curved wall body is watertight');
+    const body = m.connectedFaces(r.faces[0]);
+    eq(body.faces.length, r.faces.length, 'every swept face is in the body');
+    eq(new Set(body.faces).size, body.faces.length, 'no duplicates');
+    ok(body.edges.length >= r.faces.length, 'boundary edges collected');
+    for (const fid of body.faces) {
+      const f = m.faces.get(fid);
+      ok(!(f.userData && f.userData.bimEntityId), 'body faces are free (convertible)');
+    }
+    w.vclean('connected sweep');
+  });
+
+  test('connectedFaces stops at the body border — disjoint solids stay apart', () => {
+    const w = makeWorld(), { G, m } = w;
+    const b1 = m.addFaceFromRings([G.v(0, 0, 0), G.v(1, 0, 0), G.v(1, 1, 0), G.v(0, 1, 0)]);
+    const b2 = m.addFaceFromRings([G.v(5, 0, 0), G.v(6, 0, 0), G.v(6, 1, 0), G.v(5, 1, 0)]);
+    m.pushPull(b1, 1); m.pushPull(b2, 1);
+    const all = [...m.faces.values()];
+    const a = m.connectedFaces(b1.id); // b1's id survives pushPull as the far cap
+    eq(a.faces.length, 6, 'first box is its own body');
+    const other = all.find(f => !a.faces.includes(f.id));
+    const c = m.connectedFaces(other.id);
+    eq(c.faces.length, 6, 'second box is separate');
+    ok(!c.faces.some(id => a.faces.includes(id)), 'no overlap between bodies');
+    w.vclean('connected disjoint');
+  });
 };
