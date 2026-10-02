@@ -1124,6 +1124,7 @@ body.mode-bim #hint::before {
   box-shadow: 0 10px 28px rgba(15,25,35,.28);
   padding: 6px;
 }
+#gearmenu.hidden { display: none; }
 #gearmenu .gm-title {
   padding: 5px 10px 7px;
   font: 700 10px 'Segoe UI', system-ui, sans-serif;

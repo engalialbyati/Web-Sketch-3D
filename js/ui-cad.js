@@ -372,6 +372,11 @@
     document.addEventListener('pointerdown', e => {
       if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== gear) menu.classList.add('hidden');
     });
+    // Escape closes the chooser like every other popup (outside-pointerdown
+    // was the only way out before — keyboard-only flows left it stranded)
+    window.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && !menu.classList.contains('hidden')) menu.classList.add('hidden');
+    });
   }
 
   // -------------------------------------------------- Properties (tray)
