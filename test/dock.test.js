@@ -46,4 +46,26 @@ module.exports = h => {
     ok(back.elbrowser && back.elbrowser.dock === 'right', 'layout stored per panel key');
     ok(DK.get('nope') === null, 'unknown keys resolve null');
   });
+
+  test('zoneFor: dropping ON a panel stack docks into it', () => {
+    ok(DK.zoneFor, 'engine exports zoneFor');
+    // the two stacks: left col covering x 0-290, right col x 1100-1400
+    const cols = [
+      { side: 'left',  x0: 0,    x1: 290,  y0: 90, y1: 900 },
+      { side: 'right', x0: 1100, x1: 1400, y0: 90, y1: 900 },
+    ];
+    // mid-column drops dock — the wide left stack is a target, not its first 48px
+    eq(DK.zoneFor(150, 400, cols, 0, 1100), 'left', 'middle of the LEFT stack docks left');
+    eq(DK.zoneFor(1250, 400, cols, 0, 1100), 'right', 'middle of the RIGHT stack docks right');
+    eq(DK.zoneFor(289, 899, cols, 0, 1100), 'left', 'inner edge of the stack counts');
+    // outside the stacks vertically: falls back to the edge bands
+    eq(DK.zoneFor(150, 40, cols, 0, 1100), 'float', 'above the stacks stays floating');
+    eq(DK.zoneFor(150, 40, cols, 0, 1100, 200), 'left', 'fallback band still works (custom width)');
+    // near a stack snaps to it even inside the fallback band
+    eq(DK.zoneFor(1090, 400, cols, 0, 1100), 'right', 'just left of the right stack snaps right');
+    eq(DK.zoneFor(600, 400, cols, 0, 1100), 'float', 'mid-canvas between the stacks stays floating');
+    // no columns (boot edge case) degrades to edgeFor
+    eq(DK.zoneFor(10, 400, null, 0, 1000), 'left', 'no columns: edge band left');
+    eq(DK.zoneFor(500, 400, [], 0, 1000), 'float', 'no columns: mid floats');
+  });
 };

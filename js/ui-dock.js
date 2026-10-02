@@ -31,6 +31,16 @@
     if (vpRight - clientX < edge) return 'right';
     return 'float';
   }
+  // Full drop-zone resolution: a drop ON a dock column (the connected panel
+  // stack) docks INTO that stack; otherwise the screen-edge bands decide.
+  // colRects: [{side, x0, x1, y0, y1}] — a column owns the pixels it covers,
+  // so the wide left stack is a drop target, not just its first 48px.
+  function zoneFor(clientX, clientY, colRects, vpLeft, vpRight, edge = EDGE) {
+    for (const r of colRects || []) {
+      if (clientX >= r.x0 && clientX <= r.x1 && clientY >= r.y0 && clientY <= r.y1) return r.side;
+    }
+    return edgeFor(clientX, vpLeft, vpRight, edge);
+  }
   function clampXY(x, y, vw, vh) {
     return {
       x: Math.max(-40, Math.min(x, Math.max(4, vw - 60))),
@@ -227,7 +237,7 @@
       panel.insertBefore(head, first);
     }
     headDraggable();
-    head.title = 'Drag to float · drop near an edge to dock · double-click docks left';
+    head.title = 'Drag to float · drop onto a panel stack (or near an edge) to dock · double-click docks left';
     if (!head.querySelector('.dk-title')) {
       head.innerHTML = `<span class="dk-grip" title="Drag to float or dock">
           <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
@@ -301,8 +311,19 @@
       }
     }
 
-    // ---- drag-to-float + edge-dock ---
+    // ---- drag-to-float + edge-dock ----
     function headDraggable() {
+      // live rects of the two panel stacks — dropping over a stack docks in
+      const colRects = () => Object.entries(cols || {})
+        .map(([side, el]) => {
+          const r = el.getBoundingClientRect();
+          return { side, x0: r.left, x1: r.right, y0: r.top, y1: r.bottom };
+        });
+      const zone = ev => {
+        const vp = document.getElementById('viewport').getBoundingClientRect();
+        return zoneFor(ev.clientX, ev.clientY, colRects(), vp.left,
+          window.innerWidth - (colWidths.right || COL_DEF));
+      };
       let drag = null;
       head.addEventListener('pointerdown', ev => {
         if (ev.target.closest('.dk-btn')) return;
@@ -318,8 +339,8 @@
         const vp = document.getElementById('viewport').getBoundingClientRect();
         const c  = clampXY(ev.clientX - vp.left - drag.dx, ev.clientY - vp.top - drag.dy, vp.width, vp.height);
         st.x = c.x; st.y = c.y; st.dock = 'float';
-        // edge detection: use full window width so right-column edge also snaps
-        const near = edgeFor(ev.clientX, vp.left, window.innerWidth - (colWidths.right || COL_DEF));
+        // dropping over a panel STACK docks into it, near a screen edge too
+        const near = zone(ev);
         panel.classList.toggle('dk-preview-left',  near === 'left');
         panel.classList.toggle('dk-preview-right', near === 'right');
         apply();
@@ -328,8 +349,7 @@
         if (!drag) return;
         panel.classList.remove('dk-preview-left', 'dk-preview-right');
         if (drag.moved) {
-          const vp   = document.getElementById('viewport').getBoundingClientRect();
-          const side = edgeFor(ev.clientX, vp.left, window.innerWidth - (colWidths.right || COL_DEF));
+          const side = zone(ev);
           if (side !== 'float') { st.dock = side; }
         }
         drag = null;
@@ -366,7 +386,7 @@
     return api;
   }
 
-  window.DockPanels = { make, edgeFor, clampXY, loadLayout, saveLayout,
+  window.DockPanels = { make, edgeFor, zoneFor, clampXY, loadLayout, saveLayout,
                         get: k => registry.get(k) || null,
                         rebuildSplitters };
 })();
