@@ -117,7 +117,7 @@ module.exports = h => {
   });
   // ---- joined paths (arcs + lines follow as ONE chain) ----------------------
   // chainFor lives on ExtrudeCurveTool in free.js — load it headless
-  const LF = h.loadModel(['js/tools/base.js', 'js/tools/free.js']);
+  const LF = h.loadModel(['js/tools/base.js', 'js/tools/free.js', 'js/tools/draw.js']);
   const ECT = LF.window.FreeTools.ExtrudeCurveTool;
 
   test('chainFor: a line + arc + line path welded end-to-end is ONE chain', () => {
@@ -228,5 +228,81 @@ module.exports = h => {
     eq(c.faces.length, 6, 'second box is separate');
     ok(!c.faces.some(id => a.faces.includes(id)), 'no overlap between bodies');
     w.vclean('connected disjoint');
+  });
+
+  // ---- sweep bend validation & auto-sizing (pipes/elbows) ------------------
+  test('sweep AUTO-SIZES a bend tighter than the profile (legs can carry it)', () => {
+    const w = makeWorld(), { G, m } = w;
+    // profile: a 0.4 m-radius standing circle at the path start
+    const ring = [];
+    for (let i = 0; i < 12; i++) {
+      const t = i / 12 * Math.PI * 2;
+      ring.push(G.v(0, 0.4 * Math.cos(t), 0.4 * Math.sin(t)));
+    }
+    const prof = m.addFaceFromRings(ring);
+    // path: straight leg, quarter bend R=0.3 (tighter than the 0.4 profile),
+    // straight leg — auto-size must rebuild the bend at the standard minimum
+    const path = [];
+    for (let i = 0; i <= 6; i++) path.push(G.v(-2 + i * (2 / 6), 0, 0));
+    for (let i = 1; i <= 8; i++) {
+      const t = i / 8 * Math.PI / 2;
+      path.push(G.v(0.3 * Math.sin(t), 0.3 * (1 - Math.cos(t)), 0));
+    }
+    for (let i = 1; i <= 6; i++) path.push(G.v(0.3, 0.3 + i * (2 / 6), 0)); // exit leg continues +y
+    const r = m.sweepFaceAlongPath(prof.id, path);
+    ok(!r.error, 'auto-sized instead of refused (' + (r.error || 'ok') + ')');
+    ok(r.resized && r.resized.length === 1, 'one bend reported as resized');
+    near(r.resized[0].from, 0.3, 0.05, 'the tight bend radius detected');
+    const rMin = Math.max(1.5 * 2 * 0.4, 0.4 + 0.4);
+    near(r.resized[0].to, rMin, 1e-9, 'resized to the standard minimum (1.5·D)');
+    eq(m.shellOpenEdges(r.faces), 0, 'the resized elbow is watertight');
+    ok(!m.faces.has(prof.id), 'profile consumed');
+    w.vclean('sweep autosize');
+  });
+
+  test('sweep REFUSES a tight bend with no legs to auto-size (exact minimum in the message)', () => {
+    const w = makeWorld(), { G, m } = w;
+    // profile: 0.4 m-radius circle, centered ON the path line at path[0]
+    const ring = [];
+    for (let i = 0; i < 12; i++) {
+      const t = i / 12 * Math.PI * 2;
+      ring.push(G.v(0.3 + 0.4 * Math.cos(t), 0, 0.4 * Math.sin(t)));
+    }
+    const prof = m.addFaceFromRings(ring);
+    // path: a CLOSED circle of R=0.3 — a pure bend, nothing to auto-size
+    const path = [];
+    for (let i = 0; i < 12; i++) {
+      const t = i / 12 * Math.PI * 2;
+      path.push(G.v(0.3 * Math.cos(t), 0.3 * Math.sin(t), 0));
+    }
+    const r = m.sweepFaceAlongPath(prof.id, path);
+    ok(r.error, 'refused');
+    ok(/Fillet radius too small/.test(r.error), 'the exact validation message');
+    ok(/1\.20/.test(r.error), 'states the minimum radius (1.2 m = 1.5·D)');
+    near(r.minBend, 1.2, 1e-9, 'minBend = 1.5 × diameter');
+    ok(m.faces.has(prof.id), 'the profile survives a refused sweep untouched');
+    w.vclean('sweep refuse');
+  });
+
+  test('generous bends sweep unchanged (no false positives)', () => {
+    const w = makeWorld(), { G, m } = w;
+    // profile r=0.15 along a bend of R=1 — 6.7× the profile radius
+    const ring = [];
+    for (let i = 0; i < 10; i++) {
+      const t = i / 10 * Math.PI * 2;
+      ring.push(G.v(0, 0.15 * Math.cos(t), 0.15 * Math.sin(t)));
+    }
+    const prof = m.addFaceFromRings(ring);
+    const path = [G.v(-1, 0, 0)];
+    for (let i = 1; i <= 8; i++) {
+      const t = i / 8 * Math.PI / 2;
+      path.push(G.v(1 * Math.sin(t), 1 * (1 - Math.cos(t)), 0));
+    }
+    path.push(G.v(1 + 1, 1, 0));
+    const r = m.sweepFaceAlongPath(prof.id, path);
+    ok(!r.error, 'sweeps cleanly');
+    ok(!r.resized, 'no auto-size fired');
+    eq(m.shellOpenEdges(r.faces), 0, 'watertight');
+    w.vclean('sweep generous');
   });
 };

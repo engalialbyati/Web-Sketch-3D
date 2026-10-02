@@ -3408,11 +3408,175 @@ class Model {
    *  profile's frame parallel-transports along the path — no twist on planar
    *  paths, natural banking through corners. Consumes the profile; the PATH
    *  stays (SketchUp parity). Returns { faces } or { error }. */
-  sweepFaceAlongPath(faceId, path) {
+  // ---- sweep bend validation (pipes/elbows) --------------------------------
+  // A swept profile collapses on the inner side of a bend when the bend
+  // radius R <= the profile's effective radius r (its max extent around the
+  // path). Detects tessellated ARC bends (chains of equal small turns —
+  // single sharp turns are MITERS the sweep construction handles) and
+  // returns the too-tight ones with the profile's r.
+  _sweepBendCheck(f, path) {
+    const ring = this.pts(f.loop);
+    const u0 = G.norm(G.sub(path[1], path[0]));
+    let rEff = 0;
+    for (const p of ring) {
+      const w = G.sub(p, path[0]);
+      const d = G.len(G.sub(w, G.mul(u0, G.dot(w, u0)))); // distance to the path line
+      if (d > rEff) rEff = d;
+    }
+    const dirs = [];
+    for (let i = 1; i < path.length; i++) {
+      const d = G.sub(path[i], path[i - 1]);
+      const L = G.len(d);
+      if (L > 1e-9) dirs.push(G.mul(d, 1 / L));
+    }
+    const turn = (a, b) => Math.acos(Math.max(-1, Math.min(1, G.dot(a, b))));
+    const tight = [];
+    let i = 0;
+    while (i < dirs.length - 1) {
+      const t0 = turn(dirs[i], dirs[i + 1]);
+      // straight runs pass; a single sharp turn (>30°) is a miter, not a bend
+      if (t0 < 0.02 || t0 > Math.PI / 6) { i++; continue; }
+      let j = i + 1;
+      while (j < dirs.length - 1) {
+        const t = turn(dirs[j], dirs[j + 1]);
+        if (t > Math.PI / 6 || Math.abs(t - t0) > Math.max(0.02, t0 * 0.35)) break;
+        j++;
+      }
+      // chain = segments i..j; R from the chord/turn relation
+      const chord = G.len(G.sub(path[i + 1], path[i]));
+      const R = chord / (2 * Math.sin(t0 / 2));
+      if (R <= rEff + 1e-9) tight.push({ k0: i, k1: j, R });
+      i = j + 1;
+    }
+    return { rEff, tight };
+  }
+  // Rebuild each too-tight bend as a tangent fillet of radius Rnew: the
+  // corner comes from the entry/exit leg lines, the arc from the standard
+  // fillet construction. Returns { path, changes } or null when a leg is
+  // too short to carry the bigger radius (caller falls back to the error).
+  _sweepResizeBends(path, tight, Rnew) {
+    // least-squares circle (Kása) on the bend region, in plane coordinates —
+    // exact tangents at the region's ends (chord estimates run half a step off)
+    const fitCircle = pts => {
+      const d0 = G.norm(G.sub(pts[1], pts[0]));
+      const dN = G.norm(G.sub(pts[pts.length - 1], pts[pts.length - 2]));
+      const nn = G.norm(G.cross(d0, dN));
+      if (G.isZero(nn)) return null;
+      const { u: e1, v: e2 } = G.basisForNormal(nn);
+      const A = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], b = [0, 0, 0];
+      for (const p of pts) {
+        const x = G.dot(p, e1), y = G.dot(p, e2);
+        const row = [x, y, 1], rhs = x * x + y * y;
+        for (let i = 0; i < 3; i++) {
+          b[i] += row[i] * rhs;
+          for (let j = 0; j < 3; j++) A[i][j] += row[i] * row[j];
+        }
+      }
+      const det = mm => mm[0][0] * (mm[1][1] * mm[2][2] - mm[1][2] * mm[2][1])
+        - mm[0][1] * (mm[1][0] * mm[2][2] - mm[1][2] * mm[2][0])
+        + mm[0][2] * (mm[1][0] * mm[2][1] - mm[1][1] * mm[2][0]);
+      const D = det(A);
+      if (Math.abs(D) < 1e-12) return null;
+      const rep = c2 => {
+        const m = A.map(row2 => [...row2]);
+        for (let r3 = 0; r3 < 3; r3++) m[r3][c2] = b[r3];
+        return det(m);
+      };
+      // Kása: x²+y² = a·x + b·y + c ⇒ center = (a/2, b/2)
+      const cx = rep(0) / (2 * D), cy = rep(1) / (2 * D);
+      const center3 = G.add(G.add(G.v(0, 0, 0), G.mul(e1, cx)), G.mul(e2, cy));
+      return { center: center3, n: nn };
+    };
+    const out = [];
+    const changes = [];
+    let cursor = 0;
+    for (const b of tight) {
+      const k0 = b.k0, k1 = b.k1;
+      // both straight legs must exist to rebuild the bend
+      if (k0 < 2 || k1 + 2 > path.length - 1) return null;
+      const fit = fitCircle(path.slice(k0 - 1, k1 + 2)); // exactly the arc's span
+      if (!fit) return null;
+      const rad = t => G.norm(G.cross(fit.n, G.sub(t, fit.center))); // ⊥ radius
+      // tangents at the arc's ENDPOINTS (= the slice's ends — the straight
+      // legs continue these exactly), oriented along the travel
+      let a = rad(path[k0 - 1]);
+      if (G.dot(a, G.sub(path[k0], path[k0 - 1])) < 0) a = G.mul(a, -1);
+      let bdir = rad(path[k1 + 1]);
+      if (G.dot(bdir, G.sub(path[k1 + 1], path[k1])) < 0) bdir = G.mul(bdir, -1);
+      // corner: intersection of the two tangent lines (coplanar in the
+      // bend's plane; solve A + s·a = B + t·bdir)
+      const A = G.v(path[k0 - 1].x, path[k0 - 1].y, path[k0 - 1].z);
+      const B = G.v(path[k1 + 1].x, path[k1 + 1].y, path[k1 + 1].z);
+      const n2 = G.cross(a, bdir);
+      const n2l = G.len(n2);
+      if (n2l < 1e-9) return null;
+      const w = G.sub(B, A);
+      const s = G.dot(G.cross(w, bdir), n2) / (n2l * n2l);
+      const C = G.add(A, G.mul(a, s));
+      // the replacement bend: the standard tangent fillet at Rnew between
+      // the two leg lines (self-contained — the kernel never leans on UI
+      // modules): d = R/tan(θ/2), center on the interior bisector
+      const theta = Math.acos(Math.max(-1, Math.min(1, G.dot(a, bdir)))); // the TURN angle
+      const d = Rnew / Math.tan(theta / 2);
+      const bis = G.norm(G.add(a, bdir));
+      const center = G.add(C, G.mul(bis, Rnew / Math.sin(theta / 2)));
+      const T1 = G.add(C, G.mul(a, d)), T2 = G.add(C, G.mul(bdir, d));
+      if (G.dist(C, T1) < 1e-9) return null;
+      // REAL leg-length check: walk each straight RUN to its far end — the
+      // tangent points must land inside the actual legs
+      let runA = k0 - 1;
+      while (runA > 0 && G.dist(G.norm(G.sub(path[runA], path[runA - 1])), a) < 2e-3) runA--;
+      let runB = k1 + 2;
+      while (runB + 1 < path.length && G.dist(G.norm(G.sub(path[runB + 1], path[runB])), bdir) < 2e-3) runB++;
+      if (G.dist(C, path[runA]) < d - 1e-6 || G.dist(C, path[runB]) < d - 1e-6) return null;
+      // tessellate the minor arc T1→T2 in the bend plane
+      const e1 = G.norm(G.sub(T1, center));
+      let e2 = G.norm(G.cross(fit.n, e1));
+      if (G.dot(G.sub(T2, center), e2) < 0) e2 = G.mul(e2, -1);
+      const span = Math.acos(Math.max(-1, Math.min(1, G.dot(
+        G.norm(G.sub(T1, center)), G.norm(G.sub(T2, center))))));
+      const nArc = Math.max(4, Math.ceil(span / 0.12));
+      const arcPts = [];
+      for (let i2 = 0; i2 <= nArc; i2++) {
+        const t = span * (i2 / nArc);
+        arcPts.push(G.add(center, G.add(G.mul(e1, Math.cos(t) * Rnew), G.mul(e2, Math.sin(t) * Rnew))));
+      }
+      // splice, keeping strict forward ordering: drop a leg vertex the new
+      // tangent point has already passed
+      const keepA = G.dist(C, path[k0 - 1]) >= d - 1e-9 ? k0 : k0 - 1;
+      out.push(...path.slice(cursor, keepA));
+      out.push(...arcPts);                       // T1 … arc … T2
+      cursor = G.dist(C, path[k1 + 2]) >= d - 1e-9 ? k1 + 2 : k1 + 3;
+      changes.push({ from: b.R, to: Rnew });
+    }
+    out.push(...path.slice(cursor));
+    return { path: out, changes };
+  }
+  sweepFaceAlongPath(faceId, path, opts = {}) {
     const f = this.faces.get(faceId);
     if (!f) return { error: 'profile face is gone' };
     if ((f.holes || []).length) return { error: 'profiles with openings cannot sweep yet' };
     if (!path || path.length < 2) return { error: 'path is too short' };
+    // ---- bend guard: R_bend must exceed the profile radius, else the inner
+    // side of the sweep collapses. Auto-size to the standard minimum
+    // (R >= 1.5·diameter, R >= r + inner allowance) when the straight legs
+    // can carry it; otherwise refuse with the exact minimum.
+    const bend = this._sweepBendCheck(f, path);
+    if (bend.tight.length) {
+      const Rmin = Math.max(1.5 * 2 * bend.rEff, bend.rEff + Math.max(0.05, bend.rEff));
+      let fixed = null;
+      if (opts.autoSizeBend !== false) fixed = this._sweepResizeBends(path, bend.tight, Rmin);
+      if (fixed) {
+        path = fixed.path;
+        this._sweepAutoSize = fixed.changes;
+      } else {
+        return {
+          error: `Fillet radius too small for the selected profile size. Minimum radius is ${Rmin.toFixed(2)} m`
+            + (opts.autoSizeBend !== false ? ' — the straight legs are too short to auto-size; lengthen them or redraw the bend' : ''),
+          minBend: Rmin,
+        };
+      }
+    }
     const ring = this.pts(f.loop);
     // profile frame: origin = ring centroid, normal from the ring
     const c = ring.reduce((s, p) => G.add(s, p), G.v(0, 0, 0));
@@ -3467,7 +3631,9 @@ class Model {
     this.deleteFace(faceId, true);
     const faces = this.loftRings(sections, { closed: false, capStart: true, capEnd: true, color: f.color });
     this.gc();
-    return { faces };
+    const out = { faces };
+    if (this._sweepAutoSize) { out.resized = this._sweepAutoSize; this._sweepAutoSize = null; }
+    return out;
   }
 
   // ---------------------------------------------------------------- groups
