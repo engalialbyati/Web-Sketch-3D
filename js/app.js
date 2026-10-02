@@ -348,7 +348,8 @@ const RIBBON_TABS = {
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'fillet'] },
     { title: 'Sketch', tools: ['draw'] },
-    { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array'] },
+    { title: 'Modify', tools: ['trim', 'offset', 'edgeoffset', 'move', 'rotate', 'scale', 'mirror', 'array', 'align'] },
+    { title: 'Datum', tools: ['refplane'] },
     { title: 'Measure', tools: ['tape', 'measurearea'] },
   ] },
   model: { label: 'Model', groups: [
@@ -356,7 +357,7 @@ const RIBBON_TABS = {
     { title: '3D Forms', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
     { title: 'Building', tools: ['wall', 'floor', 'column', 'beam', 'roof', 'stairs'] },
     { title: 'Solids', tools: ['solid-union', 'solid-subtract', 'solid-trim', 'solid-intersect', 'solid-split', 'solid-shell'] },
-    { title: 'Transform', tools: ['move', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
+    { title: 'Transform', tools: ['move', 'align', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
     { title: 'Tools', tools: ['paint', 'eraser', 'trim'] },
   ] },
   architecture: { label: 'Architecture', groups: [
@@ -366,7 +367,7 @@ const RIBBON_TABS = {
     { title: 'Floors & Roof', tools: ['floor', 'ceiling', 'roof'] },
     { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
     { title: 'Rooms', tools: ['room'] },
-    { title: 'Modify', tools: ['pushpull', 'resize', 'move', 'rotate', 'mirror', 'array'] },
+    { title: 'Modify', tools: ['pushpull', 'resize', 'move', 'rotate', 'mirror', 'array', 'splitwall'] },
   ] },
   structure: { label: 'Structure', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
