@@ -223,25 +223,32 @@ class Viewport {
   // frame. 'standard' is the previous flat output.
   setRenderQuality(mode) {
     this.quality = mode === 'standard' ? 'standard' : 'enhanced';
-    if (this.quality === 'enhanced') {
-      this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      this.renderer.toneMappingExposure = 1.1;
-      if (!this._ibl) {
-        try {
-          const pmrem = new THREE.PMREMGenerator(this.renderer);
-          const sc = new THREE.Scene();
-          sc.add(new THREE.Mesh(this.sky.geometry, this.sky.material));
-          // the sky sphere is R=1900 — fromScene's default far (100) would
-          // miss it entirely and bake a black environment
-          this._ibl = pmrem.fromScene(sc, 0.08, 1, 2500).texture;
-          pmrem.dispose();
-        } catch (e) { this._ibl = null; }
-      }
-      this.scene.environment = this._ibl || null;
-    } else {
-      this.renderer.toneMapping = THREE.NoToneMapping;
-      this.scene.environment = null;
+    const on = this.quality === 'enhanced';
+    this.renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
+    if (on && !this._ibl) {
+      try {
+        const pmrem = new THREE.PMREMGenerator(this.renderer);
+        const sc = new THREE.Scene();
+        sc.add(new THREE.Mesh(this.sky.geometry, this.sky.material));
+        // the sky sphere is R=1900 — fromScene's default far (100) would
+        // miss it entirely and bake a black environment
+        this._ibl = pmrem.fromScene(sc, 0.08, 1, 2500).texture;
+        pmrem.dispose();
+      } catch (e) { this._ibl = null; }
     }
+    this.scene.environment = on ? (this._ibl || null) : null;
+    // Runtime tone-mapping / environment changes do NOT recompile already-
+    // compiled materials (r128 caches programs) — flag every material so
+    // built-in shaders pick up the new state, and flip the kernel shader's
+    // own filmic uniform (it bypasses renderer tone mapping by design).
+    this.scene.traverse(o => {
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const mm of mats) {
+        if (mm.uniforms && mm.uniforms.uFilmic) mm.uniforms.uFilmic.value = on ? 1 : 0;
+        mm.needsUpdate = true;
+      }
+    });
     try { localStorage.setItem('websketch3d.quality', this.quality); } catch (e) { }
     this.invalidate();
   }
@@ -253,6 +260,7 @@ class Viewport {
       lightDir: { value: G.norm(G.v(36, -22, 52)) },
       uAlphaMul: { value: 1.0 },
       uMono: { value: 0.0 },
+      uFilmic: { value: 1.0 }, // Enhanced: ACES curve applied in-shader
       fogNear: { value: 120 }, fogFar: { value: 460 },
       fogColor: { value: new THREE.Color(0xe8eef2) }, fogOn: { value: 1.0 },
       // live section cuts: up to 4 planes (n·x + w < 0 is discarded). Kernel
@@ -279,7 +287,11 @@ class Viewport {
         uniform vec3 lightDir; uniform float uAlphaMul; uniform float uMono;
         uniform float fogNear; uniform float fogFar; uniform vec3 fogColor; uniform float fogOn;
         uniform vec4 uClip[4]; uniform int uClipN; uniform vec3 uSectionTint; uniform float uSectionOn;
+        uniform float uFilmic;
         varying vec3 vN; varying vec4 vC; varying float vDepth; varying vec3 vPos;
+        vec3 acesFilm(vec3 x) {
+          return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+        }
         void main(){
           for (int i = 0; i < 4; i++) { if (i >= uClipN) break; if (dot(uClip[i].xyz, vPos) + uClip[i].w < 0.0) discard; }
           vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
@@ -291,6 +303,7 @@ class Viewport {
           vec3 col = base * (0.60 + diff * 0.40 + fill);
           float f = clamp((vDepth - fogNear) / max(fogFar - fogNear, 0.001), 0.0, 1.0) * fogOn;
           col = mix(col, fogColor, f);
+          if (uFilmic > 0.5) col = acesFilm(col * 1.08);
           gl_FragColor = vec4(col, vC.a * uAlphaMul);
         }`,
     });
