@@ -174,6 +174,9 @@ const ICONS = {
   spot: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v9M8 6l4-2 4 2"/><path d="M6 13h12l-6 7z"/></svg>',
   ellipse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="9" ry="5.5"/><path d="M12 12h9" opacity=".5"/></svg>',
   revolve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 12V7m0 5h5" opacity=".6"/><rect x="13" y="10" width="7" height="4" rx="1"/></svg>',
+  align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16"/><path d="M8 5v14M16 5v14" stroke-dasharray="2.5 2.5"/><path d="M12 9l3 3-3 3"/></svg>',
+  refplane: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4v16" stroke-dasharray="3 3"/><path d="M8 6l10 4L8 14z" fill="currentColor" stroke="none"/></svg>',
+  splitwall: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14"/><path d="M12 5v14" stroke-dasharray="3 2"/></svg>',
   followme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 16c4 0 6-8 10-8 3.5 0 5 4 8 4"/><path d="M3 16l2.5-3M3 16l3.6 1.2M21 12l-3-1.5M21 12l-2.6 2.4"/></svg>',
   solidunion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>',
   solidsubtract: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" stroke-dasharray="2 2"/></svg>',
@@ -211,6 +214,8 @@ const TOOL_DEFS = {
     { id: 'array', label: 'Array', key: 'Y' },
     { id: 'revolve', label: 'Revolve', key: 'U' },
     { id: 'followme', label: 'Follow Me', key: 'N' },
+    { id: 'align', label: 'Align', key: '' },
+    { id: 'refplane', label: 'Reference Plane', key: '' },
     'sep',
     { id: 'paint', label: 'Paint Bucket', key: 'B' },
     { id: 'eraser', label: 'Eraser', key: 'E' },
@@ -257,6 +262,7 @@ const TOOL_DEFS = {
     { id: 'stairs', label: 'Stairs', key: '' },
     { id: 'handrail', label: 'Handrail', key: '' },
     { id: 'convert', label: 'Convert to BIM', key: '' },
+    { id: 'splitwall', label: 'Split Wall', key: '' },
     'sep',
     { id: 'door', label: 'Door', key: '' },
     { id: 'window', label: 'Window', key: '' },
@@ -305,7 +311,7 @@ const RIBBON_GROUPS = {
   free: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Draw', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'extrude'] },
-    { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale', 'mirror', 'array'] },
+    { title: 'Modify', tools: ['pushpull', 'offset', 'resize', 'move', 'rotate', 'scale', 'mirror', 'array', 'align'] },
     { title: 'Tools', tools: ['paint', 'eraser', 'trim', 'tape', 'measurearea', 'area'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
@@ -314,13 +320,13 @@ const RIBBON_GROUPS = {
   ],
   bim: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'levelview'] },
+    { title: 'Datum', tools: ['levelsbtn', 'gridsbtn', 'gridplace', 'refplane', 'levelview'] },
     { title: 'Build', tools: ['draw', 'wall', 'floor', 'room', 'convert'] },
     { title: 'Structure', tools: ['column', 'beam', 'foundation', 'roof', 'stripfoot', 'brace', 'plate'] },
     { title: 'Circulation', tools: ['stairs', 'handrail', 'ramp'] },
     { title: 'Finishes', tools: ['ceiling', 'curtain', 'sweep'] },
     { title: 'Hosts', tools: ['door', 'window', 'opening'] },
-    { title: 'Modify', tools: ['pushpull', 'move', 'mirror', 'array'] },
+    { title: 'Modify', tools: ['pushpull', 'move', 'mirror', 'array', 'splitwall'] },
     { title: 'Tools', tools: ['eraser', 'trim', 'tape', 'measurearea'] },
     { title: 'Navigate', tools: ['orbit', 'pan'] },
     { title: 'Quick', tools: ['zoomext', 'undo', 'redo'] },
@@ -9647,6 +9653,21 @@ class App {
       }], ['Copy CSV', async () => {
         try { await navigator.clipboard.writeText(csv()); this.toast('Schedules copied'); }
         catch (e) { this.toast('Clipboard blocked - use Download', true); }
+        return false;
+      }], ['Place as Note', () => {
+        // a graphic schedule: the CSV text placed as a model annotation —
+        // it rides the model into PNG snapshots and printed sheets
+        const ents = this.bim.entities.filter(e => this.scheduleRows(e.type).length);
+        let cx = 0, cy = 0, zHi = 0, n = 0;
+        for (const e of ents) { const q = this.elementQuantities(e); if (q && q.bbox) { cx += (q.bbox.x0 + q.bbox.x1) / 2; cy += (q.bbox.y0 + q.bbox.y1) / 2; zHi = Math.max(zHi, q.bbox.z1); n++; } }
+        if (!n) { this.toast('No measurable elements', true); return false; }
+        cx /= n; cy /= n;
+        this.run('schedule note', m2 => {
+          const id = m2.annotations.reduce((mx, a) => Math.max(mx, a.id || 0), 0) + 1;
+          m2.annotations.push({ id, kind: 'text', at: [cx, cy, zHi + 1], text: csv(), leaderFrom: null });
+          m2.touch();
+        });
+        this.toast('Schedule placed as a text note — exports with PNG/prints');
         return false;
       }]]);
   }

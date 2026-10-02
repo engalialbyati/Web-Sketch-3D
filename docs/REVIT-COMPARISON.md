@@ -19,7 +19,7 @@ Last updated: v0.10 tool batch.
 | Foundations | Isolated/strip/combined/mat/pile | Isolated, strip, combined, two-way meshes (MNL-66) | 🟡 |
 | Roofs (by extrusion/footprint) | Full | Footprint-style + slope | 🟡 |
 | Stairs / railings | Component stairs | Straight/U runs with landings; handrails; ramps | 🟡 |
-| Curtain walls | Full | Basic (50 mm type) | 🔴 |
+| Curtain walls | Full | U/V-grid glass curtain walls with mullions (Finishes ▸ Curtain Wall) | 🟡 |
 | hosted doors/windows | Full families | Hosted insertions cut real openings; catalogue & BlenderKit models as families | ✅ |
 | Ceilings | Full | Ceiling tool | 🟡 |
 | Rooms & areas | Full | Room detection with names/numbers/departments | 🟡 |
@@ -31,7 +31,7 @@ Last updated: v0.10 tool batch.
 |---|---|---|---|
 | Levels | Full | Levels with elevation, plan views, level view isolation | ✅ |
 | Grids | Full | Grid generation + placement, snap targets | ✅ |
-| Reference planes | Full | — | 🔴 |
+| Reference planes | Full | Datum ▸ Reference Plane — dashed snappable datum lines across the model | 🟡 |
 | Base Level "None" | Always requires a level | Free-elevation drawing (snap-following) | ✅+ |
 | Georeferencing | Shared coordinates | Survey point, lat/lon, CSV import | 🟡 |
 
@@ -44,8 +44,8 @@ Last updated: v0.10 tool batch.
 | **Create Similar (CS)** | Full | Context ▸ Create Similar — arms the tool with the element's type | ✅ |
 | **Select All Instances** | Full | Context ▸ Select All Instances (by type + name) | ✅ |
 | **Paste Aligned to Level** | Full | Edit ▸ Paste Aligned to Level — lowest point lands on the level | ✅ |
-| Trim / split | Full | Trim tool, edge splits, face split | 🟡 |
-| Align / pin | Full | Pin & lock (project items); no interactive Align-match | 🔴 |
+| Trim / split | Full | Trim, edge/face splits, Split Wall (one wall → two parametric walls) | 🟡 |
+| Align / pin | Full | Align tool (edge/face reference → element slides on), pin & lock | 🟡 |
 | Edit-in-place (families) | Full | Edit In Place sandbox per element | 🟡 |
 | Type catalogs | Full | Element Browser: category→family→type, drag-to-place | 🟡 |
 
@@ -65,7 +65,7 @@ Last updated: v0.10 tool batch.
 |---|---|---|---|
 | Views (plans/sections) | Full | Plans per level, section planes, camera views | 🟡 |
 | Sheets & printing | Full | Print Sheet dialog | 🟡 |
-| Dimensions / tags / text | Full (annotation families) | Linear/angular/radial dims, tags, spot elevations, text notes, revision clouds | 🟡 |
+| Dimensions / tags / text | Full (annotation families) | Linear/angular/radial dims, tags, spot elevations, text notes, revision clouds; ACI-315 schedules with CSV + place-as-note | 🟡 |
 | **Sun & shadows** | Full | View ▸ Sun Settings (azimuth/altitude/intensity) | ✅ |
 | PNG capture | Full | Snapshot | ✅ |
 

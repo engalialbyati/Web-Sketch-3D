@@ -42,6 +42,14 @@ models grow.
   (A-WALL, S-COLS…), m/cm/mm units — the drafting handoff to AutoCAD.
 - **Sun Settings** (View menu): azimuth / altitude / intensity control of
   the sun behind shadows and shading.
+- **Align** (Modify tab): click a reference edge/face, click the element — its
+  nearest parallel edge/face slides onto the reference (plan or elevation).
+- **Reference Planes** (Datum tab): dashed construction datums spanning the
+  model; geometry snaps anywhere along them.
+- **Split Wall** (Modify tab): one click turns a wall into two parametric
+  walls (openings re-cut on both).
+- **Schedules grew a Place as Note** button — the ACI-315 schedule lands in
+  the model as a text note that exports with PNG/prints.
 - Full feature-by-feature comparison against Revit:
   [docs/REVIT-COMPARISON.md](docs/REVIT-COMPARISON.md).
 

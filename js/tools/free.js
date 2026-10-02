@@ -1107,6 +1107,11 @@ class CircleTool extends Tool {
     super(app);
     this.polygon = polygon;
     this.sides = polygon ? 6 : 24;
+    // the polygon variant reports its OWN id — ribbon highlight, cursor, status
+    // bar all key off tool.id, and the base getter only knows the class name.
+    // defineProperty (not assignment): the base id is a getter without a
+    // setter, and assignment would throw in strict mode.
+    if (polygon) Object.defineProperty(this, 'id', { value: 'polygon' });
   }
   activate() { this.center = null; this.plane = null; this.r = 0; this._pts = null; this._vert = false; this._p2 = null; }
   cleanup() { super.cleanup(); this.activate(); }
@@ -3678,9 +3683,232 @@ class FollowMeTool extends Tool {
   onVCB() { return false; }
 }
 
+// =========================================================== align (Revit AL)
+// Click a reference (straight edge or face), then click the element to move:
+// its nearest PARALLEL edge/face slides onto the reference through the
+// proven Move path (transformVertices — the same sync BIM elements get on
+// Move). Vertical references (a slab top) align bottoms/tops in Z.
+class AlignTool extends Tool {
+  static id = 'align';
+  activate() { this.ref = null; this.app.view.setHoverEdges(null); }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    return this.ref
+      ? 'Align: click the ELEMENT to move — its nearest parallel edge/face lands on the reference. Esc picks a new reference.'
+      : 'Align: click the reference first (a straight edge or a face), then the element to align to it.';
+  }
+  // the alignment axis from a picked reference: edge → its horizontal
+  // perpendicular; face → its normal (vertical faces give plan alignment,
+  // horizontal faces give elevation alignment)
+  static refAxisOf(G, app, edge, fid) {
+    const m = app.model;
+    if (edge) {
+      const a = m.vp(edge.a), b = m.vp(edge.b);
+      const d = G.norm(G.sub(b, a));
+      let ax = G.cross(d, G.v(0, 0, 1));
+      if (G.isZero(ax)) { // vertical edge: horizontal axis toward the camera
+        const cam = app.view.activeCamera();
+        const toCam = G.v(cam.position.x - a.x, cam.position.y - a.y, 0);
+        ax = G.len(toCam) > 1e-6 ? G.norm(toCam) : G.v(1, 0, 0);
+      }
+      return { axis: G.norm(ax), p: G.mul(G.add(a, b), 0.5), dir: d, kind: 'edge' };
+    }
+    const f = m.faces.get(fid);
+    const n = f ? G.loopNormal(m.pts(f.loop)) : null;
+    if (!n || G.isZero(n)) return null;
+    return { axis: G.norm(n), p: m.faceCentroid(f), n: G.norm(n), kind: 'face' };
+  }
+  // the selection's nearest feature parallel to the reference:
+  // edge ref → parallel straight edge; face ref → face with parallel normal
+  static bestCandidate(G, app, sel, ref) {
+    const m = app.model;
+    let best = null, bestOff = Infinity;
+    if (ref.kind === 'edge') {
+      for (const id of sel.edges) {
+        const e = m.edges.get(id);
+        if (!e || e.curveId) continue;
+        const d = G.norm(G.sub(m.vp(e.b), m.vp(e.a)));
+        if (Math.abs(G.dot(d, ref.dir)) < 0.98) continue;
+        const mid = G.mul(G.add(m.vp(e.a), m.vp(e.b)), 0.5);
+        const off = Math.abs(G.dot(G.sub(mid, ref.p), ref.axis));
+        if (off < bestOff) { bestOff = off; best = mid; }
+      }
+      if (best) return best;
+    }
+    for (const id of sel.faces) {
+      const f = m.faces.get(id);
+      if (!f || f.loop.length < 3) continue;
+      const n = G.loopNormal(m.pts(f.loop));
+      if (G.isZero(n)) continue;
+      if (Math.abs(G.dot(G.norm(n), ref.axis)) < 0.9) continue;
+      const c = m.faceCentroid(f);
+      const off = Math.abs(G.dot(G.sub(c, ref.p), ref.axis));
+      if (off < bestOff) { bestOff = off; best = c; }
+    }
+    return best;
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    if (!this.ref) {
+      const pe = app.pickEdgeAt(ev, 8);
+      view.setHoverEdges(pe && !pe.edge.curveId ? [pe.edge.id] : null);
+      if (!pe) view.setHoverFace(view.pickFaceAt(view.eventPt(ev)));
+      return;
+    }
+    const D = 60; // the reference guide spans the view
+    view.previewLine([G.add(this.ref.p, G.mul(this.ref.axis, -D)), G.add(this.ref.p, G.mul(this.ref.axis, D))], 0xb35900, true);
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app, m = app.model;
+    if (!this.ref) {
+      const pe = app.pickEdgeAt(ev, 8);
+      const ref = pe && !pe.edge.curveId
+        ? AlignTool.refAxisOf(G, app, pe.edge, null)
+        : (() => { const fid = app.view.pickFaceAt(app.view.eventPt(ev)); return fid != null ? AlignTool.refAxisOf(G, app, null, fid) : null; })();
+      if (!ref) { app.toast('Pick a straight edge or a face as the reference'); return; }
+      this.ref = ref;
+      app.setStatus('Align: now click the element to move');
+      this.status();
+      return;
+    }
+    // second click: auto-select the element (entity, group, or raw face)
+    const pick = app.pickEntity(ev);
+    if (pick.group != null) app.selectGroup(pick.group);
+    else if (pick.face != null) {
+      const ent = app.bim.getEntityForFace(m.faces.get(pick.face));
+      if (ent && app.selectEntitiesByIds) app.selectEntitiesByIds([ent.id]);
+      else { app.sel = { edges: new Set(), faces: new Set([pick.face]) }; app.onSelectionChanged(); }
+    } else { app.toast('Click the element to align'); return; }
+    const sel = app.sel;
+    if (!sel.faces.size && !sel.edges.size) { app.toast('Nothing to align'); return; }
+    const cand = AlignTool.bestCandidate(G, app, sel, this.ref);
+    if (!cand) { app.toast('No edge/face of the selection is parallel to the reference'); return; }
+    const delta = G.mul(this.ref.axis, G.dot(G.sub(this.ref.p, cand), this.ref.axis));
+    if (G.len(delta) < 1e-9) { app.toast('Already aligned'); this.activate(); this.status(); return; }
+    const orig = app.selectionVerts();
+    app.run('align', mm => mm.transformVertices(orig, p => G.add(p, delta)));
+    app.toast(`Aligned — moved ${fmtLen(G.len(delta))}`);
+    this.activate();
+    this.status();
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.clearPreview(); this.status(); return true; }
+    return false;
+  }
+}
+
+// =========================================================== reference planes
+// Named infinite datum lines: two clicks lay a dashed construction line
+// across the whole model. Real edges (they snap via on-edge tracking
+// everywhere along them), flagged userData.refPlane, dashed style, and they
+// never become reap-bait (deliberate).
+class RefPlaneTool extends Tool {
+  static id = 'refplane';
+  activate() { this.p1 = null; this.app.view.clearSnapMarks(); }
+  cleanup() { super.cleanup(); this.activate(); }
+  get hint() {
+    return this.p1
+      ? 'Reference Plane: click the second point — the datum extends across the model (dashed, snappable). Esc restarts.'
+      : 'Reference Plane: click the first point (draw on the ground or a face).';
+  }
+  _planeOf(ev) {
+    const app = this.app;
+    const fid = app.view.pickFaceAt(app.view.eventPt(ev));
+    return fid != null ? app.model.facePlane(app.model.faces.get(fid)) : { n: G.v(0, 0, 1), d: 0 };
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    if (!this.p1) {
+      this.p1 = projectToPlane(app.inferPoint(ev, null).p, this._planeOf(ev));
+      app.view.setSnapMarks([{ p: this.p1, kind: 'endpoint' }]);
+      this.status();
+      return;
+    }
+    const p2 = projectToPlane(app.inferPoint(ev, this.p1).p, this._planeOf(ev));
+    if (G.dist(p2, this.p1) < 0.05) { app.toast('Reference plane needs a direction'); return; }
+    const dir = G.norm(G.sub(p2, this.p1));
+    const p1 = this.p1;
+    app.run('reference plane', m => {
+      const D = 250; // effectively infinite for any real model
+      const e = m.addEdge(G.sub(p1, G.mul(dir, D)), G.add(p1, G.mul(dir, D)));
+      if (e) {
+        e.userData = { refPlane: 1, deliberate: 1 };
+        m.setEdgeStyle([e.id], { lt: 2 }); // dashed
+        m.touch();
+      }
+    });
+    app.toast('Reference plane placed — geometry snaps to it anywhere along the line');
+    this.activate();
+    this.status();
+  }
+  onKey(ev) {
+    if (ev.key === 'Escape') { this.activate(); this.app.view.clearSnapMarks(); this.status(); return true; }
+    return false;
+  }
+}
+
+// =========================================================== split wall
+// Click anywhere along a straight wall: it becomes TWO parametric walls
+// meeting at the click point (Revit's Split Element). Both register
+// through the normal path (openings re-cut on rebuild).
+class SplitWallTool extends Tool {
+  static id = 'splitwall';
+  activate() { this.app.view.setHoverEdges(null); }
+  get hint() { return 'Split Wall: click a wall at the split point. Esc exits.'; }
+  onMove(ev) {
+    const app = this.app;
+    const pe = app.pickEdgeAt(ev, 10);
+    let ids = null;
+    if (pe) {
+      const ent = app.bim.entities.find(e2 => e2.type === 'wall' && !e2.params.closed
+        && e2.edges && e2.edges.includes(pe.edge.id));
+      ids = ent ? ent.edges.filter(id => app.model.edges.has(id)) : null;
+    }
+    app.view.setHoverEdges(ids);
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    const pe = app.pickEdgeAt(ev, 10);
+    if (!pe) { app.toast('Click ON a wall'); return; }
+    const ent = app.bim.entities.find(e2 => e2.type === 'wall' && !e2.params.closed
+      && e2.edges && e2.edges.includes(pe.edge.id));
+    if (!ent) { app.toast('That line is not a wall — click a wall'); return; }
+    const P1 = G.v(...ent.params.base), P2 = G.v(...ent.params.end);
+    const dir = G.norm(G.sub(P2, P1));
+    const L = G.dist(P1, P2);
+    const gp = app.inferPoint(ev, null).p;
+    const t = G.dot(G.sub(G.v(gp.x, gp.y, P1.z), P1), dir);
+    if (t < 0.15 || t > L - 0.15) { app.toast('Click between the wall\'s ends (15 cm min)'); return; }
+    const Pm = G.add(P1, G.mul(dir, t));
+    const src = ent;
+    app.run('split wall', m => {
+      app.bim.detach(src.id);
+      const mk = (A, B) => {
+        const ring = BimTools.WallTool.bandRing(G, [A, B], src.params.thickness, src.params.locationLine || 'centerline');
+        const before = new Set(m.faces.keys());
+        if (!m.pushPull(m.addFaceFromRings(ring), src.params.height)) throw new Error('split sweep failed');
+        const faces = [...m.faces.keys()].filter(id => !before.has(id)).map(id => m.faces.get(id));
+        const roles = {};
+        for (const f of faces) roles[f.id] = 'side';
+        app.bim.create('wall', { ...src.params, base: [A.x, A.y, A.z], end: [B.x, B.y, B.z],
+          joins: { start: 0, end: 0 }, closed: false }, roles, []);
+      };
+      mk(P1, Pm);
+      mk(Pm, P2);
+    });
+    app.toast(`Wall split at ${fmtLen(t)} — two walls registered`);
+    this.status();
+  }
+  onKey(ev) { if (ev.key === 'Escape') { this.app.setTool('select'); return true; } return false; }
+}
+
 window.FreeTools = {
   SelectTool, EdgeSelectTool, LineTool, RectTool, CircleTool, ArcTool, PushPullTool, MoveTool,
   RotateTool, ScaleTool, OffsetTool, PaintTool, EraserTool, TrimTool, TapeMeasureTool,
   OrbitTool, PanTool, ZoomTool, ResizeTool, ExtrudeCurveTool, MirrorTool, ArrayTool,
-  RevolveTool, FollowMeTool,
+  RevolveTool, FollowMeTool, AlignTool, RefPlaneTool, SplitWallTool,
 };

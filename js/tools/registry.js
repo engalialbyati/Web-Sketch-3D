@@ -10,7 +10,7 @@ const TOOLS = {
   // polyline = the Line tool's chained mode under its own name (click-click-
   // click chains; Esc/double-click ends) — one entry point, discoverable
   polyline: FreeTools.LineTool,
-  circle: FreeTools.CircleTool, arc: FreeTools.ArcTool, pushpull: FreeTools.PushPullTool,
+  circle: FreeTools.CircleTool, polygon: FreeTools.CircleTool, arc: FreeTools.ArcTool, pushpull: FreeTools.PushPullTool,
   move: FreeTools.MoveTool, rotate: FreeTools.RotateTool, scale: FreeTools.ScaleTool,
   offset: FreeTools.OffsetTool, paint: FreeTools.PaintTool, eraser: FreeTools.EraserTool,
   trim: FreeTools.TrimTool, mirror: FreeTools.MirrorTool, array: FreeTools.ArrayTool,
@@ -22,6 +22,7 @@ const TOOLS = {
   'rebar-column': ColumnRebar.ColumnRebarTool,
   'rebar-element': ElementRebar.ElementRebarTool,
   revolve: FreeTools.RevolveTool, followme: FreeTools.FollowMeTool,
+  align: FreeTools.AlignTool, refplane: FreeTools.RefPlaneTool, splitwall: FreeTools.SplitWallTool,
   tape: FreeTools.TapeMeasureTool, orbit: FreeTools.OrbitTool, pan: FreeTools.PanTool,
   zoom: FreeTools.ZoomTool, resize: FreeTools.ResizeTool, extrude: FreeTools.ExtrudeCurveTool,
   // annotations (Phase 3) — dimension/tag/text/spot drawing tools
