@@ -2428,7 +2428,18 @@ class PaintTool extends Tool {
   onDown(ev) {
     if (ev.button !== 0) return;
     const app = this.app;
-    const fid = app.view.pickFaceAt(app.view.eventPt(ev));
+    const pt = app.view.eventPt(ev);
+    // foreign models first: the bucket tints the whole asset a solid color
+    const aid = app.view.pickAssetAt ? app.view.pickAssetAt(pt) : null;
+    if (aid != null && app.assets && app.assets.tint) {
+      const cm = app.currentMaterial || {};
+      const rec = cm.matId && app.model.materials ? app.model.materials.get(cm.matId) : null;
+      const color = cm.color
+        || (rec && window.MaterialsFeature ? window.MaterialsFeature.avgTextureColor(rec) : null)
+        || '#cccccc';
+      if (app.assets.tint(aid, color)) { app.toast('Model tinted — 3D models take solid colors'); return; }
+    }
+    const fid = app.view.pickFaceAt(pt);
     if (fid == null) return;
     const f = app.model.faces.get(fid);
     if (ev.altKey) {

@@ -184,8 +184,43 @@
     }
   }
 
+  // Foreign models take SOLID colors — texture-only materials (Poly Haven
+  // images carry no flat color) average to one representative pixel so a
+  // drop on a model still reads as that material.
+  const _avgCache = new Map();
+  function avgTextureColor(mat) {
+    if (!mat || !mat.texture) return null;
+    const key = mat.id || mat.texture.src;
+    if (_avgCache.has(key)) return _avgCache.get(key);
+    let hex = null;
+    try {
+      const t = canvasTexture(mat.texture.kind, mat.texture.src);
+      const img = t && t.image;
+      if (img && img.width && img.height) {
+        const c = document.createElement('canvas'); c.width = c.height = 1;
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, 1, 1);
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        hex = '#' + [d[0], d[1], d[2]].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+      }
+    } catch (e) { /* image not decoded yet / unreadable in this context */ }
+    if (hex) _avgCache.set(key, hex); // cache only hits — misses retry once decoded
+    return hex;
+  }
+
   function paintDropAt(app, mat, ev) {
     const v = app.view, m = app.model;
+    // FOREIGN MODELS FIRST: catalogue/BlenderKit windows have no kernel
+    // faces — a drop ON the model tints the whole model one solid color
+    // (frame and glass together), never the wall behind it.
+    const aid = v.pickAssetAt ? v.pickAssetAt(v.eventPt(ev)) : null;
+    if (aid != null && app.assets && app.assets.tint) {
+      const color = (mat && mat.color) || avgTextureColor(mat) || '#cccccc';
+      if (app.assets.tint(aid, color)) {
+        app.toast(`${(mat && mat.name) || 'Material'} — solid tint on the whole model (3D models take solid colors)`);
+        return true;
+      }
+    }
     const fid = v.pickFaceAt(v.eventPt(ev));
     if (!fid) { app.toast('Drop the material ON a face (wall, floor, roof…)', true); return false; }
     const targets = paintTargets(m, fid, app.bim ? app.bim.entities : []);
@@ -457,12 +492,17 @@
       }));
       body.querySelectorAll('[data-paint]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.paint;
+        const mat = app.model.materials.get(id);
+        // selected foreign models take a solid tint
+        let tinted = 0;
+        for (const aid of (app.selAssets || []))
+          if (app.assets && app.assets.tint && app.assets.tint(aid, mat.color || avgTextureColor(mat) || '#cccccc')) tinted++;
         app.run('paint material', mm => {
-          const mat = mm.materials.get(id);
-          for (const fid of app.sel.faces) { const f = mm.faces.get(fid); if (f) { f.matId = id; f.color = mat.color; f.alpha = mat.alpha; } }
+          const mmMat = mm.materials.get(id);
+          for (const fid of app.sel.faces) { const f = mm.faces.get(fid); if (f) { f.matId = id; f.color = mmMat.color; f.alpha = mmMat.alpha; } }
           mm.touch();
         });
-        app.toast('Selection painted');
+        app.toast(tinted ? `Selection painted (${tinted} model${tinted > 1 ? 's' : ''} tinted solid)` : 'Selection painted');
       }));
       body.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
         app.run('delete material', mm => {
@@ -489,5 +529,5 @@
       if (app.refreshSwatchesIfMaterialsChanged) app.refreshSwatchesIfMaterialsChanged();
     });
   }
-  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass, paintTargets, attrJSON, MAT_MIME };
+  window.MaterialsFeature = { materialsDialog, ensureMat, TEXTURES, rebuildPass, paintTargets, avgTextureColor, attrJSON, MAT_MIME };
 })();

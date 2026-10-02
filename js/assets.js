@@ -442,6 +442,28 @@
     instancesFor(wallId) {
       return [...this.instances.values()].filter(r => r.host && r.host.wallId === wallId);
     }
+    // SOLID-COLOR PAINT for foreign models: catalogue/BlenderKit instances
+    // have no kernel faces, so drops TINT their materials instead. Materials
+    // are cloned PER INSTANCE first — clones share materials with the
+    // template, and tinting one window would recolor every copy of it.
+    tint(id, color) {
+      const rec = this.instances.get(id);
+      if (!rec || !rec.object || !color) return false;
+      rec.object.traverse(o => {
+        if (!o.isMesh) return;
+        const multi = Array.isArray(o.material);
+        const mats = (multi ? o.material : [o.material]).map(mm => {
+          if (!mm) return mm;
+          if (!mm._tintOwn) { mm = mm.clone(); mm._tintOwn = true; } // own copy, once
+          return mm;
+        });
+        o.material = multi ? mats : mats[0];
+        for (const mm of mats) if (mm && mm.color) mm.color.set(color);
+      });
+      rec.tint = color;
+      this.changed('tinted', rec);
+      return true;
+    }
     get(id) { return this.instances.get(id) || null; }
     list() { return [...this.instances.values()]; }
 
@@ -475,6 +497,7 @@
           w: r.host.wallId, d: r.host.distance, si: r.host.sill,
           W: r.host.width, H: r.host.height, D: r.host.depth || 0,
         };
+        if (r.tint) o.t = r.tint; // painted color — models have no kernel faces
         return o;
       });
     }
@@ -526,6 +549,7 @@
         rec.object.updateMatrixWorld(true);
       }
       this.nextId = Math.max(this.nextId, maxN + 1);
+      for (const x of list) if (x.t) this.tint(x.i, x.t); // paint survives reload
       this.changed('restored', null);
     }
     // Never silently lose an instance: a wireframe box keeps its slot visible

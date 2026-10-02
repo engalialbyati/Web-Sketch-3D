@@ -197,4 +197,48 @@ module.exports = h => {
     near(box.min.y, 0, 1e-6, 'near plane anchor');
     near(box.max.y, 0.2, 1e-6, 'mid-plane centered');
   });
+
+  // ---- paint tint: foreign models take SOLID colors -----------------------
+  // Catalogue/BlenderKit instances have no kernel faces — painting TINTS
+  // their materials. Clones share materials with the template, so the tint
+  // must clone PER INSTANCE or one painted window recolors every copy.
+  const tintTemplate = () => {
+    const scene = new THREE.Group();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ color: 0xf0f0f0 })));
+    return { scene, size: { x: 1, y: 1, z: 1 } };
+  };
+  const firstColor = rec => {
+    let c = null;
+    rec.object.traverse(o => { if (o.isMesh && !c && o.material && o.material.color) c = o.material.color.getHexString(); });
+    return c;
+  };
+
+  test('tint is per-instance - painting one window never recolors its siblings', () => {
+    const mgr = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    const tpl = tintTemplate();
+    const a = mgr._instantiate('uuid-t', 'Window A', 'window', tpl);
+    const b = mgr._instantiate('uuid-t', 'Window B', 'window', tpl);
+    ok(mgr.tint(a.id, '#123456'), 'tint applied');
+    eq(firstColor(a), '123456', 'instance A tinted');
+    eq(firstColor(b), 'f0f0f0', 'sibling B untouched (materials cloned per instance)');
+    ok(mgr.tint(a.id, '#abcdef'), 'repaint accepted');
+    eq(firstColor(a), 'abcdef', 'repaint replaces the color (no stacking)');
+    eq(mgr.tint('nope', '#ffffff'), false, 'unknown id refused');
+  });
+
+  test('tint survives serialize -> restore (reload keeps the painted frame)', async () => {
+    const mgr = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    const tpl = tintTemplate();
+    mgr.templates.set('uuid-t', Promise.resolve(tpl)); // offline: cache hit, no fetch
+    mgr._instantiate('uuid-t', 'Window', 'window', tpl);
+    mgr.tint('asset_1', '#24425c');
+    const snap = mgr.serialize();
+    eq(snap[0].t, '#24425c', 'tint rides the instance list');
+    const mgr2 = new AssetManager({ view: { scene: new THREE.Scene(), renderer: null } });
+    mgr2.templates.set('uuid-t', Promise.resolve(tpl));
+    await mgr2.restore(snap);
+    const rec = mgr2.instances.get('asset_1');
+    ok(rec, 'instance restored');
+    eq(firstColor(rec), '24425c', 'paint color reapplied after reload');
+  });
 };
