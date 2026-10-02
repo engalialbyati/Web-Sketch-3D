@@ -2827,6 +2827,10 @@ class App {
     // presentation state survives reloads: edges-off for clean screenshots
     // and live presenting must not reset on the next page load
     try { if (localStorage.getItem('websketch3d.edges') === '0') this.edgesOn = false; } catch (e) { }
+    // AUTO FACE (SketchUp-style): closed wire loops become faces the moment
+    // they close — opt-in, remembered across sessions
+    this.autoFaceOn = false;
+    try { this.autoFaceOn = localStorage.getItem('websketch3d.autoface') === '1'; } catch (e) { }
     this.gridSnap = false; // F9: snap drawing points to the 1 m grid
     this.shadowsOn = true; this.fogOn = true; this.xrayOn = false;
     try { this.perfHudOn = !!localStorage.getItem('websketch3d.perfhud'); } catch (e) { this.perfHudOn = false; }
@@ -5153,6 +5157,7 @@ class App {
       ['Draw', [
         ['Line', 'toolLine', 'L'], ['Arc', 'toolArc', 'A'], ['Circle', 'toolCircle', 'C'],
         ['Polygon', 'toolPolygon', ''], ['Rectangle', 'toolRect', 'R'], ['Fillet', 'toolFillet', ''],
+        '-', ['Auto Face Creation', 'toggleAutoFace', '', 'autoFaceOn'],
       ]],
       ['Tools', [
         ['Select', 'toolSelect', 'Space'], ['Eraser', 'toolEraser', 'E'],
@@ -5539,6 +5544,16 @@ class App {
         try { localStorage.setItem('websketch3d.edges', A.edgesOn ? '1' : '0'); } catch (e) { }
         A.view.setEdges(A.edgesOn);
         A.toast(A.edgesOn ? 'Edges: on' : 'Edges hidden — View ▸ Edges brings them back (presenting mode)');
+      },
+      toggleAutoFace: () => {
+        A.autoFaceOn = !A.autoFaceOn;
+        try { localStorage.setItem('websketch3d.autoface', A.autoFaceOn ? '1' : '0'); } catch (e) { }
+        if (A.autoFaceOn) {
+          const made = A._autoFaceScan(); // existing closed loops face immediately
+          A.toast(made
+            ? `Auto Face Creation: ON — created ${made} face${made === 1 ? '' : 's'} from existing closed loops`
+            : 'Auto Face Creation: ON — closing a loop of lines now fills a face immediately (like SketchUp)');
+        } else A.toast('Auto Face Creation: OFF — faces come from Create Face again');
       },
       toggleShadows: () => { A.shadowsOn = !A.shadowsOn; A.view.setShadows(A.shadowsOn); },
       togglePerfHud: () => {
@@ -6899,34 +6914,27 @@ class App {
   // each ring, box-select everything, Create Face → one face per ring).
   // Loops may even TOUCH at shared corners: the walk pairs edges by the
   // tightest turn, the planar-correct continuation.
-  createFaceFromSelectedEdges() {
-    const m = this.model, G = window.G;
-    if (this.sel.edges.size < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
+  // Core loop→face pipeline, shared by the explicit Create Face action and
+  // the auto-face scan: shed tails/chords from the edge list, decompose the
+  // rest into cycles (tightest turn at junctions), orient rings by their
+  // dominant axis, nest inner rings as holes, and create one STANDALONE face
+  // per loop (private wires; the source wire stays). Returns
+  // { ok, err, made, skipped, dropped }.
+  _runFaceBuilder(edgesIn, { heal = false, mark = false } = {}) {
+    const G = window.G;
     let made = 0, skipped = 0, err = null, dropped = 0;
     const ok = this.run('create faces', mm => {
-      // COINCIDENT-DUPLICATE DEDUPE: loose faces carry their own copies of
-      // the wire they came from, so a box selection catches BOTH the source
-      // segment and a face's private duplicate lying on it. Walk one edge
-      // per geometric pair — the first seen wins, face copies stay private.
-      const byPair = new Map();
-      for (const id of this.sel.edges) {
-        const e = mm.edges.get(id);
-        if (!e) continue;
-        const pa = mm.vp(e.a), pb = mm.vp(e.b);
-        const key = [[pa.x, pa.y, pa.z], [pb.x, pb.y, pb.z]]
-          .map(q => q.map(c => Math.round(c * 1e4)).join(',')).sort().join('|');
-        if (!byPair.has(key)) byPair.set(key, e);
-      }
-      const sel = [...byPair.values()];
-      // NEAR-MISS HEAL: a closing click that landed just off its snap point
-      // leaves two free ends millimeters apart — the loop LOOKS shut but the
-      // audit refuses it. Fuse free ends of the selection under 1 cm (the
-      // same job Join does, silently, at creation time). Note a T-junction
-      // split could never help here: splitting adds 2 to one corner's
-      // degree, so odd stays odd — parity is only fixed by fusing ends.
-      {
+      let edges0 = edgesIn.map(e => (e.id != null && mm.edges.has(e.id)) ? mm.edges.get(e.id) : e).filter(Boolean);
+      // NEAR-MISS HEAL (explicit selections): a closing click that landed
+      // just off its snap point leaves two free ends millimeters apart — the
+      // loop LOOKS shut but the audit refuses it. Fuse free ends of the
+      // selection under 1 cm (the same job Join does, silently, at creation
+      // time). Note a T-junction split could never help here: splitting
+      // adds 2 to one corner's degree, so odd stays odd — parity is only
+      // fixed by fusing ends.
+      if (heal) {
         const deg = new Map();
-        for (const e of sel) {
+        for (const e of edges0) {
           deg.set(e.a, (deg.get(e.a) || 0) + 1); deg.set(e.b, (deg.get(e.b) || 0) + 1);
         }
         const free = [...deg.entries()].filter(([, d]) => d === 1).map(([v]) => v);
@@ -6937,8 +6945,8 @@ class App {
             mm.mergeVertices(free[i], free[j]); // edges bend ≤1 cm to fuse
           }
         }
+        edges0 = edges0.map(e => mm.edges.get(e.id)).filter(Boolean); // heal may have reaped
       }
-      const edges0 = sel.map(e => mm.edges.get(e.id)).filter(Boolean);
       if (edges0.length < 3) { err = 'Select at least 3 edges forming a closed loop'; return true; }
       // BOX-SELECTION TOLERANCE: a window pick collects extra edges — dangling
       // lines, crossing wires, T-stems. Shed them instead of refusing: peel
@@ -7075,19 +7083,86 @@ class App {
           .map(k => loops[k].map(id => G.clone(mm.vp(id))));
         // standalone: fresh vertices + private edges — each face is its own
         // island; the source wire stays for the next Create Face
-        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))), holes, { standalone: true })) made++;
+        if (mm.addFaceFromRings(loop.map(id => G.clone(mm.vp(id))), holes, { standalone: true })) {
+          made++;
+          // AUTO-FACE bookkeeping: standalone faces own PRIVATE edge copies,
+          // so the source wire would stay "unclaimed" and every later scan
+          // would duplicate the face. Mark the consumed source edges (rides
+          // edge userData through save/load); the EXPLICIT Create Face does
+          // not mark — its wires stay reusable by contract.
+          if (mark) {
+            for (let k = 0; k < loop.length; k++) {
+              const se = mm.findEdge(loop[k], loop[(k + 1) % loop.length]);
+              if (se) (se.userData || (se.userData = {})).autoFaced = 1;
+            }
+          }
+        }
         else skipped++;
       }
       return true;
     });
-    if (!ok) return;
-    if (err) { this.toast(err, true); return; }
-    if (made) {
+    return { ok, err, made, skipped, dropped };
+  }
+  // AUTO FACE: SketchUp behavior — closing a loop of free wires becomes a
+  // face immediately, no explicit Create Face. Scans the model's UNCLAIMED
+  // wire edges (nothing that already bounds a face, belongs to a group
+  // outside the one being edited, or is stamped to a BIM element) and runs
+  // the same loop→face pipeline the explicit action uses. Toggled from
+  // Draw ▸ Auto Face Creation; off by default (the explicit workflow stays).
+  _autoFaceScan() {
+    if (!this.autoFaceOn || this._autoFaceBusy || this._eip) return 0;
+    const m = this.model;
+    if (!m || m.bimHold) return 0;
+    const faceBound = new Set();
+    for (const f of m.faces.values()) {
+      // including LOOSE/standalone faces here: their private edge copies must
+      // count as claimed too, or every later scan would re-face their wires
+      // (the source-wire autoFaced mark alone is not enough)
+      for (const ring of m.rings(f)) for (let i = 0; i < ring.length; i++) {
+        const e = m.findEdge(ring[i], ring[(i + 1) % ring.length]);
+        if (e) faceBound.add(e.id);
+      }
+    }
+    const cand = [...m.edges.values()].filter(e =>
+      !faceBound.has(e.id) && !e.hidden && !(e.userData && e.userData.bimEntityId)
+      && !(e.userData && e.userData.autoFaced)
+      && (!e.gid || e.gid === this.activeGroup));
+    if (cand.length < 3) return 0;
+    this._autoFaceBusy = true;
+    let made = 0;
+    try {
+      const res = this._runFaceBuilder(cand, { mark: true });
+      made = res.made || 0;
+      if (made) this.setStatus(`Auto Face: created ${made} face${made === 1 ? '' : 's'} — Draw ▸ Auto Face Creation toggles this off`);
+    } finally { this._autoFaceBusy = false; }
+    return made;
+  }
+  createFaceFromSelectedEdges() {
+    const m = this.model, G = window.G;
+    if (this.sel.edges.size < 3) { this.toast('Select at least 3 edges forming a closed loop', true); return; }
+    // COINCIDENT-DUPLICATE DEDUPE: loose faces carry their own copies of
+    // the wire they came from, so a box selection catches BOTH the source
+    // segment and a face's private duplicate lying on it. Walk one edge
+    // per geometric pair — the first seen wins, face copies stay private.
+    const byPair = new Map();
+    for (const id of this.sel.edges) {
+      const e = m.edges.get(id);
+      if (!e) continue;
+      const pa = m.vp(e.a), pb = m.vp(e.b);
+      const key = [[pa.x, pa.y, pa.z], [pb.x, pb.y, pb.z]]
+        .map(q => q.map(c => Math.round(c * 1e4)).join(',')).sort().join('|');
+      if (!byPair.has(key)) byPair.set(key, e);
+    }
+    const sel = [...byPair.values()];
+    const res = this._runFaceBuilder(sel, { heal: true });
+    if (!res.ok) return;
+    if (res.err) { this.toast(res.err, true); return; }
+    if (res.made) {
       this.clearSelection();
-      const extra = dropped ? `, ${dropped} extra edge${dropped > 1 ? 's' : ''} ignored` : '';
-      this.toast(`Created ${made} independent face${made === 1 ? '' : 's'}${skipped ? ` (${skipped} non-planar ring${skipped === 1 ? '' : 's'} skipped)` : ''}${extra} — nested rings deducted as holes; Push/Pull, edit, or delete without touching neighbors`);
+      const extra = res.dropped ? `, ${res.dropped} extra edge${res.dropped > 1 ? 's' : ''} ignored` : '';
+      this.toast(`Created ${res.made} independent face${res.made === 1 ? '' : 's'}${res.skipped ? ` (${res.skipped} non-planar ring${res.skipped === 1 ? '' : 's'} skipped)` : ''}${extra} — nested rings deducted as holes; Push/Pull, edit, or delete without touching neighbors`);
     } else {
-      this.toast('Could not create a face from those loops' + (skipped ? ' — the rings are not planar' : ''), true);
+      this.toast('Could not create a face from those loops' + (res.skipped ? ' — the rings are not planar' : ''), true);
     }
   }
   // Join selected free EDGE(S) into one polyline: endpoint gaps within 2 cm
@@ -10200,6 +10275,10 @@ class App {
     }
     this.pruneSelection();
     this.model.pruneGroups();
+    // AUTO FACE: after any operation that added wires, a closed loop of
+    // unclaimed edges fills immediately (SketchUp behavior) when the toggle
+    // is on — guarded against re-entry (the face creation itself runs ops)
+    if (this.autoFaceOn) this._autoFaceScan();
     // hosted asset instances die with their wall (like hosted doors)
     if (this.assets) {
       const gone = this.assets.checkOrphans();

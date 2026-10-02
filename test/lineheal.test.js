@@ -71,19 +71,26 @@ module.exports = h => {
     for (const f of ['js/geometry.js', 'js/model.js'])
       vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
     const src = fs.readFileSync(path.join(__dirname, '..', 'js/app.js'), 'utf8');
-    const i = src.indexOf('createFaceFromSelectedEdges() {');
-    const sigLen = 'createFaceFromSelectedEdges() {'.length;
-    // brace-matched method end (sentinel searches broke on line-ending mixes)
-    let depth = 0, j = -1;
-    for (let k = src.indexOf('{', i); k < src.length; k++) {
-      if (src[k] === '{') depth++;
-      else if (src[k] === '}') { depth--; if (depth === 0) { j = k; break; } }
-    }
-    const body = src.slice(i + sigLen, j); // up to the method's closing brace
+    const bodyOf = (sig) => {
+      const i2 = src.indexOf(sig);
+      if (i2 < 0) throw new Error('method not found: ' + sig);
+      const open = src.indexOf('{', src.indexOf(') {', i2));
+      let depth = 0, j2 = -1;
+      for (let k = open; k < src.length; k++) {
+        if (src[k] === '{') depth++;
+        else if (src[k] === '}') { depth--; if (depth === 0) { j2 = k; break; } }
+      }
+      return src.slice(open + 1, j2);
+    };
+    const body = bodyOf('createFaceFromSelectedEdges() {');
+    const bodyFB = bodyOf('_runFaceBuilder(edgesIn, { heal = false, mark = false } = {}) {');
     const factorySrc = 'return function make(app, G, Model) {\n' +
       '  const toasts = [];\n' +
       '  const self = { model: app.model, sel: app.sel, run: app.run,\n' +
-      '    toast: (m2) => toasts.push(m2), clearSelection: app.clearSelection, G };\n' +
+      '    setStatus: app.setStatus || (() => { }),\n' +
+      '    toast: (m2) => toasts.push(m2), clearSelection: app.clearSelection, G,\n' +
+      '    autoFaceOn: false, activeGroup: null, _eip: null };\n' +
+      '  self._runFaceBuilder = function(edgesIn, { heal = false, mark = false } = {}) {' + bodyFB + '};\n' +
       '  const fn = function() {' + body + '};\n' +
       '  return { self, fn: fn.bind(self), toasts };\n' +
       '};\n';

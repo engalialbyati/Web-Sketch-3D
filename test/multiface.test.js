@@ -6,28 +6,44 @@ module.exports = h => {
   const { loadModel, test, ok, eq, near } = h;
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 
-  // load model.js + extract the method from app.js (it only uses this.model,
-  // this.sel, this.run, this.toast, this.clearSelection — all stubbable)
+  // load model.js + extract the methods from app.js (they only use
+  // this.model, this.sel, this.run, this.toast, this.clearSelection — all
+  // stubbable). The Create Face action now delegates to _runFaceBuilder and
+  // the auto-face scan shares it, so all three ride on the same stub self.
   function loadFn() {
     const sandbox = { window: {}, console, Buffer };
     const ctx = vm.createContext(sandbox);
     for (const f of ['js/geometry.js', 'js/model.js'])
       vm.runInContext(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'), ctx, { filename: f });
     const src = fs.readFileSync(path.join(__dirname, '..', 'js/app.js'), 'utf8');
-    const i = src.indexOf('createFaceFromSelectedEdges() {');
-    const sigLen = 'createFaceFromSelectedEdges() {'.length;
-    // brace-matched method end (sentinel searches broke on line-ending mixes)
-    let depth = 0, j = -1;
-    for (let k = src.indexOf('{', i); k < src.length; k++) {
-      if (src[k] === '{') depth++;
-      else if (src[k] === '}') { depth--; if (depth === 0) { j = k; break; } }
-    }
-    const body = src.slice(i + sigLen, j); // up to the method's closing brace
-    // the method body, minus the signature — wrapped so `this` = self
+    // brace-matched method body extractor (sentinel searches broke on
+    // line-ending mixes)
+    const bodyOf = (sig) => {
+      const i = src.indexOf(sig);
+      if (i < 0) throw new Error('method not found: ' + sig);
+      // the method's OWN opening brace: the first '{' after the signature's
+      // closing ") {" (default-parameter braces like { heal = false } would
+      // otherwise end the match early)
+      const open = src.indexOf('{', src.indexOf(') {', i));
+      if (open < 0) throw new Error('signature brace not found: ' + sig);
+      let depth = 0, j = -1;
+      for (let k = open; k < src.length; k++) {
+        if (src[k] === '{') depth++;
+        else if (src[k] === '}') { depth--; if (depth === 0) { j = k; break; } }
+      }
+      return src.slice(open + 1, j); // inside the method's braces
+    };
+    const body = bodyOf('createFaceFromSelectedEdges() {');
+    const bodyFB = bodyOf('_runFaceBuilder(edgesIn, { heal = false, mark = false } = {}) {');
+    const bodyAF = bodyOf('_autoFaceScan() {');
     const factorySrc = 'return function make(app, G, Model) {\n' +
       '  const toasts = [];\n' +
       '  const self = { model: app.model, sel: app.sel, run: app.run,\n' +
-      '    toast: (m2) => toasts.push(m2), clearSelection: app.clearSelection, G };\n' +
+      '    setStatus: app.setStatus || (() => { }),\n' +
+      '    toast: (m2) => toasts.push(m2), clearSelection: app.clearSelection, G,\n' +
+      '    autoFaceOn: app.autoFaceOn !== false, activeGroup: app.activeGroup != null ? app.activeGroup : null, _eip: null };\n' +
+      '  self._runFaceBuilder = function(edgesIn, { heal = false, mark = false } = {}) {' + bodyFB + '};\n' +
+      '  self._autoFaceScan = function() {' + bodyAF + '};\n' +
       '  const fn = function() {' + body + '};\n' +
       '  return { self, fn: fn.bind(self), toasts };\n' +
       '};\n';
@@ -134,5 +150,49 @@ module.exports = h => {
     fn();
     eq(m.faces.size, 1, 'one face');
     ok(m.validate().ok, 'model valid');
+  });
+
+  // ---- AUTO FACE (Draw ▸ Auto Face Creation) -------------------------------
+  test('auto-face: a closed wire loop fills immediately, wires survive', () => {
+    const { self } = stub();
+    const m = self.model;
+    const wireCount0 = m.edges.size;
+    tri(m, 0, 0); // 3 closing edges
+    const made = self._autoFaceScan();
+    eq(made, 1, 'one face auto-created');
+    eq(m.faces.size, 1, 'face exists');
+    ok(m.validate().ok, 'model valid');
+    ok(m.edges.size >= wireCount0 + 3, 'the drawn wires survive (standalone face owns private wires)');
+    // idempotent: a second scan finds nothing new
+    eq(self._autoFaceScan(), 0, 'no duplicate faces on rescan');
+    eq(m.faces.size, 1, 'still one face');
+  });
+
+  test('auto-face: an open chain creates nothing until it closes', () => {
+    const { self } = stub();
+    const m = self.model;
+    m.addEdge(L.G.v(0, 0, 0), L.G.v(2, 0, 0));
+    m.addEdge(L.G.v(2, 0, 0), L.G.v(3, 1, 0)); // two sides only — still open
+    eq(self._autoFaceScan(), 0, 'open chain: no face');
+    eq(m.faces.size, 0, 'nothing created');
+    m.addEdge(L.G.v(3, 1, 0), L.G.v(0, 0, 0)); // the closing edge
+    eq(self._autoFaceScan(), 1, 'closing the loop fills it');
+    eq(m.faces.size, 1, 'face exists');
+  });
+
+  test('auto-face respects the toggle and skips claimed/grouped wires', () => {
+    const { self } = stub();
+    const m = self.model;
+    tri(m, 0, 0);
+    self.autoFaceOn = false;
+    eq(self._autoFaceScan(), 0, 'toggle off: no scan');
+    eq(m.faces.size, 0, 'no face');
+    self.autoFaceOn = true;
+    // grouped wires outside the active group are not auto-faced
+    const g = m.createGroup({ faces: new Set(), edges: new Set([...m.edges.keys()]) }, 'Wires');
+    eq(self._autoFaceScan(), 0, 'grouped wires left alone');
+    ok(m.groups.has(g.id), 'group intact');
+    self.activeGroup = g.id; // inside the group edit: they face again
+    eq(self._autoFaceScan(), 1, 'editing the group faces its loops');
   });
 };
