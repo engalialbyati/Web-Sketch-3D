@@ -3857,31 +3857,52 @@ class RefPlaneTool extends Tool {
 class SplitWallTool extends Tool {
   static id = 'splitwall';
   activate() { this.app.view.setHoverEdges(null); }
-  get hint() { return 'Split Wall: click a wall at the split point. Esc exits.'; }
-  onMove(ev) {
+  cleanup() { super.cleanup(); this.app.view.clearPreview(); this.app.view.setHoverEdges(null); }
+  get hint() { return 'Split Wall: hover a wall to see the cut line and its distance from the start, click to split. Esc exits.'; }
+  // the wall under the cursor (or null): matched through any of its edges
+  _wallAt(ev) {
     const app = this.app;
     const pe = app.pickEdgeAt(ev, 10);
-    let ids = null;
-    if (pe) {
-      const ent = app.bim.entities.find(e2 => e2.type === 'wall' && !e2.params.closed
-        && e2.edges && e2.edges.includes(pe.edge.id));
-      ids = ent ? ent.edges.filter(id => app.model.edges.has(id)) : null;
-    }
-    app.view.setHoverEdges(ids);
+    if (!pe) return null;
+    return app.bim.entities.find(e2 => e2.type === 'wall' && !e2.params.closed
+      && e2.edges && e2.edges.includes(pe.edge.id)) || null;
   }
-  onDown(ev) {
-    if (ev.button !== 0) return;
+  // the split geometry under the cursor: baseline ends, direction, and the
+  // projected split parameter t
+  _splitAt(ent, ev) {
     const app = this.app;
-    const pe = app.pickEdgeAt(ev, 10);
-    if (!pe) { app.toast('Click ON a wall'); return; }
-    const ent = app.bim.entities.find(e2 => e2.type === 'wall' && !e2.params.closed
-      && e2.edges && e2.edges.includes(pe.edge.id));
-    if (!ent) { app.toast('That line is not a wall — click a wall'); return; }
     const P1 = G.v(...ent.params.base), P2 = G.v(...ent.params.end);
     const dir = G.norm(G.sub(P2, P1));
     const L = G.dist(P1, P2);
     const gp = app.inferPoint(ev, null).p;
     const t = G.dot(G.sub(G.v(gp.x, gp.y, P1.z), P1), dir);
+    return { P1, P2, dir, L, t };
+  }
+  onMove(ev) {
+    const app = this.app, view = app.view;
+    view.clearPreview();
+    const ent = this._wallAt(ev);
+    view.setHoverEdges(ent ? ent.edges.filter(id => app.model.edges.has(id)) : null);
+    if (!ent) return;
+    // live cut preview: a line ACROSS the wall at the split point plus the
+    // distance from the wall's start — the split is visible BEFORE clicking
+    const { P1, dir, L, t } = this._splitAt(ent, ev);
+    const ok = t >= 0.15 && t <= L - 0.15;
+    const tc = Math.max(0.15, Math.min(L - 0.15, t));
+    const Pm = G.add(P1, G.mul(dir, tc));
+    const across = G.norm(G.cross(dir, G.v(0, 0, 1))); // in-plan perpendicular
+    const half = (ent.params.thickness || 0.2) / 2 + 0.15; // stand proud of both faces
+    view.previewLine([G.add(Pm, G.mul(across, -half)), G.add(Pm, G.mul(across, half))],
+      ok ? 0xe05a00 : 0xd23c2e, true);
+    view.stickyLabel(Pm, ok ? `split @ ${fmtLen(tc)} from start` : 'too close to an end',
+      ok ? '#e05a00' : '#d23c2e', 0, -14);
+  }
+  onDown(ev) {
+    if (ev.button !== 0) return;
+    const app = this.app;
+    const ent = this._wallAt(ev);
+    if (!ent) { app.toast('Click ON a wall'); return; }
+    const { P1, P2, dir, L, t } = this._splitAt(ent, ev);
     if (t < 0.15 || t > L - 0.15) { app.toast('Click between the wall\'s ends (15 cm min)'); return; }
     const Pm = G.add(P1, G.mul(dir, t));
     const src = ent;
@@ -3901,6 +3922,7 @@ class SplitWallTool extends Tool {
       mk(Pm, P2);
     });
     app.toast(`Wall split at ${fmtLen(t)} — two walls registered`);
+    app.view.clearPreview();
     this.status();
   }
   onKey(ev) { if (ev.key === 'Escape') { this.app.setTool('select'); return true; } return false; }
