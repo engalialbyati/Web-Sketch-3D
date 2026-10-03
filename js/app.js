@@ -3123,8 +3123,28 @@ class App {
       base.addEventListener('change', () => {
         this.bimOptions.baseLevel = base.value;
         // the 1 m reference grid lives at the ACTIVE base level
+        const elev = this.levelManager.getElevation(base.value);
         if (this.view && this.view.setGridLevel)
-          this.view.setGridLevel(this.levelManager.getElevation(base.value));
+          this.view.setGridLevel(elev);
+        // drawing on an elevated level from a 3D view mis-aims every click
+        // (the screen point of the ground plane hits the elevated plane
+        // offset by the camera angle) — auto-switch to a top-down view
+        // centered on the model at the new elevation, like Revit's plan views
+        if (base.value !== 'none' && this.mode === 'bim' && this.view.activeCamera) {
+          const c = this.view.activeCamera();
+          const bb = this.model.bbox ? this.model.bbox([...this.model.faces.values()].flatMap(f => this.model.pts(f.loop)).filter(Boolean).map(p => p)) : null;
+          void bb;
+          // frame: look straight down at the level plane, centered on the
+          // current model center (or the world origin for an empty model)
+          const cx = 8, cy = 4;
+          const dist = 30;
+          c.position.set(cx, cy - dist * 0.01, elev + dist);
+          c.up.set(0, 1, 0);
+          c.lookAt(cx, cy, elev);
+          this.view.invalidate();
+          if (this.view.render) this.view.render();
+          this.setStatus('Level view: drawing on ' + (base.options[base.selectedIndex] || {}).text + ' — plan view for accurate placement');
+        }
       });
       top.addEventListener('change', () => {
         this.bimOptions.topConstraint = top.value;
