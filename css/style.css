@@ -3629,4 +3629,51 @@ select.pp-in {
 }
 .cr-check-row b { color: #0f172a; }
 
+/* =========================================================================
+   REBAR DOCUMENTATION SHEET & PRINTING STYLES
+   ========================================================================= */
+.rebardoc-container {
+  display: flex;
+  flex-direction: column;
+  background: #f8fafc;
+}
+.rebardoc-toolbar button {
+  transition: all 0.15s ease;
+}
+.rebardoc-toolbar button:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.rebardoc-toolbar button:active {
+  transform: translateY(0);
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 8mm;
+  }
+  body * {
+    visibility: hidden;
+  }
+  #rebardoc-sheet-surface, #rebardoc-sheet-surface * {
+    visibility: visible;
+  }
+  #rebardoc-sheet-surface {
+    position: fixed;
+    left: 0;
+    top: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    max-width: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    background: #ffffff !important;
+    z-index: 999999;
+  }
+  #rebardoc-svg {
+    width: 100% !important;
+    height: 100% !important;
+  }
+}
 

@@ -5211,6 +5211,7 @@ class App {
         ['Entity Info', 'entityInfoShow'],
         ['Materials', 'materialsShow'],
         ['Bar Bending Schedule', 'bbsDlg'],
+        ['Rebar Detailing Sheet (Print & DXF)…', 'rebarDocDlg'],
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
@@ -5261,6 +5262,7 @@ class App {
         ['Column Cage Reinforcement', 'toolRebarCol', ''],
         ['Stirrups & Ties', 'toolRebarStirrup', ''],
         ['Bar Bending Schedule (BBS)…', 'bbsDlg', ''],
+        ['Rebar Detailing Sheet (Print & DXF)…', 'rebarDocDlg', ''],
         '-',
         ['Edit Wall Assembly & Structure…', 'wallAssemblyDlg', ''],
         ['Project Information…', 'projectInfoDlg', ''],
@@ -5333,6 +5335,7 @@ class App {
       { id: 'mq-asset', label: 'Asset Lib', title: 'Asset Library (Tools ▸ Asset Library)', icon: ICONS.assetlib || '📦', act: 'assetLibDlg' },
       { id: 'mq-sched', label: 'Schedules', title: 'Element Schedules (View ▸ Schedules)', icon: '📋', act: 'schedDlg' },
       { id: 'mq-bbs', label: 'BBS', title: 'Bar Bending Schedule (View ▸ Bar Bending Schedule)', icon: ICONS['rebar-bbs'] || '📊', act: 'bbsDlg' },
+      { id: 'mq-rebardoc', label: 'Detailing', title: 'Rebar Detailing Sheet (AutoCAD DXF & Print)', icon: '📐', act: 'rebarDocDlg' },
       { id: 'mq-render', label: 'Blender Render', title: 'Render Scene with Blender (Tools ▸ Render with Blender)', icon: '✨', act: 'renderDay' },
       { id: 'mq-png', label: 'Snapshot', title: 'Export PNG Snapshot (File ▸ Export PNG)', icon: '📷', act: 'exportPng' },
     ];
@@ -5634,6 +5637,7 @@ class App {
       trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
       propDlg: () => A.propertyDialog(),
       bbsDlg: () => A.bbsDialog(),
+      rebarDocDlg: (entId) => (window.RebarDoc ? RebarDoc.openSheet({ app: A, entId }) : A.toast('RebarDoc module not loaded', true)),
       schedDlg: (t) => A.scheduleDialog(t),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
@@ -10096,7 +10100,13 @@ class App {
           <td colspan="4">TOTAL</td><td>${totBars}</td><td></td><td></td><td></td><td>${totKg.toFixed(1)}</td></tr>
       </table></div>
       <p class="dim">Weight 0.006165·d² kg/m (d in mm). Rows aggregate by host + shape + dia + length.</p>`,
-      [['Close', null], ['Download CSV', () => {
+      [['Close', null], ['📐 Detailing Sheet', () => {
+        if (window.RebarDoc) window.RebarDoc.openSheet({ app: this });
+        return false;
+      }], ['Export AutoCAD (.dxf)', () => {
+        if (window.RebarDoc) window.RebarDoc.exportDxfBbs(this);
+        return false;
+      }], ['Download CSV', () => {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([csv()], { type: 'text/csv' }));
         a.download = 'bar-bending-schedule.csv';

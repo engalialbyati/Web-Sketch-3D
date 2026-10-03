@@ -2948,6 +2948,7 @@
                 <button class="cr-vm-btn active" data-mode="both" title="Dual Split View">⊞ Dual View</button>
                 <button class="cr-vm-btn" data-mode="view1" title="Primary View">◻ Primary</button>
                 <button class="cr-vm-btn" data-mode="view2" title="Secondary View">▭ Elevation</button>
+                <button id="er-btn-open-doc" class="cr-vm-btn" style="background:#2563eb; color:#ffffff; font-weight:700; border-color:#1d4ed8;" title="Open CAD Detailing Sheet with Title Block, AutoCAD DXF export and Printing">📐 Detailing &amp; DXF</button>
               </div>
             </div>
 
@@ -2990,6 +2991,12 @@
 
       app.dialog(`Element Reinforcement — ${typeName} (ACI 318 Interactive)`, html, [
         ['Cancel', null],
+        ['📐 Detailing Sheet & DXF', () => {
+          if (window.RebarDoc) {
+            window.RebarDoc.openSheet({ ent, type, dims, params: this._read(type) });
+          }
+          return false;
+        }],
         ['Create', () => {
           const p = this._read(type);
           const res = app.run('rebar element', mm => {
@@ -3016,6 +3023,15 @@
 
       const dl = document.getElementById('dialog');
       if (dl) dl.classList.add('cr-dialog-active');
+
+      const docBtn = document.getElementById('er-btn-open-doc');
+      if (docBtn) {
+        docBtn.onclick = () => {
+          if (window.RebarDoc) {
+            window.RebarDoc.openSheet({ ent, type, dims, params: this._read(type) });
+          }
+        };
+      }
 
       // ------------------------------------------------------------- Tooltip Popover Setup
       let tooltipEl = document.getElementById('cr-tooltip');

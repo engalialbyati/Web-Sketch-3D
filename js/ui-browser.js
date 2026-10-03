@@ -442,12 +442,13 @@
         vHtml += `<div class="elb-node elb-subcat${scOpen ? ' open' : ''}" data-sec="sched" style="padding-left:22px">
           <span class="elb-tw">${scOpen ? '\u25BE' : '\u25B8'}</span>
           <span class="elb-ic" style="background:#059669"></span>
-          <span class="elb-lab">Schedules & Quantities</span>
-          <span class="elb-count">2</span>
+          <span class="elb-lab">Schedules &amp; Quantities</span>
+          <span class="elb-count">3</span>
         </div>`;
         if (scOpen) {
           vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-act="schedDlg" style="padding-left:36px"><span class="elb-tw">📋</span><span class="elb-lab">Element Quantities Takeoff</span></div>`;
           vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-act="bbsDlg" style="padding-left:36px"><span class="elb-tw">📊</span><span class="elb-lab">Bar Bending Schedule (BBS)</span></div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-act="rebarDocDlg" style="padding-left:36px"><span class="elb-tw">📐</span><span class="elb-lab">Rebar Detailing &amp; DXF Sheets</span></div>`;
         }
       }
       html += vHtml;
