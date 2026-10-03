@@ -35,3 +35,5 @@ _demo_frame.js
 test/_*
 *.dbg
 _mnl66_details.json
+scratch/
+

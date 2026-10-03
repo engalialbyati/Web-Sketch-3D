@@ -184,6 +184,20 @@ const ICONS = {
   solidintersect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>',
   solidsplit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/><path d="M12 6v12" stroke-dasharray="2 2"/></svg>',
   solidshell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" stroke-dasharray="2 2"/></svg>',
+  column: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="3" width="10" height="18" rx="1"/><path d="M4 21h16M4 3h16M10 3v18M14 3v18" opacity=".6"/></svg>',
+  beam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h18M3 18h18M3 6v3h18V6M3 15v3h18v-3M10 9v6h4V9"/></svg>',
+  foundation: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 19h16l-2-5H6z"/><path d="M9 14V8h6v6"/><path d="M7 8h10"/></svg>',
+  roof: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M2 13L12 4l10 9"/><path d="M5 11v9h14v-9"/><path d="M12 4v4"/></svg>',
+  stairs: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 20h4v-4h4v-4h4V8h4V4"/><path d="M3 20V4"/></svg>',
+  handrail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h18M6 6v14M12 6v14M18 6v14M3 14h18" opacity=".6"/></svg>',
+  room: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h7M11 4v16" opacity=".7"/><circle cx="16" cy="15" r="1.5" fill="currentColor"/></svg>',
+  gridplace: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 3v18M10 3v18M16 3v18M3 6h18M3 12h18M3 18h18"/><circle cx="10" cy="12" r="2.4" fill="currentColor"/></svg>',
+  levelview: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 12h18M3 12l4-3M3 12l4 3" opacity=".7"/></svg>',
+  levelsbtn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 5h13M3 12h13M3 19h13" stroke-dasharray="3 2"/><path d="M20 5v14M18 7l2-2 2 2M18 17l2 2 2-2"/></svg>',
+  gridsbtn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M8 3v18M16 3v18M3 8h18M3 16h18"/><circle cx="8" cy="3" r="1.5"/><circle cx="16" cy="21" r="1.5"/></svg>',
+  walk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="13" cy="4.5" r="1.8"/><path d="M11 21l1.5-6-2.5-3 1-4.5 3 2 3 .5"/><path d="M10 12l-4 2"/></svg>',
+  lookaround: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3.5"/><path d="M2 12h3M19 12h3M12 2v3M12 19v3"/></svg>',
+  shadows: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4.5"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M18.4 5.6l-1.8 1.8M7.4 16.6l-1.8 1.8"/></svg>',
 };
 
 // command aliases contributed by SDK features (command -> tool id)
@@ -2882,6 +2896,7 @@ class App {
     this._initSwatches();
     this._initEntityInfoPanel();
     this._initMaterialsPanel();
+    this._initGroupsPanel();
     this._initPointer();
     this._initKeys();
     this._initDialogs();
@@ -5158,7 +5173,7 @@ class App {
     const bar = document.getElementById('menubar');
     const defs = [
       ['File', [
-        ['New', 'new', ''], ['Open…', 'open', ''], ['Paste Model JSON…', 'pasteJson', ''], ['Open .blend…', 'openBlend', ''], ['Save As…', 'save', ''],
+        ['New', 'new', ''], ['Open…', 'open', ''], ['Paste Model JSON…', 'pasteJson', ''], ['Open .blend…', 'openBlend', ''], ['Project Information…', 'projectInfoDlg', ''], ['Save As…', 'save', ''],
         ['AI Authoring Guide…', 'aiGuide', ''],
         ['Import IFC…', 'openIfc', ''], ['Import IFC as Elements…', 'openIfcElems', ''],
         ['Remove Imported IFC', 'removeIfc', ''],
@@ -5220,6 +5235,44 @@ class App {
         ['Exit Section View', 'exitSection', ''],
         ['Sun Settings…', 'sunSettings', ''],
         ['Zoom Extents', 'zoomExtents', 'Ctrl+Shift+E'],
+      ]],
+      ['BIM', [
+        ['Wall', 'toolWall', 'L'],
+        ['Curtain Wall', 'toolCurtain', ''],
+        ['Floor / Slab', 'toolFloor', 'R'],
+        ['Roof', 'toolRoof', ''],
+        ['Ceiling', 'toolCeiling', ''],
+        ['Door', 'toolDoor', ''],
+        ['Window', 'toolWindow', ''],
+        ['Wall Opening', 'toolOpening', ''],
+        ['Stairs', 'toolStairs', ''],
+        ['Handrail / Railing', 'toolHandrail', ''],
+        ['Ramp', 'toolRamp', ''],
+        ['Room / Space', 'toolRoom', ''],
+        '-',
+        ['Column', 'toolColumn', ''],
+        ['Structural Beam', 'toolBeam', ''],
+        ['Structural Brace', 'toolBrace', ''],
+        ['Isolated Foundation', 'toolFoundation', ''],
+        ['Strip Footing', 'toolStripFoot', ''],
+        ['Base Plate', 'toolPlate', ''],
+        '-',
+        ['Element Reinforcement (ACI 318)', 'toolRebarElem', ''],
+        ['Column Cage Reinforcement', 'toolRebarCol', ''],
+        ['Stirrups & Ties', 'toolRebarStirrup', ''],
+        ['Bar Bending Schedule (BBS)…', 'bbsDlg', ''],
+        '-',
+        ['Edit Wall Assembly & Structure…', 'wallAssemblyDlg', ''],
+        ['Project Information…', 'projectInfoDlg', ''],
+        ['Levels Manager…', 'levels', ''],
+        ['Grid Systems…', 'grids', ''],
+        ['Georeferencing & True North…', 'georef', ''],
+        '-',
+        ['Interference Check (Clashes)…', 'interference', ''],
+        ['Analytical Model…', 'analytical', ''],
+        ['Element Schedules & Quantities…', 'schedDlg', ''],
+        ['Export IFC…', 'exportIfc', ''],
+        ['Import IFC…', 'openIfc', ''],
       ]],
       ['Draw', [
         ['Line', 'toolLine', 'L'], ['Arc', 'toolArc', 'A'], ['Circle', 'toolCircle', 'C'],
@@ -5699,8 +5752,27 @@ class App {
       toolOffset: () => A.setTool('offset'), toolTape: () => A.setTool('tape'),
       toolResize: () => A.setTool('resize'),
       toolOrbit: () => A.setTool('orbit'), toolPan: () => A.setTool('pan'),
+      toolWall: () => A.setTool('wall'), toolFloor: () => A.setTool('floor'),
+      toolColumn: () => A.setTool('column'), toolBeam: () => A.setTool('beam'),
+      toolRoof: () => A.setTool('roof'), toolCeiling: () => A.setTool('ceiling'),
+      toolDoor: () => A.setTool('door'), toolWindow: () => A.setTool('window'),
+      toolOpening: () => A.setTool('opening'), toolStairs: () => A.setTool('stairs'),
+      toolHandrail: () => A.setTool('handrail'), toolRamp: () => A.setTool('ramp'),
+      toolRoom: () => A.setTool('room'), toolCurtain: () => A.setTool('curtain'),
+      toolBrace: () => A.setTool('brace'), toolFoundation: () => A.setTool('foundation'),
+      toolStripFoot: () => A.setTool('stripfoot'), toolPlate: () => A.setTool('plate'),
+      toolRebarElem: () => A.setTool('rebar-element'), toolRebarCol: () => A.setTool('rebar-column'),
+      toolRebarStirrup: () => A.setTool('rebar-stirrup'),
+      wallAssemblyDlg: () => A.openWallAssemblyDialog(),
+      projectInfoDlg: () => A.projectInfoDialog(),
       group: () => A.groupSelection(),
       ungroup: () => A.ungroupSelection(),
+      toggleGroups: () => {
+        if (window.__groupsPanel) __groupsPanel.setVisible(!__groupsPanel.isVisible());
+      },
+      toggleProperties: () => {
+        if (window.__entityInfoPanel) __entityInfoPanel.setVisible(!__entityInfoPanel.isVisible());
+      },
       thicken: () => A.thickenDialog(),
       features: () => A.showFeatures(),
       about: () => A.dialog('About WebSketch 3D',
@@ -5736,7 +5808,7 @@ class App {
     p.id = 'entityinfopanel';
     p.innerHTML = `
       <div class="dk-head">
-        <span class="dk-grip">⋮⋮</span><span class="dk-title">Entity Info</span>
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Properties</span>
         <button class="dk-btn dk-dockl" title="Dock left">◀</button>
         <button class="dk-btn dk-dockr" title="Dock right">▶</button>
         <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
@@ -5746,7 +5818,80 @@ class App {
     document.getElementById('viewport').appendChild(p);
     p.querySelector('.dk-body').appendChild(node); // adopt: same id, same writers
     if (card && !card.querySelector('[id]')) card.remove(); // only the header is left
-    window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Entity Info', side: 'right' });
+    window.__entityInfoPanel = DockPanels.make(p, { key: 'entityinfo', title: 'Properties', side: 'right' });
+  }
+  _initGroupsPanel() {
+    if (!window.DockPanels) return;
+    const node = document.getElementById('grouplist');
+    if (!node || node.closest('.dk-panel')) return;
+    const card = node.closest('.panel');
+    const p = document.createElement('div');
+    p.id = 'groupspanel';
+    p.innerHTML = `
+      <div class="dk-head">
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Groups &amp; Assemblies</span>
+        <button class="dk-btn dk-dockl" title="Dock left">◀</button>
+        <button class="dk-btn dk-dockr" title="Dock right">▶</button>
+        <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
+        <button class="dk-btn dk-x" title="Hide">✕</button>
+      </div>
+      <div class="dk-body" id="groups-body">
+        <div class="grp-toolbar">
+          <div class="grp-search-box">
+            <span class="grp-search-ic">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            </span>
+            <input id="grp-filter" placeholder="Search groups &amp; assemblies…" spellcheck="false">
+            <button id="grp-filter-clear" class="grp-clear-btn" title="Clear search" style="display:none">✕</button>
+          </div>
+          <div class="grp-actions">
+            <button class="grp-btn primary" id="grp-btn-new" title="Create Model Group from current selection (Ctrl+G)">＋ New</button>
+            <button class="grp-btn" id="grp-btn-edit" title="Edit selected group in place">✏ Edit</button>
+            <button class="grp-btn" id="grp-btn-ungroup" title="Ungroup (Ctrl+Shift+G)">Ungroup</button>
+            <button class="grp-btn" id="grp-btn-purge" title="Purge empty groups">🧹 Purge</button>
+          </div>
+        </div>
+        <div id="grouplist-wrap"></div>
+      </div>`;
+    document.getElementById('viewport').appendChild(p);
+    p.querySelector('#grouplist-wrap').appendChild(node);
+    if (card && !card.querySelector('[id]')) card.remove();
+    // remove obsolete sidebar tray if empty or only tips remain
+    const tray = document.getElementById('tray');
+    if (tray) {
+      const remainingPanels = tray.querySelectorAll('.panel');
+      if (remainingPanels.length <= 1) tray.remove();
+    }
+    window.__groupsPanel = DockPanels.make(p, { key: 'groups', title: 'Groups & Assemblies', side: 'right' });
+
+    p.querySelector('#grp-filter')?.addEventListener('input', () => {
+      const q = p.querySelector('#grp-filter').value.trim();
+      const clr = p.querySelector('#grp-filter-clear');
+      if (clr) clr.style.display = q ? 'flex' : 'none';
+      this.refreshGroups();
+    });
+    p.querySelector('#grp-filter-clear')?.addEventListener('click', () => {
+      const inp = p.querySelector('#grp-filter');
+      if (inp) inp.value = '';
+      p.querySelector('#grp-filter-clear').style.display = 'none';
+      this.refreshGroups();
+    });
+    p.querySelector('#grp-btn-new')?.addEventListener('click', () => this.groupSelection());
+    p.querySelector('#grp-btn-edit')?.addEventListener('click', () => {
+      const gid = this.singleGroupSelection();
+      if (gid) {
+        const ent = this.model.groupEntities(gid);
+        this.sel = { faces: new Set(ent.faces), edges: new Set(ent.edges) };
+        this.onSelectionChanged();
+        this.action('editInPlace');
+      } else this.toast('Select a group to edit');
+    });
+    p.querySelector('#grp-btn-ungroup')?.addEventListener('click', () => this.ungroupSelection());
+    p.querySelector('#grp-btn-purge')?.addEventListener('click', () => {
+      this.model.pruneGroups();
+      this.refreshGroups();
+      this.toast('Purged unused groups');
+    });
   }
   // The Materials tray card joins Entity Info as a DOCKABLE panel — the two
   // live in ONE connected column (Revit's Properties side), divided by a
@@ -6587,6 +6732,8 @@ class App {
   }
   closeDialog() {
     document.getElementById('dialog-backdrop').classList.add('hidden');
+    const dl = document.getElementById('dialog');
+    if (dl) dl.classList.remove('wa-dialog-active');
     if (this._onDialogClose) { const fn = this._onDialogClose; this._onDialogClose = null; fn(); }
   }
   confirmDialog(msg, onYes) {
@@ -8440,23 +8587,70 @@ class App {
     const wrap = document.getElementById('grouplist');
     if (!wrap) return;
     this.model.pruneGroups();
+    const filterInput = document.getElementById('grp-filter');
+    const filter = (filterInput ? filterInput.value.trim() : '').toLowerCase();
     if (!this.model.groups.size) {
-      wrap.innerHTML = '<div class="dim" style="padding:9px 12px;">No groups yet — select geometry, then Edit ▸ Group (Ctrl+G).</div>';
+      wrap.innerHTML = `
+        <div class="grp-empty-state">
+          <div class="grp-empty-icon">📦</div>
+          <div class="grp-empty-title">No Model Groups</div>
+          <div class="grp-empty-hint">Select geometry in the viewport, then click <b>＋ New</b> or press <b>Ctrl+G</b> to create a group.</div>
+        </div>`;
       return;
     }
     wrap.innerHTML = '';
     const selGid = this.singleGroupSelection();
+    let matches = 0;
     for (const [gid, g] of this.model.groups) {
+      if (filter && !g.name.toLowerCase().includes(filter)) continue;
+      matches++;
       const row = document.createElement('div');
       row.className = 'grow' + (gid === selGid ? ' active' : '');
       const ent = this.model.groupEntities(gid);
-      row.innerHTML = `<span class="gdot${g.solid ? ' on' : ''}" title="${g.solid ? 'Solid' : 'Hollow'}"></span>
-        <span class="gname"></span><span class="gcount">${ent.faces.size}</span>`;
+      const isSolid = !!g.solid;
+      row.innerHTML = `
+        <div class="grow-main">
+          <span class="grow-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+          </span>
+          <div class="grow-info">
+            <div class="grow-title-row">
+              <span class="gname"></span>
+              <span class="gbadge ${isSolid ? 'solid' : 'hollow'}">${isSolid ? 'Solid' : 'Hollow'}</span>
+            </div>
+            <div class="grow-meta">${ent.faces.size} faces · ${ent.edges.size} edges</div>
+          </div>
+        </div>
+        <div class="grow-actions">
+          <button class="grow-act-btn edit" title="Edit In Place">✏</button>
+          <button class="grow-act-btn rename" title="Rename Group">🏷</button>
+          <button class="grow-act-btn del" title="Ungroup">✕</button>
+        </div>`;
       row.querySelector('.gname').textContent = g.name;
-      row.title = `${g.name} — ${ent.faces.size} faces (${g.solid ? 'solid' : 'hollow'}). Click to select, double-click to rename.`;
-      row.addEventListener('click', () => this.selectGroup(gid));
-      row.addEventListener('dblclick', () => this.renameGroupDialog(gid));
+      row.title = `${g.name} — ${ent.faces.size} faces (${isSolid ? 'solid manifold' : 'hollow/open'}). Click to select, double-click to rename.`;
+      row.addEventListener('click', ev => {
+        if (ev.target.closest('.grow-act-btn')) return;
+        this.selectGroup(gid);
+      });
+      row.addEventListener('dblclick', ev => {
+        if (ev.target.closest('.grow-act-btn')) return;
+        this.renameGroupDialog(gid);
+      });
+      row.querySelector('.grow-act-btn.edit').addEventListener('click', () => {
+        this.selectGroup(gid);
+        this.action('editInPlace');
+      });
+      row.querySelector('.grow-act-btn.rename').addEventListener('click', () => {
+        this.renameGroupDialog(gid);
+      });
+      row.querySelector('.grow-act-btn.del').addEventListener('click', () => {
+        this.selectGroup(gid);
+        this.ungroupSelection();
+      });
       wrap.appendChild(row);
+    }
+    if (!matches) {
+      wrap.innerHTML = `<div class="elb-empty">No groups match “${filter}”</div>`;
     }
   }
 
@@ -8959,6 +9153,32 @@ class App {
       const d2 = G.norm(G.sub(G.v(ent.params.end[0], ent.params.end[1], 0), G.v(b2.x, b2.y, 0)));
       return this.bim.stretchWall(ent.id, { newEnd: G.add(b2, G.mul(d2, Math.max(0.1, v))) });
     }
+    // COMPOUND WALL LAYERS: parse text or JSON array into structured layers and sync thickness
+    if (key === 'layers') {
+      let parsed = [];
+      if (Array.isArray(v)) parsed = v;
+      else if (typeof v === 'string') {
+        const str = v.trim();
+        if (str.startsWith('[')) {
+          try { parsed = JSON.parse(str); } catch (e) { parsed = []; }
+        } else if (str) {
+          parsed = str.split(',').map(s => {
+            const parts = s.split(':');
+            const nm = (parts[0] || 'Layer').trim();
+            const th = parseFloat(parts[1]) || 0.05;
+            return { name: nm, thickness: th, material: nm };
+          }).filter(l => l.thickness > 0);
+        }
+      }
+      p.layers = parsed;
+      if (parsed.length > 0) {
+        const sumT = parsed.reduce((acc, l) => acc + (+l.thickness || 0), 0);
+        if (sumT > 0.01) p.thickness = +sumT.toFixed(4);
+      }
+      if (this.model && this.model.touch) this.model.touch();
+      if (ent.type === 'wall') return !!this.bim.rebuildWallWithHosts(ent.id);
+      return true;
+    }
     if (key === 'topConstraint') return this._setTopConstraint(ent, v);
     if (key === 'height' && ent.type === 'column') p.heightNominal = null; // explicit edit wins
     if (key === 'rotation') p.rotation = v * Math.PI / 180; // field is degrees
@@ -9363,7 +9583,10 @@ class App {
       };
       el.innerHTML = `
         <div class="pp">
-          <div class="pp-cat">${(info && info.categoryName) || ent.type}<span class="pp-eid">${ent.id}</span></div>
+          <div class="pp-cat-bar">
+            <span class="pp-cat-badge">${(info && info.categoryName) || ent.type}</span>
+            <span class="pp-eid">${ent.id}</span>
+          </div>
           ${lineage ? `<div class="pp-note">Piece of ${lineage} — heals only within this lineage</div>` : ''}
           ${p.fixed ? `<div class="pp-note">Fixed element — the drawn geometry is the design${p.name ? ` · “${p.name}”` : ''}</div>` : ''}
           <div class="pp-typerow">
@@ -9371,15 +9594,25 @@ class App {
               ? `<select id="gi-type" class="pp-typesel">${siblings.map(t =>
                 `<option value="${t.id}"${info && t.id === info.typeId ? ' selected' : ''}>${t.name}</option>`).join('')}</select>`
               : `<span class="pp-typesel pp-ro">${(info && info.typeName) || ent.type}</span>`}
-            <button class="mini-btn" id="gi-edittype">Edit Type…</button>
+            <button class="mini-btn pp-edittype-btn" id="gi-edittype">Edit Type…</button>
           </div>
-          ${grpHtml('constraints', 'Constraints')}
-          ${grpHtml('dimensions', 'Dimensions')}
-          ${grpHtml('structural', 'Structural')}
-          ${grpHtml('materials', 'Materials and Finishes')}
-          ${grpHtml('phasing', 'Phasing')}
-          ${grpHtml('identity', 'Identity Data')}
+          <div class="pp-search-wrap">
+            <span class="pp-search-ic">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            </span>
+            <input id="pp-filter" placeholder="Search parameters…" spellcheck="false">
+            <button id="pp-filter-clear" class="pp-clear-btn" title="Clear search" style="display:none">✕</button>
+          </div>
+          <div class="pp-groups-container">
+            ${grpHtml('constraints', 'Constraints')}
+            ${grpHtml('dimensions', 'Dimensions')}
+            ${grpHtml('structural', 'Structural')}
+            ${grpHtml('materials', 'Materials and Finishes')}
+            ${grpHtml('phasing', 'Phasing')}
+            ${grpHtml('identity', 'Identity Data')}
+          </div>
           <div class="pp-actions">
+            ${ent.type === 'wall' ? `<button class="mini-btn primary" id="gi-assembly">🧱 Edit Assembly…</button>` : ''}
             ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
             <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
             <button class="mini-btn" id="gi-del">Delete</button>
@@ -9390,6 +9623,35 @@ class App {
           </div>
           <div class="dim" style="margin-top:6px">Enter applies · Hold <b>Ctrl</b> (or <b>Tab</b>) to query faces (m²) and edges (m)</div>
         </div>`;
+      // parameter live search
+      const ppFilter = el.querySelector('#pp-filter');
+      const ppFilterClear = el.querySelector('#pp-filter-clear');
+      if (ppFilter) {
+        ppFilter.addEventListener('input', () => {
+          const q = ppFilter.value.trim().toLowerCase();
+          if (ppFilterClear) ppFilterClear.style.display = q ? 'flex' : 'none';
+          el.querySelectorAll('.pp-grp').forEach(grp => {
+            let visInGrp = 0;
+            grp.querySelectorAll('.pp-row').forEach(row => {
+              const lab = (row.querySelector('.pp-lab')?.textContent || '').toLowerCase();
+              const ro = (row.querySelector('.pp-ro')?.textContent || '').toLowerCase();
+              const match = !q || lab.includes(q) || ro.includes(q);
+              row.style.display = match ? '' : 'none';
+              if (match) visInGrp++;
+            });
+            grp.style.display = (!q || visInGrp > 0) ? '' : 'none';
+            if (q && visInGrp > 0) grp.classList.remove('closed');
+          });
+        });
+      }
+      if (ppFilterClear) {
+        ppFilterClear.addEventListener('click', () => {
+          if (ppFilter) {
+            ppFilter.value = '';
+            ppFilter.dispatchEvent(new Event('input'));
+          }
+        });
+      }
       // insertion-offset quick actions (framing justification)
       if (ent.type === 'beam' || ent.type === 'column') {
         const flushBtns = ent.type === 'beam'
@@ -9403,6 +9665,8 @@ class App {
         box2.querySelectorAll('[data-flush]').forEach(b2 =>
           b2.addEventListener('click', () => this.flushAlign(ent.id, b2.dataset.flush)));
       }
+      const assemBtn = el.querySelector('#gi-assembly');
+      if (assemBtn) assemBtn.addEventListener('click', () => this.openWallAssemblyDialog(ent));
       const bndBtn = el.querySelector('#gi-boundary');
       if (bndBtn) bndBtn.addEventListener('click', () => this.bim.editBoundary(ent.id));
       // STAGED edits, Revit-style: values pile up, Apply commits them all in
@@ -10145,6 +10409,53 @@ class App {
     if (!faces.size) { this.toast('Those elements are gone'); return; }
     this.sel = { faces, edges: new Set() };
     this.onSelectionChanged();
+  }
+  // ---- Wall Assembly & Compound Structure ----------------------------------
+  openWallAssemblyDialog(ent) {
+    if (window.AssemblyEditor) {
+      AssemblyEditor.open(ent);
+    } else {
+      this.toast('Wall Assembly Editor not loaded', true);
+    }
+  }
+  // ---- Project Information Dialog ------------------------------------------
+  projectInfoDialog() {
+    const info = this.model.projectInfo || {};
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const html = `
+      <div style="min-width:380px; max-width:480px">
+        <div class="dim" style="margin-bottom:12px; font-size:12px">Project identification & location data exported to IFC and sheets.</div>
+        <div class="gi-prow" style="margin:6px 0"><span>Project Name</span><input id="pi-name" style="flex:1" value="${esc(info.name || 'WebSketch 3D Building Project')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Project Number</span><input id="pi-num" style="flex:1" value="${esc(info.number || 'PRJ-2026-001')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Client / Owner</span><input id="pi-client" style="flex:1" value="${esc(info.client || '')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Building Address</span><input id="pi-addr" style="flex:1" value="${esc(info.address || '')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Author / Architect</span><input id="pi-auth" style="flex:1" value="${esc(info.author || '')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Project Status</span><input id="pi-status" style="flex:1" value="${esc(info.status || 'Schematic Design')}"></div>
+        <div class="gi-prow" style="margin:6px 0"><span>Project Phase</span>
+          <select id="pi-phase" style="flex:1">
+            <option${info.phase === 'Existing' ? ' selected' : ''}>Existing</option>
+            <option${info.phase === 'Demolition' ? ' selected' : ''}>Demolition</option>
+            <option${!info.phase || info.phase === 'New Construction' ? ' selected' : ''}>New Construction</option>
+          </select>
+        </div>
+      </div>`;
+    this.dialog('Project Information', html, [
+      ['Save', () => {
+        const getV = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+        this.model.projectInfo = {
+          name: getV('pi-name') || 'WebSketch 3D Building Project',
+          number: getV('pi-num'),
+          client: getV('pi-client'),
+          address: getV('pi-addr'),
+          author: getV('pi-auth'),
+          status: getV('pi-status'),
+          phase: document.getElementById('pi-phase')?.value || 'New Construction',
+        };
+        if (this.model.touch) this.model.touch();
+        this.toast('Project information updated');
+      }],
+      ['Cancel', null],
+    ]);
   }
   // ---- Select All Instances / Create Similar --------------------------------
   selectAllInstances(ent) {

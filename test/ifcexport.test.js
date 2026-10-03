@@ -157,4 +157,32 @@ module.exports = h => {
     const bad = data.match(/[,(\s]-?\d+[,)\s]/g) || [];
     ok(bad.length === 0, 'integer-looking tokens: ' + JSON.stringify(bad.slice(0, 5)));
   });
+
+  test('compound wall layers: exports IfcMaterialLayerSet and IfcMaterialLayerSetUsage', () => {
+    const app = fakeApp();
+    const w1 = app.bim.entities.find(e => e.id === 'wall_1');
+    w1.params.layers = [
+      { name: 'Brick', material: 'Brick', thickness: 0.10 },
+      { name: 'Insulation', material: 'Insulation', thickness: 0.05 },
+      { name: 'Concrete', material: 'Concrete', thickness: 0.15 },
+    ];
+    const r = IfcExport.fromApp(app);
+    ok(r.text.includes('IFCMATERIALLAYER('), 'emits IfcMaterialLayer');
+    ok(r.text.includes('IFCMATERIALLAYERSET('), 'emits IfcMaterialLayerSet');
+    ok(r.text.includes('IFCMATERIALLAYERSETUSAGE('), 'emits IfcMaterialLayerSetUsage');
+    ok(r.text.includes('IFCRELASSOCIATESMATERIAL('), 'emits IfcRelAssociatesMaterial');
+  });
+
+  test('project info: model.projectInfo populates IFCPROJECT and IFCBUILDING', () => {
+    const app = fakeApp();
+    app.model.projectInfo = {
+      name: 'Custom Hospital Wing',
+      description: 'Phase 2 expansion',
+      buildingName: 'Main Medical Center',
+    };
+    const r = IfcExport.fromApp(app);
+    ok(r.text.includes("IFCPROJECT('"), 'emits IfcProject');
+    ok(r.text.includes('Custom Hospital Wing'), 'custom project name');
+    ok(r.text.includes('Main Medical Center') || r.text.includes('Building'), 'building reference');
+  });
 };

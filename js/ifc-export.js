@@ -162,8 +162,12 @@
     // ---- spatial tree ----------------------------------------------------
     const levels = (app.levelManager ? app.levelManager.levels : []) || [];
     if (!levels.length) levels.push({ id: 'lvl_1', name: 'Level 1', elevation: 0 });
+    const prjInfo = m.projectInfo || {};
+    const prjName = String(prjInfo.name || 'WebSketch 3D Model');
+    const prjDesc = String(prjInfo.description || prjInfo.status || 'Exported model');
+    const bldgName = String(prjInfo.buildingName || 'Building');
     const project = w.raw('IFCPROJECT',
-      [guid('project'), oh, 'WebSketch 3D Model', 'Exported model', '$', '$', '$', [ctx], units]);
+      [guid('project'), oh, prjName, prjDesc, '$', '$', '$', [ctx], units]);
     const sitePlace = g.lp(null, g.ax3(g.p3(0, 0, 0), null, null));
     // IFCSITE: …+ LongName, CompositionType, RefLatitude, RefLongitude,
     // RefElevation, LandTitleNumber, SiteAddress (14 attrs in IFC4)
@@ -173,7 +177,7 @@
     // IFCBUILDING: …+ LongName, CompositionType, ElevationOfRefHeight,
     // ElevationOfTerrain, BuildingAddress (12 attrs)
     const bldg = w.raw('IFCBUILDING',
-      [guid('building'), oh, 'Building', '$', '$', bldPlace, '$', '$', { enum: 'ELEMENT' }, '$', '$', '$']);
+      [guid('building'), oh, bldgName, '$', '$', bldPlace, '$', '$', { enum: 'ELEMENT' }, '$', '$', '$']);
     const storeyPlace = new Map(); // level id -> placement ref
     const storeyRef = new Map();
     for (const lv of levels) {

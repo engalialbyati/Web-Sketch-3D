@@ -43,11 +43,17 @@
   function loadState() {
     try {
       const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
-      if (s) Object.assign(state, {
-        expanded: new Set(s.expanded || []),
-        level: s.level || 'all',
-      });
-    } catch (e) { }
+      if (s) {
+        Object.assign(state, {
+          expanded: new Set(s.expanded || ['sec:views', 'sec:plans']),
+          level: s.level || 'all',
+        });
+      } else {
+        state.expanded = new Set(['sec:views', 'sec:plans']);
+      }
+    } catch (e) {
+      state.expanded = new Set(['sec:views', 'sec:plans']);
+    }
   }
 
   // ------------------------------------------------------------------ build
@@ -56,30 +62,79 @@
     panel.id = 'elbrowser';
     panel.innerHTML = `
       <div class="dk-head" id="elb-head">
-        <span class="dk-grip">⋮⋮</span><span class="dk-title">Element Browser</span>
+        <span class="dk-grip">⋮⋮</span><span class="dk-title">Project Browser</span>
         <button class="dk-btn dk-dockl" title="Dock left">◀</button>
         <button class="dk-btn dk-dockr" title="Dock right">▶</button>
         <button class="dk-btn dk-min" title="Collapse / expand">▾</button>
         <button class="dk-btn dk-x" title="Hide (reopen from the toolbar)">✕</button>
       </div>
       <div id="elb-body">
-        <div class="elb-search">
-          <select id="elb-level" title="Show elements on one level only"></select>
-          <input id="elb-filter" placeholder="Filter types…" spellcheck="false">
+        <div class="elb-toolbar">
+          <div class="elb-search-wrap">
+            <span class="elb-search-ic">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            </span>
+            <input id="elb-filter" placeholder="Search views &amp; elements…" spellcheck="false">
+            <button id="elb-filter-clear" class="elb-btn-clear" title="Clear filter" style="display:none">✕</button>
+          </div>
+          <div class="elb-actions-bar">
+            <select id="elb-level" title="Show elements on one level only"></select>
+            <button class="elb-tool-btn" id="elb-btn-expand" title="Expand All Sections">⊞</button>
+            <button class="elb-tool-btn" id="elb-btn-collapse" title="Collapse All Sections">⊟</button>
+            <button class="elb-tool-btn" id="elb-btn-refresh" title="Refresh Browser">↻</button>
+          </div>
         </div>
         <div id="elb-tree"></div>
       </div>`;
     $('viewport').appendChild(panel);
     treeEl = panel.querySelector('#elb-tree');
     dockApi = window.DockPanels ? DockPanels.make(panel, {
-      key: 'elbrowser', title: 'Element Browser', side: 'left', onVisibility: () => refresh(),
+      key: 'elbrowser', title: 'Project Browser', side: 'left', onVisibility: () => refresh(),
     }) : null;
 
-    panel.querySelector('#elb-filter').addEventListener('input', () => renderTree());
+    panel.querySelector('#elb-filter').addEventListener('input', () => {
+      const q = panel.querySelector('#elb-filter').value.trim();
+      const clr = panel.querySelector('#elb-filter-clear');
+      if (clr) clr.style.display = q ? 'flex' : 'none';
+      renderTree();
+    });
+    panel.querySelector('#elb-filter-clear').addEventListener('click', () => {
+      const inp = panel.querySelector('#elb-filter');
+      inp.value = '';
+      panel.querySelector('#elb-filter-clear').style.display = 'none';
+      renderTree();
+    });
     panel.querySelector('#elb-level').addEventListener('change', ev => {
       state.level = ev.target.value;
       saveState();
       refresh(); // counts and element lists are level-dependent
+    });
+    panel.querySelector('#elb-btn-expand').addEventListener('click', () => {
+      state.expanded.add('sec:views');
+      state.expanded.add('sec:plans');
+      state.expanded.add('sec:3d');
+      state.expanded.add('sec:elev');
+      state.expanded.add('sec:sched');
+      state.expanded.add('sec:levels');
+      state.expanded.add('sec:grids');
+      if (catalog) {
+        for (const c of catalog.categories) {
+          state.expanded.add('cat:' + c.id);
+          for (const f of catalog.families.filter(fam => fam.categoryId === c.id)) {
+            state.expanded.add('fam:' + f.id);
+          }
+        }
+      }
+      saveState();
+      renderTree();
+    });
+    panel.querySelector('#elb-btn-collapse').addEventListener('click', () => {
+      state.expanded.clear();
+      saveState();
+      renderTree();
+    });
+    panel.querySelector('#elb-btn-refresh').addEventListener('click', () => {
+      refresh();
     });
     initViewportDrop();
   }
@@ -323,6 +378,81 @@
     const filter = (panel.querySelector('#elb-filter').value || '').toLowerCase();
     const exp = state.expanded;
     let html = '';
+
+    // ---- Revit-style Views (All) tree ----
+    if (app) {
+      const lvls = (app.levelManager && app.levelManager.levels) || [];
+      const vOpen = exp.has('sec:views');
+      let vHtml = `<div class="elb-node elb-cat elb-sec-views${vOpen ? ' open' : ''}" data-sec="views">
+        <span class="elb-tw">${vOpen ? '\u25BE' : '\u25B8'}</span>
+        <span class="elb-ic" style="background:#2563eb"></span>
+        <span class="elb-lab">Views (All)</span>
+        <span class="elb-count">${lvls.length + 8}</span>
+      </div>`;
+      if (vOpen) {
+        // 1. Floor Plans
+        const pOpen = exp.has('sec:plans');
+        vHtml += `<div class="elb-node elb-subcat${pOpen ? ' open' : ''}" data-sec="plans" style="padding-left:22px">
+          <span class="elb-tw">${pOpen ? '\u25BE' : '\u25B8'}</span>
+          <span class="elb-ic" style="background:#0e8385"></span>
+          <span class="elb-lab">Floor Plans</span>
+          <span class="elb-count">${lvls.length}</span>
+        </div>`;
+        if (pOpen) {
+          for (const l of lvls) {
+            const isCur = app.bimOptions.baseLevel === l.id && app.view && app.view.lockedViewName === 'top';
+            vHtml += `<div class="elb-node elb-elem elb-view-row${isCur ? ' active-view' : ''}" data-view-plan="${esc(l.id)}" style="padding-left:36px" title="Click to open ${esc(l.name)} Floor Plan (Top View)">
+              <span class="elb-tw">📐</span>
+              <span class="elb-lab">${esc(l.name)} <span class="elb-lvl">${(+l.elevation).toFixed(2)} m</span></span>
+            </div>`;
+          }
+        }
+        // 2. 3D Views
+        const d3Open = exp.has('sec:3d');
+        vHtml += `<div class="elb-node elb-subcat${d3Open ? ' open' : ''}" data-sec="3d" style="padding-left:22px">
+          <span class="elb-tw">${d3Open ? '\u25BE' : '\u25B8'}</span>
+          <span class="elb-ic" style="background:#4f46e5"></span>
+          <span class="elb-lab">3D Views</span>
+          <span class="elb-count">2</span>
+        </div>`;
+        if (d3Open) {
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-3d="persp" style="padding-left:36px" title="Default 3D Perspective View">
+            <span class="elb-tw">🌐</span><span class="elb-lab">{3D} Perspective</span>
+          </div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-3d="iso" style="padding-left:36px" title="Orthographic Isometric View">
+            <span class="elb-tw">🧊</span><span class="elb-lab">{3D} Ortho Isometric</span>
+          </div>`;
+        }
+        // 3. Building Elevations
+        const elOpen = exp.has('sec:elev');
+        vHtml += `<div class="elb-node elb-subcat${elOpen ? ' open' : ''}" data-sec="elev" style="padding-left:22px">
+          <span class="elb-tw">${elOpen ? '\u25BE' : '\u25B8'}</span>
+          <span class="elb-ic" style="background:#b35900"></span>
+          <span class="elb-lab">Elevations (Building)</span>
+          <span class="elb-count">4</span>
+        </div>`;
+        if (elOpen) {
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-std="front" style="padding-left:36px"><span class="elb-tw">🏛️</span><span class="elb-lab">South (Front)</span></div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-std="back" style="padding-left:36px"><span class="elb-tw">🏛️</span><span class="elb-lab">North (Back)</span></div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-std="right" style="padding-left:36px"><span class="elb-tw">🏛️</span><span class="elb-lab">East (Right)</span></div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-std="left" style="padding-left:36px"><span class="elb-tw">🏛️</span><span class="elb-lab">West (Left)</span></div>`;
+        }
+        // 4. Schedules
+        const scOpen = exp.has('sec:sched');
+        vHtml += `<div class="elb-node elb-subcat${scOpen ? ' open' : ''}" data-sec="sched" style="padding-left:22px">
+          <span class="elb-tw">${scOpen ? '\u25BE' : '\u25B8'}</span>
+          <span class="elb-ic" style="background:#059669"></span>
+          <span class="elb-lab">Schedules & Quantities</span>
+          <span class="elb-count">2</span>
+        </div>`;
+        if (scOpen) {
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-act="schedDlg" style="padding-left:36px"><span class="elb-tw">📋</span><span class="elb-lab">Element Quantities Takeoff</span></div>`;
+          vHtml += `<div class="elb-node elb-elem elb-view-row" data-view-act="bbsDlg" style="padding-left:36px"><span class="elb-tw">📊</span><span class="elb-lab">Bar Bending Schedule (BBS)</span></div>`;
+        }
+      }
+      html += vHtml;
+    }
+
     // ---- project datums: levels and grid lines live here too ----
     const datumSection = (key, label, rows) => {
       const open = exp.has('sec:' + key);
@@ -497,6 +627,43 @@
         const k = 'sec:' + node.dataset.sec;
         state.expanded.has(k) ? state.expanded.delete(k) : state.expanded.add(k);
         saveState(); renderTree();
+        return;
+      }
+      // Views tree navigation
+      if (node.dataset.viewPlan) {
+        const app = window.app;
+        if (!app) return;
+        const lvlId = node.dataset.viewPlan;
+        app.bimOptions.baseLevel = lvlId;
+        const lvl = app.levelManager && app.levelManager.getLevel(lvlId);
+        if (app.mode !== 'bim') app.setMode('bim');
+        app.view.cam.ortho = true;
+        app.setStandardView('top');
+        if (app._refreshLevelDropdowns) app._refreshLevelDropdowns();
+        app.toast(`Floor Plan: ${lvl ? lvl.name : lvlId} (Top Ortho View)`);
+        renderTree();
+        return;
+      }
+      if (node.dataset.view3d) {
+        const app = window.app;
+        if (!app) return;
+        const v = node.dataset.view3d;
+        app.view.cam.ortho = v === 'iso';
+        app.setStandardView('iso');
+        app.toast(v === 'iso' ? '{3D} Orthographic Isometric' : '{3D} Perspective View');
+        return;
+      }
+      if (node.dataset.viewStd) {
+        const app = window.app;
+        if (!app) return;
+        app.setStandardView(node.dataset.viewStd);
+        app.toast(`Elevation View: ${node.textContent.trim()}`);
+        return;
+      }
+      if (node.dataset.viewAct) {
+        const app = window.app;
+        if (!app) return;
+        app.action(node.dataset.viewAct);
         return;
       }
       // the ＋ affordance places elements: on a type row it arms that type's

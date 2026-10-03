@@ -482,6 +482,26 @@ module.exports = h => {
     ok(throughHole.some(([, n]) => n === 2), 'rows through the opening carry 2 bars');
   });
 
+  test('slab: alternate bent-up bars crank at L/4 to the top elevation', () => {
+    const { m, ent } = slabWorld(false);
+    const p = slabParams();
+    p.slab.crank = true;
+    p.slab.crankAt = 0.25;
+    const pv = ER.previewElementRebar(m, faceWithNormal(m, [0, 0, 1]), p, [ent]);
+    ok(!pv.error, pv.error || 'no error');
+    const cranked = pv.paths.filter(q => q.pts.length > 2);
+    const straight = pv.paths.filter(q => q.pts.length === 2);
+    ok(cranked.length > 10, `${cranked.length} cranked bars in slab`);
+    ok(straight.length > 10, `${straight.length} straight bars in slab`);
+    for (const b of cranked) {
+      const zs = b.pts.map(w => w.z);
+      const zTopBar = Math.max(...zs);
+      const zBotBar = Math.min(...zs);
+      ok(zTopBar > zBotBar + 0.05, 'bar rises significantly to top elevation');
+      near(zTopBar, 3.2 - (0.025 + 0.012 / 2), 0.02, 'top leg reaches top cover zone');
+    }
+  });
+
   test('facade: faces without an element are refused; unknown types rejected', () => {
     const m = new Model();
     const faces = box(m, 0, 1, 0, 1, 0, 1); // no entity stamp

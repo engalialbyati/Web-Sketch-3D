@@ -213,6 +213,16 @@
     spl.addEventListener('pointercancel', end);
   }
 
+  const PANEL_ICONS = {
+    entityinfo: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    elbrowser: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>',
+    groups: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>',
+    materials: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 9 9 9 9 0 0 1-9 9V3z"/></svg>',
+    families: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="2" width="16" height="4" rx="1"/><rect x="7" y="6" width="10" height="12"/><rect x="4" y="18" width="16" height="4" rx="1"/></svg>',
+    layers: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>',
+    blenderkit: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+  };
+
   // ---- the panel engine -------------------------------------------------------
   const registry = new Map(); // key -> api {setVisible, dock, isVisible, el}
 
@@ -238,28 +248,31 @@
     }
     headDraggable();
     head.title = 'Drag to float · drop onto a panel stack (or near an edge) to dock · double-click docks left';
-    if (!head.querySelector('.dk-title')) {
-      head.innerHTML = `<span class="dk-grip" title="Drag to float or dock">
-          <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
-            <circle cx="2" cy="2" r="1.2"/><circle cx="8" cy="2" r="1.2"/>
-            <circle cx="2" cy="7" r="1.2"/><circle cx="8" cy="7" r="1.2"/>
-            <circle cx="2" cy="12" r="1.2"/><circle cx="8" cy="12" r="1.2"/>
-          </svg>
-        </span>
-        <span class="dk-title"></span>
-        <button class="dk-btn dk-dockl" title="Dock to Left Sidebar">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
-        </button>
-        <button class="dk-btn dk-dockr" title="Dock to Right Sidebar">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        </button>
-        <button class="dk-btn dk-min" title="Collapse / Expand">
-          <svg class="dk-chev-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
-        <button class="dk-btn dk-x" title="Close Panel">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-        </button>`;
-    }
+    
+    // Always standardize the header HTML for consistent Revit aesthetics
+    const iconSvg = opts.icon || PANEL_ICONS[opts.key] || '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>';
+    head.innerHTML = `<span class="dk-grip" title="Drag to float or dock">
+        <svg width="10" height="14" viewBox="0 0 10 14" fill="currentColor">
+          <circle cx="2" cy="2" r="1.2"/><circle cx="8" cy="2" r="1.2"/>
+          <circle cx="2" cy="7" r="1.2"/><circle cx="8" cy="7" r="1.2"/>
+          <circle cx="2" cy="12" r="1.2"/><circle cx="8" cy="12" r="1.2"/>
+        </svg>
+      </span>
+      <span class="dk-icon" aria-hidden="true">${iconSvg}</span>
+      <span class="dk-title"></span>
+      <button class="dk-btn dk-dockl" title="Dock to Left Sidebar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+      </button>
+      <button class="dk-btn dk-dockr" title="Dock to Right Sidebar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+      </button>
+      <button class="dk-btn dk-min" title="Collapse / Expand">
+        <svg class="dk-chev-ic" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <button class="dk-btn dk-x" title="Close Panel">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>`;
+
     const titleEl = head.querySelector('.dk-title');
     if (titleEl) titleEl.textContent = opts.title || opts.key;
     head.querySelectorAll('.elb-title,.lay-title,.fam-title,.bk-title')

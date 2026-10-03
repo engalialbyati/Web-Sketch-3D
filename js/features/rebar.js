@@ -379,9 +379,18 @@
     _open() {
       const app = this.app, shape = this.constructor.shape;
       app.view.setHoverFace(this.fid);
+      const illustrations = {
+        stirrup: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><rect x="25" y="15" width="110" height="55" rx="4" fill="none" stroke="#2563eb" stroke-width="3"/><path d="M 25 30 L 25 15 L 45 30" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/><text x="80" y="47" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">Closed Stirrup 135°</text></svg>`,
+        lshape: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><rect x="15" y="10" width="130" height="65" fill="#f1f5f9" stroke="#94a3b8" stroke-dasharray="3 3"/><path d="M 30 20 L 30 65 L 120 65" fill="none" stroke="#2563eb" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><text x="80" y="45" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">L-Shape (Rounded Knee)</text></svg>`,
+        ushape: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><rect x="15" y="10" width="130" height="65" fill="#f1f5f9" stroke="#94a3b8" stroke-dasharray="3 3"/><path d="M 30 20 L 30 65 L 130 65 L 130 20" fill="none" stroke="#2563eb" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><text x="80" y="45" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">U-Shape Tie / Cap</text></svg>`,
+        bent: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><rect x="15" y="10" width="130" height="65" fill="#f1f5f9" stroke="#94a3b8" stroke-dasharray="3 3"/><path d="M 25 65 L 60 65 L 100 20 L 135 20" fill="none" stroke="#2563eb" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><text x="80" y="45" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">Bent-Up Crank 45°</text></svg>`,
+        helical: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><path d="M 40 20 C 40 10, 120 10, 120 20 C 120 30, 40 30, 40 40 C 40 50, 120 50, 120 60 C 120 70, 40 70, 40 80" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/><text x="80" y="50" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">Spiral Helix</text></svg>`,
+        straight: `<svg viewBox="0 0 160 85" style="display:block;margin:0 auto 12px;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;width:160px;height:85px"><rect x="15" y="10" width="130" height="65" fill="#f1f5f9" stroke="#94a3b8" stroke-dasharray="3 3"/><line x1="35" y1="15" x2="35" y2="75" stroke="#2563eb" stroke-width="4"/><text x="80" y="45" font-size="10" fill="#475569" text-anchor="middle" font-weight="600">Straight Rebar</text></svg>`
+      };
+      const svgCard = illustrations[shape] || '';
       const html = this.fields().map(([id, label, val]) =>
         `<div class="form-row"><label>${label}</label><input id="${id}" type="number" step="0.005" value="${val}" style="width:90px"> m</div>`).join('');
-      app.dialog(this.constructor.title, html + this.customFields() +
+      app.dialog(this.constructor.title, svgCard + html + this.customFields() +
         `<p class="dim" id="rebar-info"></p>
          <p class="dim">Covers are measured to the bar surface. Bars are independent solids — editing the host never touches them.</p>`,
         [['Cancel', null], ['Create', () => {

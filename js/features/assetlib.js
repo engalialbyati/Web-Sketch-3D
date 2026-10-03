@@ -141,32 +141,63 @@
   // ------------------------------------------------------------- the dialog
   function dialog(app) {
     const sizeId = 'asset-size';
+    const dims = {
+      tree: 'Ø 3.2 m × H 6.0 m',
+      conifer: 'Ø 3.0 m × H 7.0 m',
+      person: '0.55 × 0.40 × 1.75 m',
+      car: '4.40 × 1.80 × 1.45 m',
+      bench: '1.80 × 0.55 × 0.45 m',
+      lamp: '0.90 × 0.35 × 5.00 m',
+      bollard: 'Ø 0.25 m × H 0.90 m',
+    };
+    const cats = {
+      tree: 'site', conifer: 'site',
+      person: 'people', car: 'people',
+      bench: 'furniture', lamp: 'furniture', bollard: 'furniture',
+    };
     const cards = Object.entries(LIB).map(([id, a]) => `
-      <div style="text-align:center; min-width:110px">
-        <button class="mini-btn" data-asset="${id}" style="width:104px;height:76px;display:flex;align-items:center;justify-content:center">
-          <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.6">${a.icon}</svg>
-        </button>
-        <div style="font-size:11px;margin-top:4px">${a.label}</div>
+      <div class="al-card" data-asset="${id}" data-cat="${cats[id] || 'other'}" data-name="${a.label.toLowerCase()}">
+        <div class="al-preview">
+          <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6">${a.icon}</svg>
+        </div>
+        <div class="al-info">
+          <div class="al-title">${a.label}</div>
+          <div class="al-dim">${dims[id] || `${(a.h || 1).toFixed(1)} m`}</div>
+        </div>
+        <button class="al-place-btn" data-asset="${id}">Place</button>
       </div>`).join('');
-    app.dialog('Asset Library — bundled, offline, real geometry', `
-      <div>
-        <p class="dim" style="margin-top:0">Every item is built as real kernel faces in a named group —
-        selectable, paintable, pushable, booleanable. Real-world sizes; the
-        scale multiplies them. BlenderKit (Insert ribbon) remains the online
-        library.</p>
-        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px">${cards}</div>
-        <div style="margin:6px 0">
-          <span class="dim">Imported models (CC BY / CC0 — credits in assets/components/CREDITS.md):</span><br>
+
+    app.dialog('Family & Component Library — Revit Elements', `
+      <div class="al-container" style="min-width:540px; max-width:680px">
+        <div class="al-top-bar">
+          <div class="al-search-box">
+            <span class="al-search-ic">🔍</span>
+            <input id="al-filter" placeholder="Search families &amp; components…" spellcheck="false">
+          </div>
+          <div class="al-scale-box">
+            <span>Scale:</span>
+            <input id="${sizeId}" type="number" value="1" min="0.1" max="10" step="0.1" style="width:54px">
+            <div class="al-scale-presets">
+              <button class="al-scale-chip" data-scale="0.5">0.5×</button>
+              <button class="al-scale-chip active" data-scale="1.0">1.0×</button>
+              <button class="al-scale-chip" data-scale="2.0">2.0×</button>
+            </div>
+          </div>
+        </div>
+        <div class="al-cat-tabs">
+          <button class="al-tab active" data-tab="all">All Components</button>
+          <button class="al-tab" data-tab="site">Site &amp; Landscape</button>
+          <button class="al-tab" data-tab="furniture">Furniture &amp; Fixtures</button>
+          <button class="al-tab" data-tab="people">Vehicles &amp; People</button>
+        </div>
+        <div class="al-grid">${cards}</div>
+        <div style="margin:12px 0 6px">
+          <span class="dim" style="font-size:11.5px">Imported models (CC BY / CC0 — credits in assets/components/CREDITS.md):</span>
           ${window.ComponentsFeature ? ComponentsFeature.dialogSection() : ''}
         </div>
         ${window.OnlineLib ? OnlineLib.section() : ''}
-        <div style="display:flex;gap:6px;align-items:center">
-          Scale <input id="${sizeId}" type="number" value="1" min="0.1" step="0.1" style="width:64px">
-          <span class="dim">× real-world size · lands at the view's ground center — Move (M) to place</span>
-        </div>
       </div>`, [['Close', null]]);
-    // wire on the next frame, or a timeout when the tab is backgrounded and
-    // frames never come (rAF stalls in non-rendering tabs) — idempotent
+
     let wired = false;
     const wire = () => {
       if (wired) return;
@@ -174,29 +205,56 @@
       const body = document.querySelector('.dialog-body') || document.body;
       if (window.ComponentsFeature) ComponentsFeature.wire(app, body);
       if (window.OnlineLib) OnlineLib.wire(app, body);
+
+      // Search and category filtering
+      const filterIn = body.querySelector('#al-filter');
+      const tabs = body.querySelectorAll('.al-tab');
+      let curCat = 'all';
+      const applyFilter = () => {
+        const q = (filterIn ? filterIn.value.trim() : '').toLowerCase();
+        body.querySelectorAll('.al-card').forEach(c => {
+          const cat = c.dataset.cat;
+          const nm = c.dataset.name || '';
+          const matchCat = curCat === 'all' || cat === curCat;
+          const matchQ = !q || nm.includes(q);
+          c.style.display = matchCat && matchQ ? 'flex' : 'none';
+        });
+      };
+      if (filterIn) filterIn.addEventListener('input', applyFilter);
+      tabs.forEach(tab => tab.addEventListener('click', () => {
+        tabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        curCat = tab.dataset.tab;
+        applyFilter();
+      }));
+
+      // Scale presets
+      const scaleIn = body.querySelector('#' + sizeId);
+      body.querySelectorAll('.al-scale-chip').forEach(ch => ch.addEventListener('click', () => {
+        body.querySelectorAll('.al-scale-chip').forEach(c => c.classList.remove('active'));
+        ch.classList.add('active');
+        if (scaleIn) scaleIn.value = ch.dataset.scale;
+      }));
+
+      // Placement trigger
       body.querySelectorAll('[data-asset]').forEach(b => b.addEventListener('click', () => {
         const id = b.dataset.asset;
         const s = Math.max(0.1, parseFloat((body.querySelector('#' + sizeId) || {}).value) || 1);
         const a = LIB[id];
-        // footprint stand-ins for the wireframe ghost (real-world sizes × scale)
+        if (!a) return;
         const FOOT = { tree: [0.55, 0.55], conifer: [0.7, 0.7], person: [0.55, 0.4], car: [4.4, 1.8], bench: [1.8, 0.55], lamp: [0.35, 0.35], bollard: [0.25, 0.25] };
         const [w, d] = (FOOT[id] || [0.6, 0.6]).map(v => v * s);
-        // arm click-to-place: the ghost follows the cursor, the next
-        // viewport click builds the real geometry at that ground point
         app.armAssetPlacement({
           label: a.label,
           size: { w, d, h: (a.h || 1) * s },
           place: (x, y, z) => {
             let gid = null;
             app.run('place asset', m => {
-              // isolation: the asset welds to itself, never into a host element
               const g = m.isolate(() => a.build(m, s));
               const vids = new Set();
               for (const fid of m.groupEntities(g.id).faces) {
                 const f = m.faces.get(fid);
                 if (!f) continue;
-                // island stamp — the asset is its own element under the
-                // independence contract from the moment it lands
                 (f.userData || (f.userData = {})).assetGid = 'asset:' + g.id;
                 for (const ring of m.rings(f)) for (const vi of ring) vids.add(vi);
               }
@@ -213,7 +271,7 @@
     if (typeof requestAnimationFrame === 'function') {
       let fired = false;
       requestAnimationFrame(() => { fired = true; wire(); });
-      setTimeout(() => { if (!fired) wire(); }, 300); // background tab fallback
+      setTimeout(() => { if (!fired) wire(); }, 300);
     } else setTimeout(wire, 0);
   }
 
