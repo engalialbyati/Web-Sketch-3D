@@ -23,6 +23,12 @@ const TOOLS = {
   'rebar-element': ElementRebar.ElementRebarTool,
   revolve: FreeTools.RevolveTool, followme: FreeTools.FollowMeTool,
   align: FreeTools.AlignTool, refplane: FreeTools.RefPlaneTool, splitwall: FreeTools.SplitWallTool,
+  // structural analysis + design command buttons (not interactive tools)
+  'analyze-run': class { constructor(app) { this.app = app; } activate() {} get id() { return 'analyze-run'; } get hint() { return 'Run Analysis: extract the FEA mesh, apply ACI 318-19 load combinations, solve, and browse forces, reactions and drift.'; } onDown() { if (window.AnalysisUI) window.AnalysisUI.analyzeDialog(this.app); } },
+  'analyze-design': class { constructor(app) { this.app = app; } activate() {} get id() { return 'analyze-design'; } get hint() { return 'Design All: ACI 318-19 capacity checks on every beam and column from the last analysis.'; } onDown() { if (window.AnalysisUI) window.AnalysisUI.designDialog(this.app); } },
+  'design-beams': class { constructor(app) { this.app = app; } activate() {} get id() { return 'design-beams'; } get hint() { return 'Beam checks: \u03c6Mn \u2265 Mu, \u03c6Vc+\u03c6Vs \u2265 Vu, min/max steel.'; } onDown() { if (window.AnalysisUI) window.AnalysisUI.designDialog(this.app); } },
+  'design-columns': class { constructor(app) { this.app = app; } activate() {} get id() { return 'design-columns'; } get hint() { return 'Column checks: P-M interaction via strain compatibility.'; } onDown() { if (window.AnalysisUI) window.AnalysisUI.designDialog(this.app); } },
+  'design-check': class { constructor(app) { this.app = app; } activate() {} get id() { return 'design-check'; } get hint() { return 'Full ACI 318-19 design report with DCR color coding.'; } onDown() { if (window.AnalysisUI) window.AnalysisUI.designDialog(this.app); } },
   tape: FreeTools.TapeMeasureTool, orbit: FreeTools.OrbitTool, pan: FreeTools.PanTool,
   zoom: FreeTools.ZoomTool, resize: FreeTools.ResizeTool, extrude: FreeTools.ExtrudeCurveTool,
   // annotations (Phase 3) — dimension/tag/text/spot drawing tools
