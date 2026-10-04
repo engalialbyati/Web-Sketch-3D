@@ -223,12 +223,7 @@
       counts.pond = 1;
     });
 
-    m.bimHold = false;
-    bim._holdOpDone = false;
-    m.noAutoIntersect = false;
     if (bim._hostsDirty) bim._hostsDirty.clear();
-    // bim phase: elements join/derive normally; settlement deferred
-    m.bimHold = false;
     // ------------------------------------------------- house floors 1..3
     // L1+L2 full footprint; L3 set back to x 0..L3W (terrace over the wing)
     const zones = [
@@ -276,6 +271,10 @@
       hip(L3W - 0.2, -0.2, W + 0.7, D + 0.7, 6.12, 1.1, 0.4); // wing hip (low pitch)
       counts.roofs = 2;
     });
+
+    m.bimHold = false;
+    bim._holdOpDone = false;
+    m.noAutoIntersect = false;
 
     return counts;
   }

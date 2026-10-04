@@ -130,6 +130,8 @@ const ICONS = {
   tape: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="9" width="18" height="7" rx="1"/><path d="M7 9v3M11 9v3M15 9v3M19 9v3"/></svg>',
   resize: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 4v16M18 4v16"/><path d="M6 12h12"/><path d="M9 9l-3 3 3 3M15 9l3 3-3 3"/></svg>',
   wall: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 18h18"/><path d="M3 18l3-8h14l-3 8"/><path d="M9 10l-1.5 8M14 10l1 8"/></svg>',
+  curtain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M9 3v18M15 3v18M3 10h18M3 16h18"/><rect x="9.5" y="10.5" width="5" height="5" fill="currentColor" fill-opacity="0.15" stroke="none"/></svg>',
+  ceiling: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 6h18M5 6v4M12 6v4M19 6v4"/><rect x="4" y="10" width="16" height="4" rx="0.5"/><path d="M8 10v4M12 10v4M16 10v4"/><path d="M4 17h16" stroke-dasharray="2 2" opacity="0.6"/></svg>',
   floor: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 6l9 4-9 4-9-4z"/><path d="M12 10v4"/><path d="M7 8.5v4M17 8.5v4"/></svg>',
   draw: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 013 3L8 19z"/><path d="M13 6l4 4"/></svg>',
   convert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v10"/><path d="M8 9l4 4 4-4"/><path d="M4 15v4a2 2 0 002 2h12a2 2 0 002-2v-4"/></svg>',
@@ -8405,6 +8407,7 @@ class App {
     if (this.tool) this.tool.status();
   }
   _updateEditBox() {
+    if (!this.view || typeof this.view.setGroupEditBox !== 'function') return;
     if (this.activeGroup == null) { this.view.setGroupEditBox(null); return; }
     const ent = this.model.groupEntities(this.activeGroup);
     const vset = new Set();
@@ -8588,6 +8591,7 @@ class App {
   }
 
   refreshGroups() {
+    if (typeof document === 'undefined') return;
     const wrap = document.getElementById('grouplist');
     if (!wrap) return;
     this.model.pruneGroups();
@@ -9307,6 +9311,7 @@ class App {
 
 
   updateInfo() {
+    if (typeof document === 'undefined') return;
     const el = document.getElementById('entityinfo');
     const model = this.model;
 
@@ -10953,9 +10958,14 @@ class App {
     for (const ent of [...this.bim.entities]) {
       if (this._eip && ent === this._eip.ent) continue;
       if (ent._pending) continue; // mid-commit pre-registration (joined walls register before extruding)
-      // a FLOOR opening is a pure parametric record — the hole lives in the
-      // host slab's params.regions; the entity owns no B-Rep of its own
+      // a FLOOR opening or wall opening is a parametric record; container entities
+      // (curtain_wall, property) manage sub-elements or boundary edges
+      // only FLOOR-hosted openings have no faces of their own (the hole is
+      // in the slab's regions); WALL-hosted openings (doors, windows) DO have
+      // faces (frame + leaf + lining) and must be cleaned up when empty
       if (ent.type === 'opening' && ent.params && ent.params.hostFloorId) continue;
+      if (ent.type === 'curtain_wall' || ent.type === 'property') continue;
+      if (ent.type === 'curtain_wall' || ent.type === 'curtainwall' || ent.type === 'property') continue;
       if (!ent.faces.some(id => this.model.faces.has(id))) {
         this.bim.detach(ent.id);
         if (this.db) this.db.deleteElement(ent.id).catch(() => { }); // row follows the entity

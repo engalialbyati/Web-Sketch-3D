@@ -611,6 +611,7 @@ static gridColumnTrim(G, A, B, colA, colB) {
   // run sits on grids between carrying intersections. Also called by
   // dynApply(): a typed Length/Angle redraws the band without a mouse move.
   _bandPreview() {
+    if (!this.engine || !this.app || !this.app.view) return;
     const e = this.engine, view = this.app.view;
     const start = e.stage === 1 ? e.p1 : e.chainStart;
     if (e.primitive === 'line' && start && e.cur) {
@@ -633,20 +634,30 @@ static gridColumnTrim(G, A, B, colA, colB) {
     }
   }
   // ---- AutoCAD dynamic input: typed Length + Angle drive the live wall ----
-  dynSpec() { return this.engine.dynSpec(); }
+  dynSpec() { return this.engine ? this.engine.dynSpec() : null; }
   dynApply(v) {
-    this.engine.dynApply(v);
+    if (this.engine) this.engine.dynApply(v);
     this._bandPreview(); // the engine redraw only covers the baseline
   }
-  dynCommit() { return this.engine.dynCommit(); }
-  onDown(ev) { this.engine.onDown(ev); }
-  onUp(ev) { this.engine.onUp(ev); }
+  dynCommit() { return this.engine ? this.engine.dynCommit() : false; }
+  onDown(ev) { if (this.engine) this.engine.onDown(ev); }
+  onUp(ev) { if (this.engine) this.engine.onUp(ev); }
   onKey(ev) {
-    const handled = this.engine.onKey(ev);
+    if (ev.code === 'Space') {
+      const o = this.app.bimOptions;
+      if (o.locationLine === 'centerline') o.locationLine = 'exterior';
+      else if (o.locationLine === 'exterior') o.locationLine = 'interior';
+      else o.locationLine = 'centerline';
+      this.app.toast(`Wall location line: ${o.locationLine} (Space to flip)`);
+      if (this.app.cadUI) this.app.cadUI.refresh();
+      if (this.engine && this.engine.stage) this._bandPreview();
+      return true;
+    }
+    const handled = this.engine ? this.engine.onKey(ev) : false;
     if (handled) this.status();
     return handled;
   }
-  onVCB(t) { return this.engine.onVCB(t); }
+  onVCB(t) { return this.engine ? this.engine.onVCB(t) : false; }
 }
 
 // Floor: Revit Sketch Mode. Activating the tool isolates the viewport (the
