@@ -555,14 +555,11 @@
       for (const ni of [el.ni, el.nj]) for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
       for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) K[dofs[i]][dofs[j]] += Kg[i][j];
     }
-    for (const sh of shells) {
-      const r = shellK(sh.E, sh.nu, sh.t, nodes[sh.n1], nodes[sh.n2], nodes[sh.n3]);
-      if (!r) continue;
-      const kb = r.Kplate[2][2];
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-          K[[sh.n1, sh.n2, sh.n3][i] * 6 + 2][[sh.n1, sh.n2, sh.n3][j] * 6 + 2] += (i === j ? kb : -kb / 2);
-    }
+    // Shells contribute MASS only to the eigenproblem: the plate heuristic
+    // (E·t³·area) is orders of magnitude stiffer than the frame, and in
+    // float64 subspace iteration that conditioning drowns the building's
+    // soft sway modes. Building sway is frame-dominated, so the modal
+    // stiffness comes from the frame system alone.
     const M = lumpedMass(nodes, frames, shells, extraMass);
     // Partition free dofs into translational (carry lumped mass) and
     // rotational (massless). Guyan static condensation removes the
@@ -612,15 +609,22 @@
       X.push(v);
     }
     mOrtho(X, Mr);
-    let lam = null;
+    let lam = null, degenerate = false;
+    // Rayleigh shift Kc + αM keeps the inverse iteration solvable when the
+    // structure has mechanisms (singular Kc — pin-based unbraced frames);
+    // mechanism modes then surface as near-zero frequencies and are filtered.
+    let trK = 0, trM = 0;
+    for (let i = 0; i < nt; i++) { trK += Kc[i][i]; trM += Mr[i]; }
+    const alpha = trM > 0 ? 1e-8 * Math.max(trK, 1e-30) / trM : 0;
+    const Ks = Kc.map((row, i) => Float64Array.from(row, (v, j) => v + (i === j ? alpha * Mr[i] : 0)));
     for (let iter = 0; iter < 15; iter++) {
-      // Y = Kc⁻¹·(M·X) — one factorization, p right-hand sides
+      // Y = Ks⁻¹·(M·X) — one factorization, p right-hand sides
       const RHS = X.map(x => {
         const r = new Float64Array(nt);
         for (let i = 0; i < nt; i++) r[i] = Mr[i] * x[i];
         return r;
       });
-      const Y = solveLDLT(Kc.map(r => Float64Array.from(r)), RHS);
+      const Y = solveLDLT(Ks.map(r => Float64Array.from(r)), RHS);
       // projected pair: Ky = YᵀKY = Yᵀ(MX) (since KY = MX by construction),
       // My = YᵀMY. The Ritz problem is GENERALIZED: Ky z = λ My z.
       const Ky = [], My = [];
@@ -637,6 +641,14 @@
         Ky.push(kyRow); My.push(myRow);
       }
       const { values, vectors } = generalizedEigen(Ky, My); // ascending λ = ω²
+      if (!values || !values.length) {
+        degenerate = true;
+        if (!lam) lam = [];
+        // the projected mass matrix degenerated — the structure has a true
+        // MECHANISM (e.g. pin-based unbraced frame): Kc is singular, the
+        // inverse iteration produced non-finite Ritz vectors. Stop cleanly.
+        break;
+      }
       const Xnew = [];
       for (let oi = 0; oi < values.length; oi++) {
         const v = new Float64Array(nt);
@@ -652,8 +664,12 @@
       lam = lamNew; X = Xnew;
     }
     const modes = [];
-    for (let i = 0; i < Math.min(nModesWanted, lam.length); i++) {
+    let mechanisms = 0;
+    for (let i = 0; i < Math.min(nModesWanted + 4, lam.length); i++) {
       const omega2 = Math.max(lam[i], 0);
+      if (!isFinite(omega2)) { mechanisms++; continue; } // solver fallout
+      if (Math.sqrt(omega2) / (2 * Math.PI) < 0.05) { mechanisms++; continue; } // rigid/mechanism
+      if (modes.length >= nModesWanted) break;
       const phi = new Float64Array(nDof);
       for (let k = 0; k < nt; k++) phi[ft[k]] = X[i][k];
       // expand rotations back: φ_rot = −Krr⁻¹·Krt·φ_trans
@@ -673,7 +689,8 @@
       const omega = Math.sqrt(omega2);
       modes.push({ f: omega / (2 * Math.PI), T: omega > 0 ? 2 * Math.PI / omega : Infinity, phi });
     }
-    return { modes };
+    if (degenerate && !modes.length) mechanisms = Math.max(mechanisms, 1);
+    return { modes, mechanisms };
   }
 
   // Generalized symmetric eigenproblem A z = λ B z for small dense pairs:

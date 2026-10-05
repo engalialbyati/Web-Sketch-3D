@@ -191,7 +191,9 @@
       <td style="text-align:right">${m.f.toFixed(2)} Hz</td>
       <td style="text-align:right">${m.T.toFixed(3)} s</td>
       <td><button data-mode="${i}" class="btn small">View Shape</button></td></tr>`).join('');
+    const warn = res.mechanisms ? `<div style="margin:0 0 6px;color:#dc2626">⚠ ${res.mechanisms} mechanism mode(s) found (0 Hz) — the structure can sway rigidly. Add bracing/walls or fix the supports before trusting the results.</div>` : '';
     app.dialog('Modal Analysis — ' + res.modes.length + ' modes, ' + res.ms + ' ms', `
+      ${warn}
       <div class="dim" style="margin:0 0 8px">
         Mass source: ${res.massSource}. Subspace iteration on the Guyan-condensed system —
         first modes govern seismic base shear.

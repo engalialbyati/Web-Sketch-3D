@@ -3990,6 +3990,8 @@ class Model {
       g: [...this.groups.entries()].map(([id, g]) => [id, g]),
       lvl: (this.levels || []).map(l => ({ ...l })),
       lp: (this.loadPatterns || []).map(l => ({ ...l })), // ETABS-style load patterns
+      fsec: (this.frameSections || null) && this.frameSections.map(l => ({ ...l })), // named frame sections
+      dpref: this.designPrefs ? { ...this.designPrefs } : null, // design preferences
       // georeference (roadmap 1.2): the project base point (where the local
       // origin sits in a projected CRS), the survey point, and the rotation
       // from project north to TRUE north (radians, positive = clockwise
@@ -4052,6 +4054,8 @@ class Model {
     this.reapOrphanEdges();
     this.levels = (data.lvl || this.levels || []).map(l => ({ ...l }));
     this.loadPatterns = (data.lp || null) && data.lp.map(l => ({ ...l }));
+    this.frameSections = (data.fsec || null) && data.fsec.map(l => ({ ...l }));
+    this.designPrefs = (data.dpref || null) && { ...data.dpref };
     // grid records stay raw here; GridManager._hydrate() validates them into
     // GridLine instances (schema gate) on the next access after load/undo
     // grids hydrate back into GridLine instances (distance/intersection

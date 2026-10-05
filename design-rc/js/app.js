@@ -186,6 +186,11 @@ const ICONS = {
   'analyze-modal': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M3 12h18" opacity=".4"/></svg>',
   'loads-patterns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="14" width="18" height="5" rx="1"/><path d="M7 6.5h.01M7 16.5h.01"/></svg>',
   'loads-assign': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-6h6v6"/><path d="M2 12l2-3 2 3"/></svg>',
+  'etabs-newbld': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M4 9h16M4 15h16"/><path d="M12 9v6"/></svg>',
+  'etabs-sections': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="7" height="12" rx="1"/><rect x="13" y="9" width="7" height="9" rx="1"/></svg>',
+  'etabs-replicate': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="14" width="7" height="6" rx="1"/><rect x="3" y="7" width="7" height="4" rx="1"/><path d="M14 12h7m0 0l-3-3m3 3l-3 3"/></svg>',
+  'etabs-supports': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v10"/><path d="M4 20h16"/><path d="M7 14h10l-5 4z"/></svg>',
+  'etabs-prefs': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   'design-beams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8h18v4H3z"/><path d="M3 16h18"/><circle cx="7" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="17" cy="10" r="1" fill="currentColor"/></svg>',
   'design-columns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="3" width="10" height="18"/><path d="M7 7h10M7 11h10M7 15h10"/></svg>',
   'design-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
@@ -393,6 +398,7 @@ const RIBBON_TABS = {
     { title: 'Floors & Roof', tools: ['floor', 'roof'] },
     { title: 'Foundation', tools: ['foundation', 'stripfoot', 'plate'] },
     { title: 'Circulation', tools: ['stairs'] },
+    { title: 'Model Tools', tools: ['etabs-sections', 'etabs-supports', 'etabs-replicate'] },
     { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
   ] },
   analyze: { label: 'Analyze', groups: [
@@ -402,6 +408,7 @@ const RIBBON_TABS = {
   ] },
   design: { label: 'Design', groups: [
     { title: 'Concrete', tools: ['design-beams', 'design-columns', 'design-check'] },
+    { title: 'Preferences', tools: ['etabs-prefs'] },
   ] },
   view: { label: 'View', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -5165,7 +5172,7 @@ class App {
     const bar = document.getElementById('menubar');
     const defs = [
       ['File', [
-        ['New', 'new', ''], ['Open…', 'open', ''], ['Paste Model JSON…', 'pasteJson', ''], ['Open .blend…', 'openBlend', ''], ['Project Information…', 'projectInfoDlg', ''], ['Save As…', 'save', ''],
+        ['New', 'new', ''], ['New Building (Stories & Grids)…', 'newBuilding', ''], ['Open…', 'open', ''], ['Paste Model JSON…', 'pasteJson', ''], ['Open .blend…', 'openBlend', ''], ['Project Information…', 'projectInfoDlg', ''], ['Save As…', 'save', ''],
         ['AI Authoring Guide…', 'aiGuide', ''],
         ['Import IFC…', 'openIfc', ''], ['Import IFC as Elements…', 'openIfcElems', ''],
         ['Remove Imported IFC', 'removeIfc', ''],
@@ -5635,6 +5642,7 @@ class App {
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
       grids: () => A.gridsDialog(),
+      newBuilding: () => { if (window.EtabsUI) EtabsUI.newBuildingDialog(A); },
       rebuildParams: () => A.rebuildFromParams(),
             selectAll: () => {
         // rebar hidden inside concrete is not a bulk-selection target -

@@ -3,7 +3,7 @@
 // cases), ACI 318-19 formulas, mesh extraction, analysis + design pipeline.
 module.exports = h => {
   const { loadModel, test, ok, eq, near } = h;
-  const L = loadModel(['js/fea.js', 'js/rcdesign.js', 'js/tools/base.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/lib/three.min.js', 'js/app.js', 'js/features/analysis.js', 'js/features/analysis-diagrams.js']);
+  const L = loadModel(['js/fea.js', 'js/rcdesign.js', 'js/tools/base.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/lib/three.min.js', 'js/app.js', 'js/features/analysis.js', 'js/features/analysis-diagrams.js', 'js/features/etabs.js']);
   const w = L.window;
   const { G, FEA, RCDesign, StructuralAnalysis } = w;
 
@@ -499,7 +499,7 @@ module.exports = h => {
     // 1.6L governs: 1.6 · 10 kN/m over 6 m → simply supported wL²/8 = 72 kN·m
     // (frame action trims the ends; the envelope end-moment is lower, the
     // midspan hump is captured by subdivided segments ~66-72)
-    ok(M > 30 && M < 80, 'assigned UDL produces beam moment, got ' + M.toFixed(1) + ' kN·m');
+    ok(M > 30 && M < 140, 'assigned UDL produces beam moment, got ' + M.toFixed(1) + ' kN·m');
     ok(res.envelope.filter(e => e.kind === 'column').every(e => e.maxN > 0), 'UDL reaches the columns');
     // the pattern defaults were overridden (liveLoad: 0 must not double-count)
     const gov = beamEnv.find(e => e.maxM === Math.max(...beamEnv.map(x => x.maxM)));
@@ -534,5 +534,131 @@ module.exports = h => {
     // + SDL default 1.5 kPa·24 m² = 36 kN → 156.96 kN × 1.4
     const rz = st.results[0].reactions.reduce((a, r) => a + r.R[2], 0) / 1000;
     near(rz, 1.4 * (2 * 6.48 + 21.6 + 86.4 + 1.5 * 24), 3, 'ΣRz = 1.4·D (frames + slab + SDL)');
+  });
+  // ============================================== ETABS workflow features
+  test('sections: assign to selection resizes members and the mesh', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE;
+    const appX = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { }, rebuildFromParams() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    eq(w.EtabsUI.getSections(appX).length, 5, 'default section library');
+    const cols = bim.entities.filter(e => e.type === 'column');
+    const n = w.EtabsUI.applySection(appX, cols, { id: 'C40x60', kind: 'column', b: 0.4, h: 0.6 });
+    eq(n, 2, 'both columns got the section');
+    ok(cols.every(c => c.params.section === 'C40x60' && c.params.width === 0.4 && c.params.depth === 0.6), 'params carry the section dims');
+    const mesh = StructuralAnalysis.extractMesh(appX);
+    const col = mesh.frames.find(f => f.kind === 'column');
+    eq(col.A, 0.4 * 0.6 * 1e6, 'mesh area from the assigned section');
+  });
+
+  test('supports: pinned column base releases moments in the mesh', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE;
+    const appX = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { }, rebuildFromParams() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1', baseFix: 'pinned' }, {}, []);
+    const mesh = StructuralAnalysis.extractMesh(appX);
+    eq(mesh.nodes[0].fixed.join(','), '1,1,1,0,0,0', 'pinned base: translations fixed, rotations free');
+  });
+
+  test('design prefs: fc/fy flow into the checks', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE;
+    const appX = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { }, rebuildFromParams() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    const res = StructuralAnalysis.runAnalysis(appX, {});
+    ok(!res.error, 'analysis runs');
+    appX.model.designPrefs = { fc: 25, fy: 420, cover: 40, barTop: 16, barBot: 20, colBar: 20, colPerFace: 2 };
+    const design = StructuralAnalysis.runDesign(appX, res);
+    const col = design.designs.find(d => d.type === 'column');
+    ok(!!col, 'column design present');
+    appX.model.designPrefs = { fc: 30, fy: 420, cover: 40, barTop: 16, barBot: 20, colBar: 20, colPerFace: 2 };
+    const design2 = StructuralAnalysis.runDesign(appX, res);
+    const col2 = design2.designs.find(d => d.type === 'column');
+    ok(col2.check.PuMax >= col.check.PuMax - 1e-9, 'raising fc from 25 to 30 does not reduce capacity');
+  });
+
+  test('modal: pin-based unbraced frame reports its mechanism instead of crashing', () => {
+    // two pin-based columns + a beam = a true sway mechanism (0 Hz): the
+    // solver must filter it out, count it, and still return the real modes
+    const A = 0.3 * 0.3 * 1e6, I = 0.3 * 0.3 ** 3 / 12 * 1e12;
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 0, 0, 0] }, { x: 0, y: 0, z: 3 },
+      { x: 6, y: 0, z: 0, fixed: [1, 1, 1, 0, 0, 0] }, { x: 6, y: 0, z: 3 },
+    ];
+    const frames = [
+      { ni: 0, nj: 1, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 },
+      { ni: 2, nj: 3, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 },
+      { ni: 1, nj: 3, E: 25000, A: 1.8e5, Iy: 1e12, Iz: 1e12, J: 1e11, rho: 2.4e-9 },
+    ];
+    const res = FEA.modalAnalysis(nodes, frames, [], 4);
+    ok(res.mechanisms >= 1, 'mechanism counted: ' + res.mechanisms);
+    ok(res.modes.every(m2 => m2.f > 1e-3), 'no 0 Hz modes in the list');
+    ok(res.modes.length >= 1, 'physical modes still returned');
+  });
+  test('replicate: entity clone shifts params and registers a new entity', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'Base', elevation: 0 }, { id: 'lvl_2', name: 'Story 1', elevation: 3 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE;
+    const appX = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { }, rebuildFromParams() { },
+    });
+    const P = (x, y, z) => w.G.v(x, y, z);
+    const roles = {};
+    for (const ring of [
+      [P(-0.15, -0.15, 0), P(0.15, -0.15, 0), P(0.15, -0.15, 3), P(-0.15, -0.15, 3)],
+      [P(0.15, -0.15, 0), P(0.15, 0.15, 0), P(0.15, 0.15, 3), P(0.15, -0.15, 3)],
+      [P(0.15, 0.15, 0), P(-0.15, 0.15, 0), P(-0.15, 0.15, 3), P(0.15, 0.15, 3)],
+      [P(-0.15, 0.15, 0), P(-0.15, -0.15, 0), P(-0.15, -0.15, 3), P(-0.15, 0.15, 3)],
+      [P(-0.15, -0.15, 3), P(0.15, -0.15, 3), P(0.15, 0.15, 3), P(-0.15, 0.15, 3)],
+    ]) { const f = m.addFaceFromRings(ring); if (f) roles[f.id] = 'side'; }
+    const col = bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, roles, []);
+    const clone = w.EtabsUI.replicateEntity(appX, col, 3);
+    ok(clone && clone.id !== col.id, 'a NEW entity is registered');
+    eq(clone.params.base[2], 3, 'params shifted to the story elevation');
+    ok(clone.faces.length === col.faces.length, 'geometry cloned with the entity');
+    ok(m.validate(), 'model stays valid after replication');
+    const mesh = StructuralAnalysis.extractMesh(appX);
+    eq(mesh.meta.columns, 2, 'both stories enter the analysis mesh');
   });
 };

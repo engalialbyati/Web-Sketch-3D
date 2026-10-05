@@ -51,9 +51,10 @@
         meta.byEntity.set(ent.id, { kind: 'column', frames: [frames.length - 1] });
       }
       // ---- beams: horizontal frame elements along their baseline.
-      // Long spans are subdivided (~1.5 m segments) so self-weight and
-      // future span loads land at interior nodes — a beam meshed only at
-      // its supports carries no span moment (wL²/8 never appears).
+      // One element per span: member loads are applied as CONSISTENT
+      // equivalent joint loads with fixed-end recovery, so span moments
+      // (wL²/8) are exact without interior nodes — subdividing would
+      // multiply the system size (real buildings have hundreds of spans).
       if (ent.type === 'beam' && p.baseline) {
         const bl = p.baseline;
         const h = p.height || 0.4, bw = p.webWidth || 0.25;
@@ -62,21 +63,14 @@
         const Iy = h * bw * bw * bw / 12 * 1e12;
         const J = 0.1 * (bw + h) ** 3 * (1 / 3) * 1e12;
         for (let i = 0; i + 1 < bl.length; i++) {
-          const P0 = bl[i], P1 = bl[i + 1];
-          const segLen = Math.hypot(P1[0] - P0[0], P1[1] - P0[1], (P1[2] || 0) - (P0[2] || 0));
-          const nSegs = Math.max(1, Math.ceil(segLen / 1.5));
-          for (let s = 0; s < nSegs; s++) {
-            const t0 = s / nSegs, t1 = (s + 1) / nSegs;
-            const lp = t => [P0[0] + (P1[0] - P0[0]) * t, P0[1] + (P1[1] - P0[1]) * t, (P0[2] || 0) + ((P1[2] || 0) - (P0[2] || 0)) * t];
-            const A2 = lp(t0), B2 = lp(t1);
-            const ni = nodeAt(G.v(A2[0], A2[1], A2[2]));
-            const nj = nodeAt(G.v(B2[0], B2[1], B2[2]));
-            frames.push({ ni, nj, E: CONCRETE.Ec, A, Iy, Iz, J, kind: 'beam', entityId: ent.id });
-            meta.beams++;
-            const cur = meta.byEntity.get(ent.id) || { kind: 'beam', frames: [] };
-            cur.frames.push(frames.length - 1);
-            meta.byEntity.set(ent.id, cur);
-          }
+          const A2 = bl[i], B2 = bl[i + 1];
+          const ni = nodeAt(G.v(A2[0], A2[1], A2[2] || (bl[0][2] || 0)));
+          const nj = nodeAt(G.v(B2[0], B2[1], B2[2] || (bl[0][2] || 0)));
+          frames.push({ ni, nj, E: CONCRETE.Ec, A, Iy, Iz, J, kind: 'beam', entityId: ent.id });
+          meta.beams++;
+          const cur = meta.byEntity.get(ent.id) || { kind: 'beam', frames: [] };
+          cur.frames.push(frames.length - 1);
+          meta.byEntity.set(ent.id, cur);
         }
       }
       // ---- walls: shell elements (vertical quads from the wall band)
@@ -119,10 +113,20 @@
         meta.slabs++;
       }
     }
-    // supports: any node at the lowest elevation with columns under it → fixed
+    // supports: any node at the lowest elevation with columns under it →
+    // fixed, unless the column's base was assigned a PINNED restraint
+    // (params.baseFix — ETABS joint restraints)
     const zMin = nodes.length ? Math.min(...nodes.map(n => n.z)) : 0;
     for (const n of nodes) {
       if (Math.abs(n.z - zMin) < 0.05) n.fixed = [1, 1, 1, 1, 1, 1];
+    }
+    for (const el of frames) {
+      if (el.kind !== 'column') continue;
+      const ent = bim.getEntityById(el.entityId);
+      if (ent && ent.params && ent.params.baseFix === 'pinned') {
+        const a = nodes[el.ni], b = nodes[el.nj];
+        (Math.abs(a.z - zMin) < Math.abs(b.z - zMin) ? a : b).fixed = [1, 1, 1, 0, 0, 0];
+      }
     }
     return { nodes, frames, shells, meta };
   }
@@ -173,17 +177,29 @@
       for (let i = 0; i < 6; i++) map.get(ni)[i] += vals[i] || 0;
     };
 
-    // --- self-weight: distributed to nodes, scaled by the pattern's SW mult
+    // --- self-weight, scaled by the pattern's SW mult. Horizontal members
+    // (beams/braces) ride the CONSISTENT member-load path so their span
+    // moments are exact; vertical members stay nodal (pure axial path).
+    const FEAmod = window.FEA;
     for (const p of patterns) {
       if (!p.swMult) continue;
-      for (const fr of mesh.frames) {
+      mesh.frames.forEach((fr, idx) => {
         const a = mesh.nodes[fr.ni], b = mesh.nodes[fr.nj];
         const L = window.G.dist(a, b); // m
         const w = (fr.A / 1e6) * CONCRETE.density * p.swMult; // kN/m
-        const fz = -w * L / 2 * 1000;                          // N (down)
-        add(p.id, fr.ni, [0, 0, fz]);
-        add(p.id, fr.nj, [0, 0, fz]);
-      }
+        if (fr.kind === 'beam' || fr.kind === 'brace') {
+          const R = FEAmod.rotationMatrix(a, b);
+          const wy = -w * R[1][2]; // gravity (0,0,-w) onto local y
+          const wz = -w * R[2][2]; // ...and local z
+          const cur = memberLoads[p.id][idx] || { wy: 0, wz: 0 };
+          cur.wy += wy; cur.wz += wz;
+          memberLoads[p.id][idx] = cur;
+        } else {
+          const fz = -w * L / 2 * 1000; // N (down), nodal
+          add(p.id, fr.ni, [0, 0, fz]);
+          add(p.id, fr.nj, [0, 0, fz]);
+        }
+      });
       for (const sh of mesh.shells) {
         const area = shellArea(mesh, sh);
         const w = (sh.t / 1000) * CONCRETE.density * p.swMult;
@@ -389,6 +405,9 @@
     if (!analysis || analysis.error) return { error: 'Run the analysis first' };
     const designs = [];
     const bim = app.bim;
+    // design preferences (ETABS Design > Preferences); per-element rebar wins
+    const pr = (app.model && app.model.designPrefs) || { fc: 30, fy: 420, cover: 40, barTop: 16, barBot: 20, colBar: 20, colPerFace: 2 };
+    const Ab = d => Math.PI * d * d / 4; // one bar area from a Ø
     for (const env of analysis.envelope) {
       if (!env.entityId) continue;
       const ent = bim.getEntityById(env.entityId);
@@ -396,19 +415,19 @@
       const p = ent.params || {};
       if (env.kind === 'column') {
         const b = (p.width || 0.3) * 1000, h = (p.depth || p.width || 0.3) * 1000;
-        // from MNL-66 rebar if present, else 4Ø16
-        const bars = p.rebar ? p.rebar.bars : RC.defaultBars(b, h, 2, 16);
-        const sec = { b, h, fc: 30, fy: 420, cover: 40, bars };
+        // from MNL-66 rebar if present, else the preference bars per face
+        const bars = p.rebar ? p.rebar.bars : RC.defaultBars(b, h, pr.colPerFace || 2, pr.colBar || 20);
+        const sec = { b, h, fc: pr.fc, fy: pr.fy, cover: pr.cover, bars };
         const check = RC.checkColumn(sec, env.maxN / 1000, env.maxM / 1e6);
-        designs.push({ entityId: env.entityId, type: 'column', label: ent.id, env, check });
+        designs.push({ entityId: env.entityId, type: 'column', label: ent.id + (p.section ? ' [' + p.section + ']' : ''), env, check });
       } else if (env.kind === 'beam') {
         const bw = (p.webWidth || 0.25) * 1000, h = (p.height || 0.4) * 1000;
-        const AsBot = p.rebar ? p.rebar.AsBot : 628; // 2Ø20
-        const AsTop = p.rebar ? p.rebar.AsTop : 314;
-        const sec = { b: bw, h, cover: 40, fc: 30, fy: 420,
+        const AsBot = p.rebar ? p.rebar.AsBot : 2 * Ab(pr.barBot || 20);
+        const AsTop = p.rebar ? p.rebar.AsTop : 2 * Ab(pr.barTop || 16);
+        const sec = { b: bw, h, cover: pr.cover, fc: pr.fc, fy: pr.fy,
           top: { As: AsTop }, bot: { As: AsBot }, stirrups: { Av: 101, s: 200 } };
         const check = RC.designBeam(sec, env.maxM / 1e6, env.maxV / 1000);
-        designs.push({ entityId: env.entityId, type: 'beam', label: ent.id, env, check });
+        designs.push({ entityId: env.entityId, type: 'beam', label: ent.id + (p.section ? ' [' + p.section + ']' : ''), env, check });
       }
     }
     const failing = designs.filter(d => !d.check.ok);
@@ -446,7 +465,7 @@
     const t0 = performance.now();
     const res = FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra);
     return {
-      mesh, modes: res.modes,
+      mesh, modes: res.modes, mechanisms: res.mechanisms || 0,
       massSource: 'self-weight' + (imposedT > 0 ? ' + SDL' + (llFrac > 0 ? ' + ' + (llFrac * 100).toFixed(0) + '% LL' : '') : '') +
         (imposedT > 0 ? ' (+' + imposedT.toFixed(1) + ' t imposed)' : ''),
       ms: Math.round(performance.now() - t0),
