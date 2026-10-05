@@ -56,8 +56,8 @@ Last updated: v0.10 tool batch.
 | **Interference Check** | Full | Tools ▸ Interference Check — pairwise AABB+triangle clash with witness points, click-to-select | ✅ |
 | Quantity takeoff | Schedules | Exact solid clipping with join priority (overlap credited correctly) | ✅ |
 | Rebar (ACI MNL-66) | Extensions | Whole-cage generation, 137-book-drawing cross-check, X-ray | ✅+ |
-| Structural analysis | Analyze tab | 1D/2D/3D FEA (12-DOF frames + shells), ACI 318-19 §5.3.1 combos, reactions, force envelope; M/V/N diagrams + deformed shape drawn in the viewport with per-combination cycling | 🟡 |
-| Modal analysis | Analyze tab | Natural frequencies/periods from self-weight mass (lumped, Guyan-condensed subspace eigensolver) + animated mode shapes | 🟡 |
+| Structural analysis | Analyze tab | 1D/2D/3D FEA (12-DOF frames + shells), ACI 318-19 §5.3.1 combos, reactions, force envelope; M/V/N diagrams + deformed shape drawn in the viewport with per-combination cycling; P-delta via iterated geometric stiffness (K + Kg(P), tension+); walls/slabs carry self-weight, LL, SDL and wind area loads | 🟡 |
+| Modal analysis | Analyze tab | Natural frequencies/periods from a selectable mass source (self-weight + superimposed dead + optional live-load fraction, ASCE 7 §12.7.2 style; lumped, Guyan-condensed subspace eigensolver) + animated mode shapes | 🟡 |
 | Energy/solar analysis | Full | Sun settings + shadows (no analysis) | 🔴 |
 
 ## Documentation

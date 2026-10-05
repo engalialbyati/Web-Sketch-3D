@@ -93,6 +93,36 @@
     return K;
   }
 
+  // ================================================ geometric stiffness (P-delta)
+  // Consistent geometric stiffness of the cubic Hermitian beam in LOCAL
+  // coordinates: Kg(P) with P the axial force, TENSION POSITIVE. The tangent
+  // system is K + Kg(P): tension stiffens the transverse response, compression
+  // softens it (Euler buckling is the point where K + Kg(-Pcr) goes singular).
+  // The x-z plane block is the diag(1,−1,1,−1) sign-congruent of the x-y
+  // block, matching frameK's rotation-positive convention in that plane.
+  function frameKg(P, L) {
+    const Kg = [];
+    for (let i = 0; i < 12; i++) Kg.push(new Float64Array(12));
+    if (!P) return Kg;
+    const c = P / (30 * L);
+    // x-y plane, dofs [v1, r1z, v2, r2z] = [1, 5, 7, 11]
+    const Ky4 = [
+      [36, 3 * L, -36, 3 * L],
+      [3 * L, 4 * L * L, -3 * L, -L * L],
+      [-36, -3 * L, 36, -3 * L],
+      [3 * L, -L * L, -3 * L, 4 * L * L],
+    ];
+    const yDofs = [1, 5, 7, 11], zDofs = [2, 4, 8, 10];
+    for (let i = 0; i < 4; i++)
+      for (let j = 0; j < 4; j++) {
+        Kg[yDofs[i]][yDofs[j]] = c * Ky4[i][j];
+        // z-plane: conjugate by diag(1,−1,1,−1) on the local dof pairs
+        const s = (i % 2 === 0 ? 1 : -1) * (j % 2 === 0 ? 1 : -1);
+        Kg[zDofs[i]][zDofs[j]] = c * Ky4[i][j] * s;
+      }
+    return Kg;
+  }
+
   // Transformation: 3×3 rotation from global to local (x along the element)
   function rotationMatrix(a, b) {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
@@ -169,10 +199,11 @@
       [0, l3[0] - l2[0], 0, l1[0] - l3[0], 0, l2[0] - l1[0]],
       [l3[0] - l2[0], l2[1] - l3[1], l1[0] - l3[0], l3[1] - l1[1], l2[0] - l1[0], l1[1] - l2[1]],
     ].map(r => r.map(x => x / area2));
-    const D = E / (1 - nu * nu) * [
-      [1, nu, 0],
-      [nu, 1, 0],
-      [0, 0, (1 - nu) / 2],
+    const d0 = E / (1 - nu * nu);
+    const D = [
+      [d0, d0 * nu, 0],
+      [d0 * nu, d0, 0],
+      [0, 0, d0 * (1 - nu) / 2],
     ];
     const Kmem = [];
     for (let i = 0; i < 6; i++) Kmem.push(new Float64Array(6));
@@ -191,7 +222,7 @@
     for (let i = 0; i < 9; i++) Kplate.push(new Float64Array(9));
     for (let nd = 0; nd < 3; nd++) {
       Kplate[nd * 3 + 2][nd * 3 + 2] = kb;       // wz
-      Kplate[nd * 3][0][nd * 3 + 0] = kb * 0.1;  // rx
+      Kplate[nd * 3 + 0][nd * 3 + 0] = kb * 0.1; // rx
       Kplate[nd * 3 + 1][nd * 3 + 1] = kb * 0.1; // ry
     }
     return { Kmem, Kplate, area, normal: n, toL };
@@ -203,10 +234,12 @@
   //   frames: [{ni, nj, E, A, Iy, Iz, J}] — E in MPa, A in mm², I/J in mm⁴
   //   shells: [{n1, n2, n3, E, nu, t}] — E in MPa, t in mm
   //   loads: array of load vectors (each a Map nodeIdx→[fx,fy,fz,mx,my,mz]) in N
+  //   opts.geo: array aligned with `frames` of axial forces (N, TENSION
+  //             POSITIVE) for P-delta — K + Kg(P) is assembled instead of K
   // Geometry is scaled to mm internally so the section units stay ETABS-
   // style (MPa/mm²/mm⁴); displacements U are returned in mm, forces in N.
   // Returns { U (array of displacement vectors), frames (end forces), nodes }
-  function assembleAndSolve(nodesIn, frames, shells, loads) {
+  function assembleAndSolve(nodesIn, frames, shells, loads, opts = {}) {
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
     const nDof = nNodes * 6;
@@ -215,11 +248,17 @@
     for (let i = 0; i < nDof; i++) K.push(new Float64Array(nDof));
     // frame elements
     const frameInfo = [];
-    for (const el of frames) {
+    frames.forEach((el, elIdx) => {
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
-      if (L < 1e-6) continue;
+      if (L < 1e-6) return;
       const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      // P-delta: soften/stiffen the transverse terms with the axial force
+      if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+        const Kg = frameKg(opts.geo[elIdx], L);
+        for (let i = 0; i < 12; i++)
+          for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+      }
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
       const dofs = [];
@@ -229,7 +268,7 @@
         for (let j = 0; j < 12; j++)
           K[dofs[i]][dofs[j]] += Kg[i][j];
       frameInfo.push({ el, dofs, Kl, R, L });
-    }
+    });
     // shell elements: only membrane (in-plane) coupling between nodes — the
     // vertical bending of slabs enters via the plate diagonal on wz
     for (const sh of shells) {
@@ -250,9 +289,13 @@
           // simplified: distribute into the two horizontal global dofs
           K[ni * 6 + di][nj * 6 + dj] += r.Kmem[i][j];
         }
-      // plate bending: wz at each node
+      // plate bending: RELATIVE wz coupling between the triangle nodes —
+      // a diagonal-only term would ground every slab node vertically and
+      // short-circuit the load path around the supports
       const kb = r.Kplate[2][2];
-      for (const n of ns) K[n * 6 + 2][n * 6 + 2] += kb;
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+          K[ns[i] * 6 + 2][ns[j] * 6 + 2] += (i === j ? kb : -kb / 2);
     }
     // loads → dense RHS vectors
     const F = loads.map(lv => {
@@ -299,31 +342,39 @@
 
   // Reactions: for fixed dofs, R = K·u - f (computed from the ORIGINAL K,
   // which was destroyed — so we re-assemble when reactions are requested).
-  function computeReactions(nodesIn, frames, shells, loads, U) {
+  function computeReactions(nodesIn, frames, shells, loads, U, opts = {}) {
     // K was destroyed by solveLDLT; re-assemble quickly
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
     const nDof = nNodes * 6;
     const K = [];
     for (let i = 0; i < nDof; i++) K.push(new Float64Array(nDof));
-    for (const el of frames) {
+    frames.forEach((el, elIdx) => {
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
-      if (L < 1e-6) continue;
+      if (L < 1e-6) return;
       const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+        const Kg = frameKg(opts.geo[elIdx], L);
+        for (let i = 0; i < 12; i++)
+          for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+      }
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
       const dofs = [];
       for (const ni of [el.ni, el.nj]) for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
       for (let i = 0; i < 12; i++)
         for (let j = 0; j < 12; j++) K[dofs[i]][dofs[j]] += Kg[i][j];
-    }
+    });
     for (const sh of shells) {
       const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3];
       const r = shellK(sh.E, sh.nu, sh.t, p1, p2, p3);
       if (!r) continue;
       const ns = [sh.n1, sh.n2, sh.n3];
-      for (const n of ns) K[n * 6 + 2][n * 6 + 2] += r.Kplate[2][2];
+      const kb = r.Kplate[2][2];
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+          K[ns[i] * 6 + 2][ns[j] * 6 + 2] += (i === j ? kb : -kb / 2);
     }
     const f = new Float64Array(nDof);
     for (const [ni, vals] of (loads[0] || new Map()))
@@ -346,8 +397,10 @@
   // ============================================ modal (eigen) analysis
   // Lumped mass vector (tonnes) per translational DOF — element tributary
   // mass split to its nodes; rotational inertia is ignored (standard lumped
-  // practice; ρ in t/mm³, concrete 24 kN/m³ → 2.4e-9 t/mm³).
-  function lumpedMass(nodes, frames, shells) {
+  // practice; ρ in t/mm³, concrete 24 kN/m³ → 2.4e-9 t/mm³). `extra` adds
+  // imposed mass (tonnes per node — e.g. superimposed dead / fraction of
+  // live per ASCE 7 §12.7.2 mass source) to all three translations.
+  function lumpedMass(nodes, frames, shells, extra) {
     const M = new Float64Array(nodes.length * 6);
     for (const el of frames) {
       const a = nodes[el.ni], b = nodes[el.nj];
@@ -364,6 +417,12 @@
       const rho = sh.rho || 2.4e-9;
       const m = rho * sh.t * area / 3;
       for (const ni of [sh.n1, sh.n2, sh.n3]) { M[ni * 6] += m; M[ni * 6 + 1] += m; M[ni * 6 + 2] += m; }
+    }
+    if (extra) {
+      for (let ni = 0; ni < nodes.length; ni++) {
+        const m = extra[ni] || 0;
+        if (m) { M[ni * 6] += m; M[ni * 6 + 1] += m; M[ni * 6 + 2] += m; }
+      }
     }
     return M;
   }
@@ -420,7 +479,10 @@
   // and subspace iteration never converges to them (safe to keep them in K).
   // Units: N, mm, tonnes → ω² in (rad/s)². Returns modes
   // [{ f, T, phi: Float64Array(nDof) }] with f in Hz.
-  function modalAnalysis(nodesIn, frames, shells, nModesWanted = 6) {
+  // extraMass (optional): array of imposed mass in TONNES per node — the
+  // mass source beyond self-weight (superimposed dead + optional fraction
+  // of live, per the chosen seismic mass definition).
+  function modalAnalysis(nodesIn, frames, shells, nModesWanted = 6, extraMass) {
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
     const nDof = nNodes * 6;
@@ -441,9 +503,12 @@
     for (const sh of shells) {
       const r = shellK(sh.E, sh.nu, sh.t, nodes[sh.n1], nodes[sh.n2], nodes[sh.n3]);
       if (!r) continue;
-      for (const n of [sh.n1, sh.n2, sh.n3]) K[n * 6 + 2][n * 6 + 2] += r.Kplate[2][2];
+      const kb = r.Kplate[2][2];
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++)
+          K[[sh.n1, sh.n2, sh.n3][i] * 6 + 2][[sh.n1, sh.n2, sh.n3][j] * 6 + 2] += (i === j ? kb : -kb / 2);
     }
-    const M = lumpedMass(nodes, frames, shells);
+    const M = lumpedMass(nodes, frames, shells, extraMass);
     // Partition free dofs into translational (carry lumped mass) and
     // rotational (massless). Guyan static condensation removes the
     // rotational block EXACTLY for the stiffness — the eigenproblem then
@@ -663,5 +728,5 @@
     }
   }
 
-  window.FEA = { assembleAndSolve, computeReactions, frameK, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis };
+  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis };
 })();

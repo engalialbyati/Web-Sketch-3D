@@ -337,4 +337,120 @@ module.exports = h => {
     ok(!app4._diagAnim, 'clear stops the animation');
     eq(app4._diagPass.children.length, 0, 'clear empties the pass');
   });
+
+  // ======================================================== P-delta
+  test('P-delta: cantilever amplification 1/(1−P/Pcr)', () => {
+    // E=1000, I=1e6, L=1 m cantilever, tip lateral +100 N, axial −1000 N.
+    // Pcr = π²EI/(4L²) = 2467 N → theory amp = 1/(1−0.4053) = 1.682
+    const E = 1000, A = 1e4, I = 1e6;
+    const nodes = [{ x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] }];
+    for (let i = 1; i <= 4; i++) nodes.push({ x: 0, y: 0, z: i * 0.25 });
+    const frames = [];
+    for (let i = 0; i < 4; i++) frames.push({ ni: i, nj: i + 1, E, A, Iy: I, Iz: I, J: 1e5 });
+    const loads = [new Map([[4, [0, 100, -1000, 0, 0, 0]]])];
+    const lin = FEA.assembleAndSolve(nodes, frames, [], loads);
+    near(Math.abs(lin.U[0][4 * 6 + 1]), 33.33, 0.5, 'first-order tip deflection PL³/3EI');
+    // tension+ axial forces from the linear state
+    const geo = lin.frames.map(fe => -fe.forces[0]);
+    ok(geo.every(v => v < -900 && v > -1100), 'axial recovered as ~1000 N compression in every segment');
+    const pd = FEA.assembleAndSolve(nodes, frames, [], loads, { geo });
+    const amp = Math.abs(pd.U[0][4 * 6 + 1]) / Math.abs(lin.U[0][4 * 6 + 1]);
+    const theory = 1 / (1 - 1000 / (Math.PI ** 2 * E * I / (4 * 1e6))); // Pcr = π²EI/(4L²), L = 1000 mm
+    near(amp, theory, theory * 0.05, 'second-order amplification 1/(1−P/Pcr) within 5%');
+    // tension stiffens: reversed axial must reduce the lateral deflection
+    const tens = FEA.assembleAndSolve(nodes, frames, [], loads, { geo: geo.map(v => -v) });
+    ok(Math.abs(tens.U[0][4 * 6 + 1]) < Math.abs(lin.U[0][4 * 6 + 1]), 'axial tension stiffens the lateral response');
+  });
+
+  test('P-delta: pin-pin column softens toward Euler buckling', () => {
+    // 2-element pin-pin column; x-bending so the torsion restraint (rx) is
+    // not a bending clamp for the probed direction.
+    const E = 1000, A = 1e4, I = 1e6;
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 0, 0] },
+      { x: 0, y: 0, z: 0.5 },
+      { x: 0, y: 0, z: 1, fixed: [1, 1, 1, 0, 0, 0] },
+    ];
+    const frames = [
+      { ni: 0, nj: 1, E, A, Iy: I, Iz: I, J: 1e5 },
+      { ni: 1, nj: 2, E, A, Iy: I, Iz: I, J: 1e5 },
+    ];
+    const loads = [new Map([[1, [0.001, 0, 0, 0, 0, 0]]])];
+    const k0 = Math.abs(FEA.assembleAndSolve(nodes, frames, [], loads).U[0][6]);
+    const Pcr = Math.PI ** 2 * E * I / 1e6; // π²EI/L² in N (L = 1e3 mm → L² = 1e6)
+    const P = 0.5 * Pcr;
+    const kp = Math.abs(FEA.assembleAndSolve(nodes, frames, [], loads, { geo: [-P, -P] }).U[0][6]);
+    near(kp / k0, 2, 0.06, 'amplification 2.0 at P = Pcr/2');
+  });
+
+  // ======================================================== mass source
+  test('mass source: extra imposed mass lowers frequencies exactly', () => {
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
+      { x: 0, y: 0, z: 3 },
+    ];
+    const A = 0.3 * 0.3 * 1e6, I = 0.3 * 0.3 ** 3 / 12 * 1e12;
+    const frames = [{ ni: 0, nj: 1, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 }];
+    const f1 = FEA.modalAnalysis(nodes, frames, [], 1).modes[0].f;
+    // tip self-weight mass is 0.324 t; adding 3× more makes m_total 4× → f halves
+    const f2 = FEA.modalAnalysis(nodes, frames, [], 1, [0, 3 * 0.324]).modes[0].f;
+    near(f2, f1 / 2, 0.02, 'quadrupling the mass halves the frequency');
+  });
+
+  test('runModal mass source: SDL mass included from slab entities', () => {
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const app5 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    // roof slab spanning between the tops: 6×4 m
+    bim.create('floor', { regions: [{ outer: [[0, 0, 3], [6, 0, 3], [6, 4, 3], [0, 4, 3]] }], thickness: 0.15, baseLevel: 'lvl_1' }, {}, []);
+    const bare = StructuralAnalysis.runModal(app5, 2, { superDead: 0, liveFraction: 0 });
+    ok(!bare.error, 'runModal with no imposed mass runs');
+    const loaded = StructuralAnalysis.runModal(app5, 2, { superDead: 5, liveFraction: 0.25, liveLoad: 3 });
+    ok(!loaded.error, 'runModal with SDL + 25% LL runs');
+    ok(loaded.modes[0].f < bare.modes[0].f, 'imposed mass lowers the first frequency (' +
+      bare.modes[0].f.toFixed(2) + ' → ' + loaded.modes[0].f.toFixed(2) + ' Hz)');
+    ok(/SDL/.test(loaded.massSource), 'mass source reports SDL: ' + loaded.massSource);
+  });
+
+  test('shells: slab participates in the static solve (shellK regression)', () => {
+    // shellK used to throw the moment any wall/slab entered the mesh
+    // (a number×array coercion NaN'd the constitutive matrix) — no
+    // analysis with shells ever ran. Pin the full path: solve + reactions.
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const app6 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('floor', { regions: [{ outer: [[0, 0, 3], [6, 0, 3], [6, 4, 3], [0, 4, 3]] }], thickness: 0.15, baseLevel: 'lvl_1' }, {}, []);
+    const st = StructuralAnalysis.runAnalysis(app6, {});
+    ok(!st.error, 'static analysis with slab shells runs');
+    ok(st.mesh.shells.length >= 2, 'slab meshed into shell triangles');
+    // 1.4D: columns 2×6.48 + beam 0.3×0.5×6·24 = 21.6 + slab 0.15·24 m²·24 kN/m³ = 86.4
+    const rz = st.results[0].reactions.reduce((a, r) => a + r.R[2], 0) / 1000;
+    near(rz, 1.4 * (2 * 6.48 + 21.6 + 86.4), 3, 'ΣRz = 1.4·self-weight incl. slab');
+  });
 };

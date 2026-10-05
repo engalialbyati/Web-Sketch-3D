@@ -98,7 +98,7 @@
             const p4 = G.v(lerp(A2[0], B2[0], t0), lerp(A2[1], B2[1], t0), z1);
             const n1 = nodeAt(p1), n2 = nodeAt(p2), n3 = nodeAt(p3), n4 = nodeAt(p4);
             shells.push({ n1, n2, n3, E: CONCRETE.Ec, nu: CONCRETE.nu, t: t * 1000, kind: 'wall' });
-            shells.push({ n1, n3, n4, E: CONCRETE.Ec, nu: CONCRETE.nu, t: t * 1000, kind: 'wall' });
+            shells.push({ n1, n2: n3, n3: n4, E: CONCRETE.Ec, nu: CONCRETE.nu, t: t * 1000, kind: 'wall' });
           }
         }
         meta.walls++;
@@ -152,7 +152,7 @@
     for (const sh of mesh.shells) {
       const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
       const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2 / 1e6; // m²
+      const area = G.len(G.cross(u, v)) / 2; // m² (nodes are meters)
       const w = (sh.t / 1000) * CONCRETE.density;
       const fz = -w * area / 3 * 1000;
       add('DL', sh.n1, [0, 0, fz]);
@@ -167,7 +167,7 @@
       if (sh.kind !== 'slab') continue;
       const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
       const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2 / 1e6;
+      const area = G.len(G.cross(u, v)) / 2; // m²
       const fLL = -qLL * area / 3;
       const fSDL = -qSDL * area / 3;
       add('LL', sh.n1, [0, 0, fLL]);
@@ -183,7 +183,7 @@
       if (sh.kind !== 'wall') continue;
       const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
       const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2 / 1e6;
+      const area = G.len(G.cross(u, v)) / 2; // m²
       const fx = qWL * area / 3;
       add('WL', sh.n1, [fx, 0, 0]);
       add('WL', sh.n2, [fx, 0, 0]);
@@ -224,13 +224,34 @@
       return { error: 'No structural elements found — draw columns, beams, walls or slabs first' };
     }
     const loads = buildLoads(app, mesh, opts);
+    const frameIndex = new Map(mesh.frames.map((f, i) => [f, i]));
     const results = [];
     for (const combo of COMBINATIONS) {
       const combined = combineLoads(mesh, loads, combo);
       if (!combined.size) continue;
-      const sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined]);
-      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, mesh.shells, [combined], sol.U);
-      results.push({ combo: combo.name, U: sol.U[0], frames: sol.frames, reactions });
+      let sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined]);
+      let geo = null, iterations = 0;
+      if (opts.pDelta) {
+        // P-delta: iterate the geometric stiffness from the current axial
+        // forces (tension+; end force f[0] is compression-positive) until
+        // the displacement field stops moving. Converges fast for the
+        // P/Pcr ratios of real buildings.
+        for (iterations = 1; iterations <= 6; iterations++) {
+          geo = new Array(mesh.frames.length).fill(null);
+          for (const fe of sol.frames) geo[frameIndex.get(fe.el)] = -fe.forces[0];
+          const next = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined], { geo });
+          let dMax = 0, uMax = 1e-12;
+          for (let i = 0; i < mesh.nodes.length * 6; i++) {
+            const du = Math.abs((next.U[0][i] || 0) - (sol.U[0][i] || 0));
+            dMax = Math.max(dMax, du);
+            uMax = Math.max(uMax, Math.abs(next.U[0][i] || 0));
+          }
+          sol = next;
+          if (dMax < 1e-6 * Math.max(uMax, 1e-9) || dMax < 1e-9) break;
+        }
+      }
+      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, mesh.shells, [combined], sol.U, { geo });
+      results.push({ combo: combo.name, U: sol.U[0], frames: sol.frames, reactions, pDeltaIterations: iterations });
     }
     // envelope per frame element
     const envelope = mesh.frames.map((fr, i) => {
@@ -296,17 +317,41 @@
   }
 
   // Modal analysis: natural frequencies + mode shapes from self-weight
-  // mass (ETABS "calculate modal"). Displacements in phi are unitless
-  // (mass-normalized), so the display scales them like the deformed shape.
-  function runModal(app, nModes = 6) {
+  // mass plus the chosen seismic mass source (superimposed dead on slabs
+  // and an optional fraction of live — ASCE 7 §12.7.2 style). Displacements
+  // in phi are unitless (mass-normalized), so the display scales them like
+  // the deformed shape.
+  function runModal(app, nModes = 6, opts = {}) {
     const FEA = window.FEA;
+    const G = window.G;
     const mesh = extractMesh(app);
     if (!mesh.frames.length && !mesh.shells.length) {
       return { error: 'No structural elements found — draw columns, beams, walls or slabs first' };
     }
+    // imposed mass per node (tonnes): SDL + frac·LL on slab triangles,
+    // distributed /3 like the load patterns (q in N/m² → t = q·A/g)
+    const qSDL = (opts.superDead != null ? opts.superDead : 1.5) * 1000;
+    const llFrac = opts.liveFraction != null ? opts.liveFraction : 0;
+    const qLL = (opts.liveLoad != null ? opts.liveLoad : 2) * 1000;
+    const extra = new Float64Array(mesh.nodes.length);
+    let imposedT = 0;
+    for (const sh of mesh.shells) {
+      if (sh.kind !== 'slab') continue;
+      const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
+      const u = G.sub(p2, p1), v = G.sub(p3, p1);
+      const area = G.len(G.cross(u, v)) / 2; // m²
+      const m = (qSDL + llFrac * qLL) * area / 3 / 9810; // t per node
+      extra[sh.n1] += m; extra[sh.n2] += m; extra[sh.n3] += m;
+      imposedT += 3 * m;
+    }
     const t0 = performance.now();
-    const res = FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes);
-    return { mesh, modes: res.modes, ms: Math.round(performance.now() - t0) };
+    const res = FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra);
+    return {
+      mesh, modes: res.modes,
+      massSource: 'self-weight' + (imposedT > 0 ? ' + SDL' + (llFrac > 0 ? ' + ' + (llFrac * 100).toFixed(0) + '% LL' : '') : '') +
+        (imposedT > 0 ? ' (+' + imposedT.toFixed(1) + ' t imposed)' : ''),
+      ms: Math.round(performance.now() - t0),
+    };
   }
 
   window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, COMBINATIONS, CONCRETE };
