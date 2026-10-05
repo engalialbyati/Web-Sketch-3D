@@ -111,7 +111,6 @@ const ICONS = {
   'rebar-helical': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 8c0-2 14-2 14 0s-14 4-14 6 14 4 14 6-14 2-14 0"/></svg>',
   'rebar-bbs': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 8h8M8 12h8M8 16h5" stroke-width="1.2"/></svg>',
   'rebar-element': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="6" cy="4" r="1.4"/><circle cx="12" cy="4" r="1.4"/><circle cx="18" cy="4" r="1.4"/><circle cx="6" cy="10" r="1.4"/><circle cx="18" cy="10" r="1.4"/><circle cx="6" cy="16" r="1.4"/><circle cx="12" cy="16" r="1.4"/><circle cx="18" cy="16" r="1.4"/><path d="M6 4v16M18 4v16" opacity=".6"/></svg>',
-  'rebar-sheet': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 8h10M7 12h6M7 16h4"/><circle cx="17" cy="15" r="2.5" stroke-width="1.3"/><path d="M17 12.5v-1" stroke-width="1.3"/></svg>',
   line: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.7" fill="currentColor"/><circle cx="19" cy="5" r="1.7" fill="currentColor"/></svg>',
   polyline: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 18l5-8 6 4 5-9"/><circle cx="4" cy="18" r="1.6" fill="currentColor" stroke="none"/><circle cx="9" cy="10" r="1.6" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.6" fill="currentColor" stroke="none"/><circle cx="20" cy="5" r="1.6" fill="currentColor" stroke="none"/></svg>',
   rect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="6" width="16" height="12"/></svg>',
@@ -180,15 +179,6 @@ const ICONS = {
   align: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16"/><path d="M8 5v14M16 5v14" stroke-dasharray="2.5 2.5"/><path d="M12 9l3 3-3 3"/></svg>',
   refplane: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 4v16" stroke-dasharray="3 3"/><path d="M8 6l10 4L8 14z" fill="currentColor" stroke="none"/></svg>',
   splitwall: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14"/><path d="M12 5v14" stroke-dasharray="3 2"/></svg>',
-  'analyze-run': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 17l4-8 4 4 4-8 6 12z"/><path d="M3 21h18"/></svg>',
-  'analyze-design': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 7h8M8 11h3M8 15h3M14 11v8"/></svg>',
-  'analyze-diagrams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V6l6 9 4-7 6 12"/><path d="M4 20h16"/></svg>',
-  'analyze-modal': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M3 12h18" opacity=".4"/></svg>',
-  'loads-patterns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="5" rx="1"/><rect x="3" y="14" width="18" height="5" rx="1"/><path d="M7 6.5h.01M7 16.5h.01"/></svg>',
-  'loads-assign': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-6h6v6"/><path d="M2 12l2-3 2 3"/></svg>',
-  'design-beams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8h18v4H3z"/><path d="M3 16h18"/><circle cx="7" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="17" cy="10" r="1" fill="currentColor"/></svg>',
-  'design-columns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="3" width="10" height="18"/><path d="M7 7h10M7 11h10M7 15h10"/></svg>',
-  'design-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
   followme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 16c4 0 6-8 10-8 3.5 0 5 4 8 4"/><path d="M3 16l2.5-3M3 16l3.6 1.2M21 12l-3-1.5M21 12l-2.6 2.4"/></svg>',
   solidunion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg>',
   solidsubtract: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6" stroke-dasharray="2 2"/></svg>',
@@ -241,15 +231,6 @@ const TOOL_DEFS = {
     { id: 'revolve', label: 'Revolve', key: 'U' },
     { id: 'followme', label: 'Follow Me', key: 'N' },
     { id: 'align', label: 'Align', key: '' },
-    { id: 'analyze-run', label: 'Run Analysis', key: '' },
-    { id: 'analyze-design', label: 'Design All', key: '' },
-    { id: 'analyze-diagrams', label: 'Diagrams', key: '' },
-    { id: 'analyze-modal', label: 'Modal', key: '' },
-    { id: 'loads-patterns', label: 'Load Patterns', key: '' },
-    { id: 'loads-assign', label: 'Assign Loads', key: '' },
-    { id: 'design-beams', label: 'Beam Checks', key: '' },
-    { id: 'design-columns', label: 'Column Checks', key: '' },
-    { id: 'design-check', label: 'Design Report', key: '' },
     { id: 'refplane', label: 'Reference Plane', key: '' },
     'sep',
     { id: 'paint', label: 'Paint Bucket', key: 'B' },
@@ -308,7 +289,6 @@ const TOOL_DEFS = {
     { id: 'rebar-stirrup', label: 'Stirrup', key: '' },
     { id: 'rebar-column', label: 'Column Reinforcement', key: '' },
     { id: 'rebar-element', label: 'Element Reinforcement', key: '' },
-    { id: 'rebar-sheet', label: 'Rebar Element Sheet Style', key: '' },
     { id: 'rebar-ushape', label: 'U-Shape Rebar', key: '' },
     { id: 'rebar-bent', label: 'Bent-Shape Rebar', key: '' },
     { id: 'rebar-helical', label: 'Helical Rebar', key: '' },
@@ -409,20 +389,12 @@ const RIBBON_TABS = {
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: 'Framing', tools: ['column', 'beam', 'brace'] },
     { title: 'Foundation', tools: ['foundation', 'stripfoot', 'plate'] },
-    { title: 'Reinforcement', tools: ['rebar-element', 'rebar-column', 'rebar-sheet', 'rebar-stirrup', 'rebar-bbs'] },
+    { title: 'Reinforcement', tools: ['rebar-element', 'rebar-column', 'rebar-stirrup', 'rebar-bbs'] },
     { title: 'Datum', tools: ['gridplace', 'levelsbtn', 'gridsbtn', 'levelview'] },
-  ] },
-  analyze: { label: 'Analyze', groups: [
-    { title: 'Run', tools: ['analyze-run', 'analyze-design'] },
-    { title: 'Loads', tools: ['loads-patterns', 'loads-assign'] },
-    { title: 'Results', tools: ['analyze-diagrams', 'analyze-modal'] },
-  ] },
-  design: { label: 'Design', groups: [
-    { title: 'Concrete', tools: ['design-beams', 'design-columns', 'design-check'] },
   ] },
   detailing: { label: 'Detailing', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
-    { title: 'Cages & Sheets', tools: ['rebar-element', 'rebar-column', 'rebar-sheet'] },
+    { title: 'Cages', tools: ['rebar-element', 'rebar-column'] },
     { title: 'Bar Shapes', tools: ['rebar-straight', 'rebar-lshape', 'rebar-stirrup', 'rebar-ushape', 'rebar-bent', 'rebar-helical'] },
     { title: 'Schedule', tools: ['rebar-bbs'] },
     { title: 'Display', tools: ['xray', 'wire', 'shadows'] },
@@ -5086,10 +5058,6 @@ class App {
           mk(ICONS[id.replace('-', '')] || ICONS.union, `Solid Tools: ${op} — two solid groups (last picked cuts)`, '', '{}', () => this.runSolidOp(op));
           continue;
         }
-        if (id === 'rebar-sheet') {
-          mk(ICONS['rebar-sheet'] || '📐', 'Rebar Element Sheet Style (Select element then click for 2D CAD & BBS)', '', '{}', () => this.action('rebarDocDlg'));
-          continue;
-        }
         const t = byId.get(id);
         if (!t) continue;
         const key = t.key ? ` (${t.key === 'Space' ? 'Space' : t.key})` : '';
@@ -5245,7 +5213,7 @@ class App {
         ['Entity Info', 'entityInfoShow'],
         ['Materials', 'materialsShow'],
         ['Bar Bending Schedule', 'bbsDlg'],
-        ['Rebar Element Sheet Style (Print & DXF)…', 'rebarDocDlg'],
+        ['Rebar Detailing Sheet (Print & DXF)…', 'rebarDocDlg'],
         ['Element Schedules', 'schedDlg'],
         ['Edges', 'toggleEdges', '', 'edgesOn'], ['Shadows', 'toggleShadows', '', 'shadowsOn'],
         ['Fog', 'toggleFog', '', 'fogOn'], ['X-Ray', 'toggleXray', '', 'xrayOn'],
@@ -5296,7 +5264,7 @@ class App {
         ['Column Cage Reinforcement', 'toolRebarCol', ''],
         ['Stirrups & Ties', 'toolRebarStirrup', ''],
         ['Bar Bending Schedule (BBS)…', 'bbsDlg', ''],
-        ['Rebar Element Sheet Style (Print & DXF)…', 'rebarDocDlg', ''],
+        ['Rebar Detailing Sheet (Print & DXF)…', 'rebarDocDlg', ''],
         '-',
         ['Edit Wall Assembly & Structure…', 'wallAssemblyDlg', ''],
         ['Project Information…', 'projectInfoDlg', ''],
@@ -5369,7 +5337,7 @@ class App {
       { id: 'mq-asset', label: 'Asset Lib', title: 'Asset Library (Tools ▸ Asset Library)', icon: ICONS.assetlib || '📦', act: 'assetLibDlg' },
       { id: 'mq-sched', label: 'Schedules', title: 'Element Schedules (View ▸ Schedules)', icon: '📋', act: 'schedDlg' },
       { id: 'mq-bbs', label: 'BBS', title: 'Bar Bending Schedule (View ▸ Bar Bending Schedule)', icon: ICONS['rebar-bbs'] || '📊', act: 'bbsDlg' },
-      { id: 'mq-rebardoc', label: 'Detailing', title: 'Rebar Element Sheet Style (AutoCAD DXF & Print)', icon: '📐', act: 'rebarDocDlg' },
+      { id: 'mq-rebardoc', label: 'Detailing', title: 'Rebar Detailing Sheet (AutoCAD DXF & Print)', icon: '📐', act: 'rebarDocDlg' },
       { id: 'mq-render', label: 'Blender Render', title: 'Render Scene with Blender (Tools ▸ Render with Blender)', icon: '✨', act: 'renderDay' },
       { id: 'mq-png', label: 'Snapshot', title: 'Export PNG Snapshot (File ▸ Export PNG)', icon: '📷', act: 'exportPng' },
     ];
@@ -5671,8 +5639,7 @@ class App {
       trussDlg: () => (window.Struct2 ? Struct2.trussDialog(A) : A.toast('Structural module not loaded', true)),
       propDlg: () => A.propertyDialog(),
       bbsDlg: () => A.bbsDialog(),
-      rebarDocDlg: (entId) => (window.RebarDoc ? RebarDoc.openSheet({ app: A, entId: typeof entId === 'string' ? entId : null }) : A.toast('RebarDoc module not loaded', true)),
-      toolRebarSheet: () => A.action('rebarDocDlg'),
+      rebarDocDlg: (entId) => (window.RebarDoc ? RebarDoc.openSheet({ app: A, entId }) : A.toast('RebarDoc module not loaded', true)),
       schedDlg: (t) => A.scheduleDialog(t),
       findRepl: () => A.findReplaceNotes(),
       schedules: () => (window.SchedulesUI && SchedulesUI.open()),
@@ -6538,7 +6505,6 @@ class App {
       if (pent && !this._eip) {
         items.push([`Select All Instances — ${pent.type}${pent.params && pent.params.name ? ' "' + pent.params.name + '"' : ''}`, () => this.selectAllInstances(pent)]);
         items.push([`Create Similar — ${pent.type}`, () => this.createSimilar(pent)]);
-        items.push([`📐 Rebar Detailing Sheet (Style & BBS)…`, () => this.action('rebarDocDlg', pent.id)]);
       }
       // the whole body from one click: swept/extruded solids grabbed as one
       // (same as triple-clicking) — ready to group or convert to an element
@@ -9655,7 +9621,6 @@ class App {
             ${grpHtml('identity', 'Identity Data')}
           </div>
           <div class="pp-actions">
-            <button class="mini-btn primary" id="gi-rebarsheet" style="background:#2563eb; color:#ffffff; font-weight:700; display:inline-flex; align-items:center; gap:5px;" title="Rebar Detailing Sheet (Style &amp; BBS) for this element"><span>📐</span> Rebar Detailing Sheet</button>
             ${ent.type === 'wall' ? `<button class="mini-btn primary" id="gi-assembly">🧱 Edit Assembly…</button>` : ''}
             ${canBoundary ? `<button class="mini-btn primary" id="gi-boundary">✏ Edit Boundary</button>` : ''}
             <button class="mini-btn primary" id="gi-eip">✎ Edit In Place</button>
@@ -9713,8 +9678,6 @@ class App {
       if (assemBtn) assemBtn.addEventListener('click', () => this.openWallAssemblyDialog(ent));
       const bndBtn = el.querySelector('#gi-boundary');
       if (bndBtn) bndBtn.addEventListener('click', () => this.bim.editBoundary(ent.id));
-      const rbsBtn = el.querySelector('#gi-rebarsheet');
-      if (rbsBtn) rbsBtn.addEventListener('click', () => this.action('rebarDocDlg', ent.id));
       // STAGED edits, Revit-style: values pile up, Apply commits them all in
       // ONE transaction (Enter works too); changing selection discards them
       this._eiPending = {};
@@ -9891,7 +9854,6 @@ class App {
         ${this.sel.faces.size ? this._propRow('Layer', `<select id="pi-flayer">${lyrs}</select>`) : ''}
         ${this.sel.edges.size ? `<div>Length: ${fmtLen(len)}</div>` : ''}
         ${this.sel.faces.size ? '<button class="mini-btn primary" id="gi-thicken">Give Thickness…</button>' : ''}
-        ${f0 && f0.userData && f0.userData.bimEntityId ? `<button class="mini-btn primary" id="gi-face-rebarsheet" style="background:#2563eb; color:#ffffff; font-weight:700; display:inline-flex; align-items:center; gap:4px; margin-top:4px;"><span>📐</span> Rebar Detailing Sheet</button>` : ''}
         ${this._wallHint()}
         <div class="dim" style="margin-top:4px">Shift/Ctrl+click adds to the selection · areas are net of openings · Ctrl+G groups</div>`;
       const fl = el.querySelector('#pi-flayer');
@@ -9901,10 +9863,6 @@ class App {
       });
       const tb = el.querySelector('#gi-thicken');
       if (tb) tb.addEventListener('click', () => this.thickenDialog());
-      const rbsFaceBtn = el.querySelector('#gi-face-rebarsheet');
-      if (rbsFaceBtn && f0 && f0.userData && f0.userData.bimEntityId) {
-        rbsFaceBtn.addEventListener('click', () => this.action('rebarDocDlg', f0.userData.bimEntityId));
-      }
       return;
     }
   }

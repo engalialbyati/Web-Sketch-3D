@@ -24,7 +24,7 @@ const ROOT = path.join(__dirname, '..');
 function loadModel(extraFiles = []) {
   // Buffer: export-gltf's base64 fallback needs it; timers for tools that
   // throttle previews
-  const sandbox = { window: { addEventListener() { } }, console, Buffer, setTimeout, clearTimeout, queueMicrotask, setInterval, clearInterval, performance: (typeof performance !== 'undefined' ? performance : { now: () => Date.now() }) };
+  const sandbox = { window: { addEventListener() { } }, console, Buffer, setTimeout, clearTimeout, queueMicrotask };
   const ctx = vm.createContext(sandbox);
   const files = ['js/geometry.js', 'js/columnFamilies.js', 'js/model.js', 'js/StructuralManager.js', 'js/export-gltf.js',
     ...extraFiles, 'test/_bridge.js'];

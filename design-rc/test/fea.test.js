@@ -3,10 +3,7 @@
 // cases), ACI 318-19 formulas, mesh extraction, analysis + design pipeline.
 module.exports = h => {
   const { loadModel, test, ok, eq, near } = h;
-  const L = loadModel(['js/fea.js', 'js/rcdesign.js',
-    'js/tools/base.js', 'js/tools/bim.js', 'js/BimElement.js',
-    'js/lib/three.min.js', 'js/app.js', 'js/assets.js', 'js/tools/assets.js',
-    'js/features/onlinelib.js', 'js/features/analysis.js', 'js/features/analysis-diagrams.js']);
+  const L = loadModel(['js/fea.js', 'js/rcdesign.js', 'js/tools/base.js', 'js/tools/bim.js', 'js/BimElement.js', 'js/lib/three.min.js', 'js/app.js', 'js/features/analysis.js', 'js/features/analysis-diagrams.js']);
   const w = L.window;
   const { G, FEA, RCDesign, StructuralAnalysis } = w;
 

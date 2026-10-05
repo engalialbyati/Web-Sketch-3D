@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%23a94442%27/%3E%3C/svg%3E">
+<title>Design RC — Structural Analysis &amp; RC Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=28z">
+</head>
+<body>
+<div id="app">
+  <div id="menubar"><div class="brand">Design RC</div></div>
+  <div id="modetabs">
+    <button class="mtab active" data-mode="free">Free Drawing</button>
+    <button class="mtab" data-mode="bim">Precise Drawing</button>
+  </div>
+  <div id="bimoptions" class="hidden">
+    <label>Base Level <select id="opt-baselevel"></select></label>
+    <label>Top Constraint <select id="opt-topconstraint"></select></label>
+    <label>Unconnected Height <input id="opt-height" type="number" step="0.1" min="0.05" value="3.0"> m</label>
+    <label>Wall Thickness <select id="opt-thickness">
+      <option value="0.15">150 mm</option>
+      <option value="0.20" selected>200 mm</option>
+      <option value="0.30">300 mm</option>
+    </select></label>
+    <label>Angle <input id="opt-rotation" type="number" step="5" placeholder="auto" style="width:3.4em" title="Element rotation in degrees — empty = automatic"> °</label>
+    <label class="chk"><input id="opt-parallel" type="checkbox" checked> Parallel to element</label>
+    <label>Location Line <select id="opt-locline">
+      <option value="centerline" selected>Centerline</option>
+      <option value="exterior">Finish Face: Exterior</option>
+      <option value="interior">Finish Face: Interior</option>
+    </select></label>
+    <label class="chk"><input id="opt-chain" type="checkbox" checked> Chain</label>
+    <span id="drawpalette" class="dp-row hidden">
+      <span class="dp-label">Draw:</span>
+      <button class="dchip" data-prim="line" title="Line (click-click; VCB = length)">Line</button>
+      <button class="dchip" data-prim="rect" title="Rectangle (VCB = w,h)">Rectangle</button>
+      <button class="dchip" data-prim="polygon" title="Inscribed/Circumscribed Polygon">Polygon</button>
+      <input id="dpa-sides" type="number" min="3" max="96" step="1" value="6" title="Polygon side count" style="width:44px">
+      <select id="dpa-fit" title="Inscribed or circumscribed">
+        <option value="inscribed" selected>Inscribed</option>
+        <option value="circumscribed">Circumscribed</option>
+      </select>
+      <button class="dchip" data-prim="circle" title="Circle (VCB = radius)">Circle</button>
+      <button class="dchip" data-prim="ellipse" title="Ellipse: center, semi-major axis, semi-minor extent (VCB = a, or a x b)">Ellipse</button>
+      <button class="dchip" data-prim="arc_ser" title="Arc: start, end, bulge (VCB = radius)">Arc</button>
+      <button class="dchip" data-prim="arc_ce" title="Arc: center, start, sweep (VCB = angle)">Arc•C</button>
+      <button class="dchip" data-prim="fillet" title="Fillet: two lines + radius (trims)">Fillet</button>
+      <button class="dchip" data-prim="pick" title="Pick Lines: existing edge, grid line, or level datum">Pick Lines</button>
+      <label class="dp-off">Offset <input id="dpa-offset" type="number" step="0.05" value="0" style="width:56px"> m</label>
+      <button class="dchip" data-prim="cv-f" data-cvmode="floor" title="Convert clicked faces to finish floors (extruded down)" style="display:none">To Floor</button>
+      <button class="dchip" data-prim="cv-x" data-cvmode="slab" title="Convert clicked faces to slabs (extruded down)" style="display:none">To Slab</button>
+      <button class="dchip" data-prim="cv-y" data-cvmode="wall" title="Convert clicked faces to walls (extruded along the normal)" style="display:none">To Wall</button>
+      <button class="dchip" data-prim="cv-c" data-cvmode="column" title="Convert clicked faces to columns (risen to the top constraint)" style="display:none">To Column</button>
+      <button class="dchip" data-prim="cv-b" data-cvmode="beam" title="Convert clicked faces to beams (swept along the normal)" style="display:none">To Beam</button>
+    </span>
+    <span id="sketchbar" class="dp-row hidden" style="margin-left:8px">
+      <span class="dp-label" id="sketch-title">Sketch</span>
+      <button id="sketch-commit" title="Commit the sketch" style="color:#3fb950;border-color:#3fb950">✓ Commit</button>
+      <button id="sketch-cancel" title="Discard the sketch" style="color:#f85149;border-color:#f85149">✗ Cancel</button>
+    </span>
+  </div>
+  <div id="toolbar"></div>
+  <div id="main">
+    <div id="viewport">
+      <div id="selband"></div>
+      <div id="eipbanner" class="hidden">
+        <span class="eip-ic">✏</span>
+        <span id="eip-title">Edit In Place</span>
+        <span class="eip-flex"></span>
+        <button id="eip-finish" title="Validate, commit the B-Rep to the database, and return to Precise Drawing">✓ Finish</button>
+        <button id="eip-cancel" title="Discard every edit made in this session (Esc)">✕ Cancel</button>
+      </div>
+    </div>
+    <div id="tray">
+      <div class="panel">
+        <div class="panel-h">Materials</div>
+        <div id="swatches"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Entity Info</div>
+        <div id="entityinfo"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Groups</div>
+        <div id="grouplist"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-h">Tips</div>
+        <div id="entityinfo2" style="padding:10px 12px; line-height:1.55; color:#5a626a; font-size:12px;">
+          Middle-drag = orbit · Shift+middle = pan · Wheel = zoom<br>
+          Arrows lock red/green/blue axes while drawing<br>
+          Type numbers anywhere → Measurements box<br>
+          R → rectangle, then P → push/pull. That's SketchUp!
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="statusbar">
+    <div id="hint"></div>
+    <div id="unitshint">Meters</div>
+    <input id="vcb" placeholder="Measurements" spellcheck="false" autocomplete="off">
+  </div>
+</div>
+
+<div id="ctxmenu" class="hidden"></div>
+<div id="toasts"></div>
+<div id="dialog-backdrop" class="hidden"><div id="dialog"></div></div>
+<input type="file" id="fileinput" accept=".json" style="display:none">
+<input type="file" id="blendinput" accept=".blend" style="display:none">
+<input type="file" id="ifcinput" accept=".ifc,.ifczip" style="display:none">
+<input type="file" id="ifceleminput" accept=".ifc,.ifczip" style="display:none">
+
+<script src="js/lib/three.min.js"></script>
+<script src="js/lib/three-mesh-bvh.umd.js"></script>
+<script src="js/lib/GLTFLoader.js?v=1"></script>
+<script src="js/lib/DRACOLoader.js?v=2"></script>
+<script src="js/geometry.js?v=21axis"></script>
+<script src="js/columnFamilies.js?v=3"></script>
+<script src="js/GridLine.js?v=11"></script>
+<script src="js/GridManager.js?v=9"></script>
+<script src="js/SnapSystem.js?v=2"></script>
+<script src="js/model.js?v=92vh"></script>
+<script src="js/soup-fuse.js?v=1bo"></script>
+<script src="js/solids.js?v=1bo"></script>
+<script src="js/solid-kernel.js?v=1bo"></script>
+
+<script src="js/BimElement.js?v=14paint"></script>
+<script src="js/render.js?v=73filmic"></script>
+
+
+
+<script src="js/tools/base.js?v=2axis"></script>
+<script src="js/tools/free.js?v=89split"></script>
+<script src="js/tools/bim.js?v=2ctrl"></script>
+
+<script src="js/tools/script.js?v=3"></script>
+<script src="js/tools/draw.js?v=7esc"></script>
+
+    
+    
+    
+    
+<script src="js/features/annotate.js?v=5box"></script>
+<script src="js/features/annotate2.js?v=4box"></script>
+
+<script src="js/features/struct2.js?v=1"></script>
+    <script src="js/tools/registry.js?v=3fea"></script>
+<script src="js/engine/api.js?v=1"></script>
+<script src="js/script-elements.js?v=2"></script>
+<script src="js/features/column.js?v=15offsets"></script>
+<script src="js/features/foundation.js?v=1"></script>
+<script src="js/features/stairs.js?v=1"></script>
+<script src="js/features/roof.js?v=2"></script>
+
+
+
+
+
+<script src="js/ui-schedules.js?v=2"></script>
+<script src="js/features/beam.js?v=14locline"></script>
+<script src="js/features/cleanup.js?v=1"></script>
+<script src="js/features/solids.js?v=1"></script>
+<script src="js/features/sectionplanes.js?v=1"></script>
+
+
+
+
+
+
+
+
+
+
+<script src="js/features/gridplace.js?v=13"></script>
+<script src="js/export-gltf.js?v=1"></script>
+
+
+
+
+<script src="js/edit-inplace.js?v=1"></script>
+<script src="js/StructuralManager.js?v=17revert"></script>
+
+    <script src="js/interference.js?v=1"></script>
+    <script src="js/fea.js?v=6ml"></script>
+    <script src="js/rcdesign.js?v=2"></script>
+    <script src="js/features/analysis.js?v=7hump"></script>
+    <script src="js/features/analysis-ui.js?v=4pdelta"></script>
+    <script src="js/features/analysis-diagrams.js?v=4udl"></script>
+    <script src="js/features/loads.js?v=1"></script>
+    <script src="js/app.js?v=rc3"></script>
+    
+    
+    <script src="js/ui-cad.js?v=6method"></script>
+    <script src="js/ui-viewcube.js?v=1vc"></script>
+    <script src="js/ui-assembly.js?v=1wa"></script>
+    <script src="js/ui-dock.js?v=5stack"></script>
+    <script src="js/ui-browser.js?v=15dk"></script>
+    <script src="js/ui-layers.js?v=7dk"></script>
+
+    
+<script>
+// CACHE GUARD - the local server sends no cache headers, so browsers
+// heuristic-cache THIS page and keep booting yesterday's scripts (the
+// "had to open another browser" problem; version tags cannot help when the
+// page listing them is itself stale). On every boot we fetch the LIVE
+// index.html with cache:'no-store' (bypasses the HTTP cache by spec) and
+// compare its js/ script tags against what this page actually loaded. Any
+// difference means a newer deploy exists -> replace the URL with a fresh
+// query so the browser re-fetches the page and its new ?v= scripts.
+(function () {
+  var pageSrcs = [].map.call(document.querySelectorAll('script[src]'), function (s) { return s.getAttribute('src'); });
+  fetch(location.pathname, { cache: 'no-store' })
+    .then(function (r) { return r.ok ? r.text() : null; })
+    .then(function (t) {
+      if (!t) return;
+      var live = (t.match(/src="js[/][^"]+"/g) || []).map(function (x) { return x.slice(5, -1); });
+      var stale = live.some(function (src) { return pageSrcs.indexOf(src) < 0; })
+        || pageSrcs.some(function (src) { return src.indexOf('js/') === 0 && live.indexOf(src) < 0; });
+      if (stale && !/[?&]fresh=/.test(location.search))
+        location.replace(location.pathname + '?fresh=' + Date.now());
+    })
+    .catch(function () { /* offline / server gone: keep running what we have */ });
+})();
+</script>
+</body>
+</html>
