@@ -37,6 +37,7 @@
         const wl = parseFloat(document.getElementById('sa-wl').value) || 1;
         app.closeDialog();
         const t0 = performance.now();
+        if (window.AnalysisDiagrams) window.AnalysisDiagrams.clear(app);
         results = window.StructuralAnalysis.runAnalysis(app, { liveLoad: ll, superDead: sdl, wind: wl });
         const ms = Math.round(performance.now() - t0);
         if (results.error) { app.toast(results.error, true); return false; }
@@ -85,7 +86,7 @@
         </div>
       </div>
       <div style="margin:0 0 8px">
-        <b>Max lateral drift:</b> ${(results.maxDrift * 1000).toFixed(1)} mm
+        <b>Max lateral drift:</b> ${results.maxDrift.toFixed(1)} mm
         · <b>Reactions:</b> ${nReact} support nodes (ΣFx ${Math.abs(baseFx / 1e3).toFixed(0)} kN, ΣFz ${(baseFz / 1e3).toFixed(0)} kN across combos)
       </div>
       <table class="ob-table" style="width:100%;border-collapse:collapse;font-size:11px">
@@ -94,6 +95,10 @@
       </table>
     `, [
       ['Close', null],
+      ['Moment Diagram', () => { app.closeDialog(); window.AnalysisDiagrams.show(app, 'moment', 0); return false; }],
+      ['Shear', () => { window.AnalysisDiagrams.show(app, 'shear', app._diagState ? app._diagState.combo : 0); return false; }],
+      ['Axial', () => { window.AnalysisDiagrams.show(app, 'axial', app._diagState ? app._diagState.combo : 0); return false; }],
+      ['Deformed', () => { window.AnalysisDiagrams.show(app, 'deformed', app._diagState ? app._diagState.combo : 0); return false; }],
       ['Design All Elements →', () => {
         app.closeDialog();
         designDialog(app);
@@ -141,5 +146,48 @@
     ]);
   }
 
-  window.AnalysisUI = { init, analyzeDialog, designDialog, showResults };
+  // Modal analysis: frequencies, periods, animated mode shapes
+  function modalDialog(app) {
+    if (!window.FEA || !window.StructuralAnalysis) { app.toast('Analysis module not loaded', true); return; }
+    const counts = { col: app.bim.entities.filter(e => e.type === 'column').length,
+      beam: app.bim.entities.filter(e => e.type === 'beam').length,
+      wall: app.bim.entities.filter(e => e.type === 'wall').length,
+      slab: app.bim.entities.filter(e => ['floor', 'slab'].includes(e.type)).length };
+    if (!counts.col && !counts.beam && !counts.wall && !counts.slab) {
+      app.toast('Draw structural elements first (columns, beams, walls, slabs)', true);
+      return;
+    }
+    const t0 = performance.now();
+    const res = window.StructuralAnalysis.runModal(app, 6);
+    const ms = Math.round(performance.now() - t0);
+    if (res.error) { app.toast(res.error, true); return; }
+    app._lastModal = res;
+    if (window.AnalysisDiagrams) window.AnalysisDiagrams.clear(app);
+    const rows = res.modes.map((m, i) => `<tr>
+      <td>Mode ${i + 1}</td>
+      <td style="text-align:right">${m.f.toFixed(2)} Hz</td>
+      <td style="text-align:right">${m.T.toFixed(3)} s</td>
+      <td><button data-mode="${i}" class="btn small">View Shape</button></td></tr>`).join('');
+    app.dialog('Modal Analysis — ' + res.modes.length + ' modes, ' + ms + ' ms', `
+      <div class="dim" style="margin:0 0 8px">
+        Free vibration from self-weight mass (24 kN/m³, lumped; rotational inertia ignored).
+        Subspace iteration on the Guyan-condensed system — first modes govern seismic base shear.
+      </div>
+      <table class="ob-table" style="width:100%;border-collapse:collapse;font-size:11px">
+        <tr style="text-align:left"><th>Mode</th><th>Frequency</th><th>Period</th><th></th></tr>
+        ${rows}
+      </table>
+    `, [
+      ['Close', null],
+      ['Animate Mode 1', () => { app.closeDialog(); window.AnalysisDiagrams.showMode(app, 0); return false; }],
+    ]);
+    // wire the per-row View buttons
+    setTimeout(() => {
+      document.querySelectorAll('button[data-mode]').forEach(b => {
+        b.addEventListener('click', () => { app.closeDialog(); window.AnalysisDiagrams.showMode(app, +b.dataset.mode); });
+      });
+    }, 0);
+  }
+
+  window.AnalysisUI = { init, analyzeDialog, designDialog, showResults, modalDialog };
 })();

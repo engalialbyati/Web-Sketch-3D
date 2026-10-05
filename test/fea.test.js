@@ -6,7 +6,7 @@ module.exports = h => {
   const L = loadModel(['js/fea.js', 'js/rcdesign.js',
     'js/tools/base.js', 'js/tools/bim.js', 'js/BimElement.js',
     'js/lib/three.min.js', 'js/app.js', 'js/assets.js', 'js/tools/assets.js',
-    'js/features/onlinelib.js', 'js/features/analysis.js']);
+    'js/features/onlinelib.js', 'js/features/analysis.js', 'js/features/analysis-diagrams.js']);
   const w = L.window;
   const { G, FEA, RCDesign, StructuralAnalysis } = w;
 
@@ -15,7 +15,7 @@ module.exports = h => {
     // 1 m cantilever, E = 1000 N/mm², I = 1e6 mm⁴, P = 1000 N down
     const nodes = [
       { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
-      { x: 1000, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
     ];
     const E = 1000, A = 1e4, I = 1e6;
     const frames = [{ ni: 0, nj: 1, E, A, Iy: I, Iz: I, J: 1e5 }];
@@ -34,8 +34,8 @@ module.exports = h => {
   test('simply supported midspan load: δ = PL³/48EI', () => {
     const nodes = [
       { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
-      { x: 2000, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
-      { x: 1000, y: 0, z: 0 },
+      { x: 2, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
+      { x: 1, y: 0, z: 0 },
     ];
     const E = 1000, A = 1e4, I = 1e6;
     const frames = [
@@ -57,7 +57,7 @@ module.exports = h => {
   test('axial bar: δ = PL/AE, N = P', () => {
     const nodes = [
       { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
-      { x: 1000, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
     ];
     const E = 200000, A = 1000, I = 1e6;
     const frames = [{ ni: 0, nj: 1, E, A, Iy: I, Iz: I, J: 1e5 }];
@@ -181,5 +181,160 @@ module.exports = h => {
     ok(names.includes('1.4D'), '1.4D present');
     ok(names.includes('0.9D+1.0W'), '0.9D+1.0W present');
     eq(names.length, 5, 'five ACI 318-19 strength combos');
+  });
+
+  // ================================ regression: vertical members (portal)
+  // A vertical element under a gravity load must resolve to LOCAL AXIAL
+  // forces, not transverse shear — force recovery has to rotate the global
+  // displacements back into the element frame before f = K_local·u_local.
+  test('vertical column gravity: pure axial + correct reactions', () => {
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] }, { x: 0, y: 0, z: 3 },
+      { x: 6, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] }, { x: 6, y: 0, z: 3 },
+      { x: 3, y: 0, z: 3 },
+    ];
+    const frames = [
+      { ni: 0, nj: 1, E: 25000, A: 250000, Iy: 5.2e9, Iz: 5.2e9, J: 9.0e9 },
+      { ni: 2, nj: 3, E: 25000, A: 250000, Iy: 5.2e9, Iz: 5.2e9, J: 9.0e9 },
+      { ni: 1, nj: 4, E: 25000, A: 300000, Iy: 8.5e9, Iz: 8.5e9, J: 1.4e10 },
+      { ni: 4, nj: 3, E: 25000, A: 300000, Iy: 8.5e9, Iz: 8.5e9, J: 1.4e10 },
+    ];
+    // 18.48 kN at the beam midspan node (mm/N units)
+    const loads = [new Map([[4, [0, 0, -18480, 0, 0, 0]]])];
+    const sol = FEA.assembleAndSolve(nodes, frames, [], loads);
+    // column: local x is the member axis → f[0] must carry the full axial
+    const col = sol.frames[0].forces;
+    near(Math.abs(col[0]) / 1000, 9.24, 0.05, 'column axial = 9.24 kN (reaction half of P)');
+    const shear = Math.abs(col[1]) + Math.abs(col[2]);
+    ok(shear < 6000, 'column transverse shear carries only frame action (< 6 kN), not the gravity load');
+    // equilibrium: vertical reactions = applied load, split by tributary
+    // (the middle node's load must NOT equalize across a flexible beam —
+    // units regression: geometry is meters, section props are mm-based)
+    const re = FEA.computeReactions(nodes, frames, [], loads, sol.U);
+    const rz = re.reduce((s, e) => s + e.R[2], 0);
+    near(rz / 1000, 18.48, 0.05, 'ΣRz = 18.48 kN');
+    near(re[0].R[2] / 1000, 9.24, 0.15, 'each support carries P/2 = 9.24 kN');
+    // beam midspan moment sits between simply-supported (PL/4 = 27.7) and
+    // fixed-fixed (PL/8 = 13.9) because the columns partially fix the ends
+    const mMid = Math.abs(sol.frames[3].forces[5]) / 1e6;
+    ok(mMid > 13 && mMid < 28, 'beam midspan moment between PL/8 and PL/4, got ' + mMid.toFixed(1) + ' kN·m');
+  });
+
+  // ================================================ diagram overlay display
+  test('diagrams: moment / shear / axial / deformed build and clear', () => {
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const app3 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    app3._lastAnalysis = StructuralAnalysis.runAnalysis(app3, {});
+    ok(!app3._lastAnalysis.error, 'analysis for diagram app');
+    const envMaxM = Math.max(...app3._lastAnalysis.envelope.map(e => e.maxM));
+    ok(envMaxM > 0, 'portal frame carries gravity moments (maxM = ' + (envMaxM / 1e6).toFixed(2) + ' kN·m)');
+    const AD = w.AnalysisDiagrams;
+    for (const type of ['moment', 'shear', 'axial', 'deformed']) {
+      AD.show(app3, type, 0);
+      ok(app3._diagPass && app3._diagPass.children.length > 0, type + ' diagram builds scene objects');
+      ok(app3._diagPass.visible, type + ' pass visible');
+    }
+    AD.clear(app3);
+    eq(app3._diagPass.children.length, 0, 'clear empties the diagram pass');
+    ok(!app3._diagState, 'clear resets diagram state');
+  });
+
+  // ======================================================== modal analysis
+  test('modal: cantilever column f = √(k/m)/2π for lumped tip mass', () => {
+    // 0.3×0.3×3 m column, E=25 GPa: k_bend = 3EI/L³ = 1875 N/mm,
+    // m = ρAL/2 = 0.324 t → f = 12.10 Hz; axial k = EA/L → 242.0 Hz
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
+      { x: 0, y: 0, z: 3 },
+    ];
+    const A = 0.3 * 0.3 * 1e6, I = 0.3 * 0.3 ** 3 / 12 * 1e12;
+    const frames = [{ ni: 0, nj: 1, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 }];
+    const res = FEA.modalAnalysis(nodes, frames, [], 3);
+    eq(res.modes.length, 3, 'three modes for three translational DOFs');
+    near(res.modes[0].f, 12.10, 0.1, 'first bending mode 12.10 Hz');
+    near(res.modes[1].f, 12.10, 0.1, 'second (orthogonal) bending mode');
+    near(res.modes[2].f, 242.0, 1.0, 'axial mode 242 Hz');
+    near(res.modes[0].T, 1 / 12.10, 0.01, 'period = 1/f');
+    // mode shape: translation of the tip only, horizontal (no vertical motion)
+    const phi = res.modes[0].phi;
+    eq(phi[0] + phi[1] + phi[2], 0, 'fixed node carries no motion');
+    ok(Math.max(Math.abs(phi[6]), Math.abs(phi[7])) > 1e-3 && Math.abs(phi[8]) < 1e-9 * Math.max(Math.abs(phi[6]), Math.abs(phi[7]), 1e-9),
+      'first mode is horizontal');
+  });
+
+  test('modal: elements stay positive-semidefinite in every orientation', () => {
+    const A = 0.3 * 0.3 * 1e6, I = 0.3 * 0.3 ** 3 / 12 * 1e12;
+    const dirs = [
+      [{ x: 0, y: 0, z: 3000 }, { x: 6000, y: 0, z: 3000 }, '+X beam'],
+      [{ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 3000 }, '+Z column'],
+      [{ x: 0, y: 0, z: 0 }, { x: 0, y: 4000, z: 0 }, '+Y beam'],
+    ];
+    // PSD probe: constrain node i fully — the remaining 6×6 block of a
+    // valid stiffness must be positive-DEFINITE (Cholesky succeeds)
+    const chol = M => {
+      const n = M.length, L = [];
+      for (let i = 0; i < n; i++) L.push(new Float64Array(n));
+      for (let i = 0; i < n; i++) for (let j = 0; j <= i; j++) {
+        let s2 = M[i][j];
+        for (let k = 0; k < j; k++) s2 -= L[i][k] * L[j][k];
+        if (i === j) { if (s2 <= 0) return false; L[i][i] = Math.sqrt(s2); }
+        else L[i][j] = s2 / L[j][j];
+      }
+      return true;
+    };
+    for (const [a, b, tag] of dirs) {
+      const L = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+      const Kl = FEA.frameK(25000, 3e5, 1e11, 1e11, 1e10, L);
+      const Kg = FEA.transformFrame(Kl, FEA.rotationMatrix(a, b));
+      const blk = [];
+      for (let i = 6; i < 12; i++) blk.push(Float64Array.from({ length: 6 }, (_, j) => Kg[i][6 + j]));
+      ok(chol(blk), tag + ' element constrained block is positive-definite');
+    }
+  });
+
+  test('runModal + mode shape display pipeline', () => {
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const app4 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    const res = StructuralAnalysis.runModal(app4, 4);
+    ok(!res.error, 'runModal runs');
+    ok(res.modes.length >= 3, 'several modes returned');
+    ok(res.modes[0].f > 0 && res.modes[0].f < res.modes[1].f, 'frequencies ascending');
+    // sway modes of a portal are far below the axial mode
+    ok(res.modes[0].f < 100, 'first mode is a sway mode (' + res.modes[0].f.toFixed(1) + ' Hz), not spurious stiffness');
+    app4._lastModal = res;
+    w.AnalysisDiagrams.showMode(app4, 0);
+    ok(app4._diagPass.children.length >= 2, 'mode shape draws ghost + displaced lines');
+    ok(!!app4._diagAnim, 'mode animation timer started');
+    w.AnalysisDiagrams.clear(app4);
+    ok(!app4._diagAnim, 'clear stops the animation');
+    eq(app4._diagPass.children.length, 0, 'clear empties the pass');
   });
 };

@@ -182,6 +182,8 @@ const ICONS = {
   splitwall: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="5" width="16" height="14"/><path d="M12 5v14" stroke-dasharray="3 2"/></svg>',
   'analyze-run': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 17l4-8 4 4 4-8 6 12z"/><path d="M3 21h18"/></svg>',
   'analyze-design': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 7h8M8 11h3M8 15h3M14 11v8"/></svg>',
+  'analyze-diagrams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20V6l6 9 4-7 6 12"/><path d="M4 20h16"/></svg>',
+  'analyze-modal': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0"/><path d="M3 12h18" opacity=".4"/></svg>',
   'design-beams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8h18v4H3z"/><path d="M3 16h18"/><circle cx="7" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="17" cy="10" r="1" fill="currentColor"/></svg>',
   'design-columns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="3" width="10" height="18"/><path d="M7 7h10M7 11h10M7 15h10"/></svg>',
   'design-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
@@ -239,6 +241,8 @@ const TOOL_DEFS = {
     { id: 'align', label: 'Align', key: '' },
     { id: 'analyze-run', label: 'Run Analysis', key: '' },
     { id: 'analyze-design', label: 'Design All', key: '' },
+    { id: 'analyze-diagrams', label: 'Diagrams', key: '' },
+    { id: 'analyze-modal', label: 'Modal', key: '' },
     { id: 'design-beams', label: 'Beam Checks', key: '' },
     { id: 'design-columns', label: 'Column Checks', key: '' },
     { id: 'design-check', label: 'Design Report', key: '' },
@@ -406,6 +410,7 @@ const RIBBON_TABS = {
   ] },
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['analyze-run', 'analyze-design'] },
+    { title: 'Results', tools: ['analyze-diagrams', 'analyze-modal'] },
   ] },
   design: { label: 'Design', groups: [
     { title: 'Concrete', tools: ['design-beams', 'design-columns', 'design-check'] },

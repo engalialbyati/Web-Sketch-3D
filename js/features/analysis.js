@@ -50,23 +50,33 @@
         meta.columns++;
         meta.byEntity.set(ent.id, { kind: 'column', frames: [frames.length - 1] });
       }
-      // ---- beams: horizontal frame elements along their baseline
+      // ---- beams: horizontal frame elements along their baseline.
+      // Long spans are subdivided (~1.5 m segments) so self-weight and
+      // future span loads land at interior nodes — a beam meshed only at
+      // its supports carries no span moment (wL²/8 never appears).
       if (ent.type === 'beam' && p.baseline) {
         const bl = p.baseline;
+        const h = p.height || 0.4, bw = p.webWidth || 0.25;
+        const A = bw * h * 1e6;
+        const Iz = bw * h * h * h / 12 * 1e12;
+        const Iy = h * bw * bw * bw / 12 * 1e12;
+        const J = 0.1 * (bw + h) ** 3 * (1 / 3) * 1e12;
         for (let i = 0; i + 1 < bl.length; i++) {
-          const A2 = bl[i], B2 = bl[i + 1];
-          const h = p.height || 0.4, bw = p.webWidth || 0.25;
-          const A = bw * h * 1e6;
-          const Iz = bw * h * h * h / 12 * 1e12;
-          const Iy = h * bw * bw * bw / 12 * 1e12;
-          const J = 0.1 * (bw + h) ** 3 * (1 / 3) * 1e12;
-          const ni = nodeAt(G.v(A2[0], A2[1], A2[2] || (bl[0][2] || 0)));
-          const nj = nodeAt(G.v(B2[0], B2[1], B2[2] || (bl[0][2] || 0)));
-          frames.push({ ni, nj, E: CONCRETE.Ec, A, Iy, Iz, J, kind: 'beam', entityId: ent.id });
-          meta.beams++;
-          const cur = meta.byEntity.get(ent.id) || { kind: 'beam', frames: [] };
-          cur.frames.push(frames.length - 1);
-          meta.byEntity.set(ent.id, cur);
+          const P0 = bl[i], P1 = bl[i + 1];
+          const segLen = Math.hypot(P1[0] - P0[0], P1[1] - P0[1], (P1[2] || 0) - (P0[2] || 0));
+          const nSegs = Math.max(1, Math.ceil(segLen / 1.5));
+          for (let s = 0; s < nSegs; s++) {
+            const t0 = s / nSegs, t1 = (s + 1) / nSegs;
+            const lp = t => [P0[0] + (P1[0] - P0[0]) * t, P0[1] + (P1[1] - P0[1]) * t, (P0[2] || 0) + ((P1[2] || 0) - (P0[2] || 0)) * t];
+            const A2 = lp(t0), B2 = lp(t1);
+            const ni = nodeAt(G.v(A2[0], A2[1], A2[2]));
+            const nj = nodeAt(G.v(B2[0], B2[1], B2[2]));
+            frames.push({ ni, nj, E: CONCRETE.Ec, A, Iy, Iz, J, kind: 'beam', entityId: ent.id });
+            meta.beams++;
+            const cur = meta.byEntity.get(ent.id) || { kind: 'beam', frames: [] };
+            cur.frames.push(frames.length - 1);
+            meta.byEntity.set(ent.id, cur);
+          }
         }
       }
       // ---- walls: shell elements (vertical quads from the wall band)
@@ -285,5 +295,19 @@
     return { designs, failing };
   }
 
-  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, COMBINATIONS, CONCRETE };
+  // Modal analysis: natural frequencies + mode shapes from self-weight
+  // mass (ETABS "calculate modal"). Displacements in phi are unitless
+  // (mass-normalized), so the display scales them like the deformed shape.
+  function runModal(app, nModes = 6) {
+    const FEA = window.FEA;
+    const mesh = extractMesh(app);
+    if (!mesh.frames.length && !mesh.shells.length) {
+      return { error: 'No structural elements found — draw columns, beams, walls or slabs first' };
+    }
+    const t0 = performance.now();
+    const res = FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes);
+    return { mesh, modes: res.modes, ms: Math.round(performance.now() - t0) };
+  }
+
+  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, COMBINATIONS, CONCRETE };
 })();
