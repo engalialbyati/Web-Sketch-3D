@@ -124,6 +124,23 @@
   }
 
   // Transformation: 3×3 rotation from global to local (x along the element)
+  // Consistent (shape-function) equivalent joint loads for a uniform member
+  // load, LOCAL coordinates, 12-DOF convention matching frameK. wy acts in
+  // local +y, wz in local +z (N/mm). The fixed-end forces on the element
+  // used in recovery are the NEGATIVE of this vector (u = 0 clamped).
+  function consistentUDL(wy, wz, L) {
+    const f = new Float64Array(12);
+    if (wy) {
+      f[1] = wy * L / 2; f[5] = wy * L * L / 12;
+      f[7] = wy * L / 2; f[11] = -wy * L * L / 12;
+    }
+    if (wz) {
+      // x-z plane uses the sign-flipped rotation convention (diag(1,−1,1,−1))
+      f[2] = wz * L / 2; f[4] = -wz * L * L / 12;
+      f[8] = wz * L / 2; f[10] = wz * L * L / 12;
+    }
+    return f;
+  }
   function rotationMatrix(a, b) {
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const L = Math.hypot(dx, dy, dz) || 1;
@@ -236,6 +253,10 @@
   //   loads: array of load vectors (each a Map nodeIdx→[fx,fy,fz,mx,my,mz]) in N
   //   opts.geo: array aligned with `frames` of axial forces (N, TENSION
   //             POSITIVE) for P-delta — K + Kg(P) is assembled instead of K
+  //   opts.memberLoads: array aligned with `frames` of null or {wy, wz}
+  //             uniform member loads in LOCAL element coordinates (N/mm),
+  //             applied as consistent equivalent joint loads; end-force
+  //             recovery adds the fixed-end forces so span moments are exact
   // Geometry is scaled to mm internally so the section units stay ETABS-
   // style (MPa/mm²/mm⁴); displacements U are returned in mm, forces in N.
   // Returns { U (array of displacement vectors), frames (end forces), nodes }
@@ -267,7 +288,9 @@
       for (let i = 0; i < 12; i++)
         for (let j = 0; j < 12; j++)
           K[dofs[i]][dofs[j]] += Kg[i][j];
-      frameInfo.push({ el, dofs, Kl, R, L });
+      const ml = (opts.memberLoads && opts.memberLoads[elIdx]) || null;
+      const feq = ml ? consistentUDL(ml.wy || 0, ml.wz || 0, L) : null;
+      frameInfo.push({ el, dofs, Kl, R, L, feq, wlWy: ml ? (ml.wy || 0) : 0, wlWz: ml ? (ml.wz || 0) : 0 });
     });
     // shell elements: only membrane (in-plane) coupling between nodes — the
     // vertical bending of slabs enters via the plate diagonal on wz
@@ -297,11 +320,21 @@
         for (let j = 0; j < 3; j++)
           K[ns[i] * 6 + 2][ns[j] * 6 + 2] += (i === j ? kb : -kb / 2);
     }
-    // loads → dense RHS vectors
+    // loads → dense RHS vectors (nodal maps + member-load equivalents)
     const F = loads.map(lv => {
       const f = new Float64Array(nDof);
       for (const [ni, vals] of lv) {
         for (let d = 0; d < 6; d++) f[ni * 6 + d] += (vals[d] || 0);
+      }
+      // member loads: feq is LOCAL; a local vector maps to global as Rᵀ·v
+      for (const fi of frameInfo) {
+        if (!fi.feq) continue;
+        for (let b = 0; b < 4; b++)
+          for (let i = 0; i < 3; i++) {
+            let gv = 0;
+            for (let j = 0; j < 3; j++) gv += fi.R[j][i] * fi.feq[b * 3 + j];
+            f[fi.dofs[b * 3 + i]] += gv;
+          }
       }
       return f;
     });
@@ -335,7 +368,9 @@
       for (let i = 0; i < 12; i++)
         for (let j = 0; j < 12; j++)
           f[i] += fi.Kl[i][j] * ud[j];
-      return { el: fi.el, L: fi.L, forces: f };
+      // span loads: add the fixed-end forces (u = 0 clamped state)
+      if (fi.feq) for (let i = 0; i < 12; i++) f[i] -= fi.feq[i];
+      return { el: fi.el, L: fi.L, forces: f, wl: fi.feq ? { wy: fi.wlWy, wz: fi.wlWz, L: fi.L } : null };
     });
     return { U, frames: results, nodes: nodesIn, nDof };
   }
@@ -379,6 +414,26 @@
     const f = new Float64Array(nDof);
     for (const [ni, vals] of (loads[0] || new Map()))
       for (let d = 0; d < 6; d++) f[ni * 6 + d] += (vals[d] || 0);
+    // member loads: reactions balance the equivalent joint loads too
+    if (opts.memberLoads) {
+      frames.forEach((el, elIdx) => {
+        const ml = opts.memberLoads[elIdx];
+        if (!ml) return;
+        const a = nodes[el.ni], b = nodes[el.nj];
+        const L = G.dist(a, b);
+        if (L < 1e-6) return;
+        const feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
+        const R = rotationMatrix(a, b);
+        const dofs = [];
+        for (const ni of [el.ni, el.nj]) for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
+        for (let b2 = 0; b2 < 4; b2++)
+          for (let i = 0; i < 3; i++) {
+            let gv = 0;
+            for (let j = 0; j < 3; j++) gv += R[j][i] * feq[b2 * 3 + j];
+            f[dofs[b2 * 3 + i]] += gv;
+          }
+      });
+    }
     const reactions = [];
     for (let ni = 0; ni < nNodes; ni++) {
       if (!nodes[ni].fixed) continue;
@@ -728,5 +783,5 @@
     }
   }
 
-  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis };
+  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis };
 })();

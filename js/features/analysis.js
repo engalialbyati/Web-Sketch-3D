@@ -127,91 +127,173 @@
     return { nodes, frames, shells, meta };
   }
 
-  // ============================================================== load cases
-  // DL: self-weight of the structural elements (kN → N)
-  // LL: area loads on the slabs (tributary → nodal loads)
-  // Each load vector is a Map nodeIdx → [fx, fy, fz, mx, my, mz]
+  // ============================================================ load patterns
+  // ETABS-style: named patterns (Dead/Live/Wind/...), each with a self-weight
+  // multiplier and optional default area pressures; loads are ASSIGNED to
+  // elements (ent.params.loads) per pattern and combined automatically per
+  // ACI 318-19. Patterns live on the model so they persist with saves.
+  const DEFAULT_PATTERNS = () => ([
+    { id: 'DL', name: 'Dead', type: 'dead', swMult: 1, slab: 0, wall: 0 },
+    { id: 'SDL', name: 'SuperImposed Dead', type: 'dead', swMult: 0, slab: 1.5, wall: 0 },
+    { id: 'LL', name: 'Live', type: 'live', swMult: 0, slab: 2, wall: 0 },
+    { id: 'WL', name: 'Wind', type: 'wind', swMult: 0, slab: 0, wall: 1 },
+  ]);
+
+  function getPatterns(app) {
+    if (!app.model.loadPatterns) app.model.loadPatterns = DEFAULT_PATTERNS();
+    return app.model.loadPatterns;
+  }
+
+  // direction name → unit vector in GLOBAL axes (model frame, Z up)
+  const DIRS = {
+    gravity: [0, 0, -1], '-z': [0, 0, -1], '+z': [0, 0, 1],
+    '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0],
+  };
+
+  // Build every pattern's load state:
+  //   loads: { patternId: Map nodeIdx → [fx..mz] in N }
+  //   memberLoads: { patternId: array aligned with mesh.frames of null|{wy,wz} }
+  //     (uniform frame loads in LOCAL element coords, N/mm)
+  // Explicit per-entity assignments (ent.params.loads) override the pattern's
+  // default area pressures; entities without an assignment get the default.
   function buildLoads(app, mesh, opts = {}) {
-    const G = window.G;
-    const m = app.model;
-    const loads = { DL: new Map(), SDL: new Map(), LL: new Map(), WL: new Map() };
-    const add = (caseName, ni, vals) => {
-      const map = loads[caseName];
+    const patterns = getPatterns(app).map(p => ({ ...p }));
+    // quick-run overrides from the Analyze dialog keep the old one-click flow
+    const byId = Object.fromEntries(patterns.map(p => [p.id, p]));
+    if (opts.liveLoad != null && byId.LL) byId.LL.slab = opts.liveLoad;
+    if (opts.superDead != null && byId.SDL) byId.SDL.slab = opts.superDead;
+    if (opts.wind != null && byId.WL) byId.WL.wall = opts.wind;
+
+    const loads = {}, memberLoads = {};
+    for (const p of patterns) { loads[p.id] = new Map(); memberLoads[p.id] = new Array(mesh.frames.length).fill(null); }
+    const add = (pid, ni, vals) => {
+      const map = loads[pid];
+      if (!map) return;
       if (!map.has(ni)) map.set(ni, [0, 0, 0, 0, 0, 0]);
       for (let i = 0; i < 6; i++) map.get(ni)[i] += vals[i] || 0;
     };
-    // --- self-weight DL: element weight distributed to its two nodes
-    for (const fr of mesh.frames) {
-      const a = mesh.nodes[fr.ni], b = mesh.nodes[fr.nj];
-      const L = G.dist(a, b); // m
-      const w = (fr.A / 1e6) * CONCRETE.density; // kN/m
-      const fz = -w * L / 2 * 1000;               // N (down)
-      add('DL', fr.ni, [0, 0, fz]);
-      add('DL', fr.nj, [0, 0, fz]);
+
+    // --- self-weight: distributed to nodes, scaled by the pattern's SW mult
+    for (const p of patterns) {
+      if (!p.swMult) continue;
+      for (const fr of mesh.frames) {
+        const a = mesh.nodes[fr.ni], b = mesh.nodes[fr.nj];
+        const L = window.G.dist(a, b); // m
+        const w = (fr.A / 1e6) * CONCRETE.density * p.swMult; // kN/m
+        const fz = -w * L / 2 * 1000;                          // N (down)
+        add(p.id, fr.ni, [0, 0, fz]);
+        add(p.id, fr.nj, [0, 0, fz]);
+      }
+      for (const sh of mesh.shells) {
+        const area = shellArea(mesh, sh);
+        const w = (sh.t / 1000) * CONCRETE.density * p.swMult;
+        const fz = -w * area / 3 * 1000;
+        add(p.id, sh.n1, [0, 0, fz]);
+        add(p.id, sh.n2, [0, 0, fz]);
+        add(p.id, sh.n3, [0, 0, fz]);
+      }
     }
-    for (const sh of mesh.shells) {
-      const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
-      const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2; // m² (nodes are meters)
-      const w = (sh.t / 1000) * CONCRETE.density;
-      const fz = -w * area / 3 * 1000;
-      add('DL', sh.n1, [0, 0, fz]);
-      add('DL', sh.n2, [0, 0, fz]);
-      add('DL', sh.n3, [0, 0, fz]);
+
+    // --- entity assignments + default area pressures
+    const assigned = new Set(); // `patternId:entityId` pairs
+    for (const ent of app.bim.entities) {
+      const list = ent.params && ent.params.loads;
+      if (!Array.isArray(list)) continue;
+      for (const a of list) {
+        if (!loads[a.pattern]) continue;
+        assigned.add(a.pattern + ':' + ent.id);
+        if (a.kind === 'udl') applyFrameUDL(mesh, memberLoads[a.pattern], ent, a);
+        else if (a.kind === 'pressure') applyShellPressure(mesh, add, a, ent);
+      }
     }
-    // --- LL: user override or default 2 kPa on slab nodes (tributary-free:
-    // apply per slab triangle / 3)
-    const qLL = (opts.liveLoad != null ? opts.liveLoad : 2) * 1000; // N/m²
-    const qSDL = (opts.superDead != null ? opts.superDead : 1.5) * 1000;
-    for (const sh of mesh.shells) {
-      if (sh.kind !== 'slab') continue;
-      const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
-      const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2; // m²
-      const fLL = -qLL * area / 3;
-      const fSDL = -qSDL * area / 3;
-      add('LL', sh.n1, [0, 0, fLL]);
-      add('LL', sh.n2, [0, 0, fLL]);
-      add('LL', sh.n3, [0, 0, fLL]);
-      add('SDL', sh.n1, [0, 0, fSDL]);
-      add('SDL', sh.n2, [0, 0, fSDL]);
-      add('SDL', sh.n3, [0, 0, fSDL]);
+    // pattern defaults fill only unassigned entities
+    for (const p of patterns) {
+      if (!(p.slab > 0) && !(p.wall > 0)) continue;
+      for (const ent of app.bim.entities) {
+        if (assigned.has(p.id + ':' + ent.id)) continue;
+        const isSlab = ['floor', 'slab'].includes(ent.type);
+        const isWall = ent.type === 'wall' || ent.type === 'shearwall';
+        if (isSlab && p.slab > 0) applyShellPressure(mesh, add, { pattern: p.id, q: p.slab, dir: 'gravity' }, ent);
+        if (isWall && p.wall > 0) applyShellPressure(mesh, add, { pattern: p.id, q: p.wall, dir: '+x' }, ent);
+      }
     }
-    // --- WL: user override or default 1 kPa on wall-shell nodes (horizontal)
-    const qWL = (opts.wind != null ? opts.wind : 1) * 1000;
-    for (const sh of mesh.shells) {
-      if (sh.kind !== 'wall') continue;
-      const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
-      const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2; // m²
-      const fx = qWL * area / 3;
-      add('WL', sh.n1, [fx, 0, 0]);
-      add('WL', sh.n2, [fx, 0, 0]);
-      add('WL', sh.n3, [fx, 0, 0]);
-    }
-    return loads;
+    return { patterns, loads, memberLoads };
   }
 
-  // ACI 318-19 §5.3.1 strength combinations
-  const COMBINATIONS = [
-    { name: '1.4D', factors: { DL: 1.4 } },
-    { name: '1.2D+1.6L+0.5S', factors: { DL: 1.2, SDL: 1.2, LL: 1.6 } },
-    { name: '1.2D+1.6S+0.5L', factors: { DL: 1.2, SDL: 1.6, LL: 0.5 } },
-    { name: '1.2D+1.0W+1.0L', factors: { DL: 1.2, SDL: 1.2, WL: 1.0, LL: 1.0 } },
-    { name: '0.9D+1.0W', factors: { DL: 0.9, WL: 1.0 } },
-  ];
+  function shellArea(mesh, sh) {
+    const G = window.G;
+    const p1 = mesh.nodes[sh.n1], p2 = mesh.nodes[sh.n2], p3 = mesh.nodes[sh.n3];
+    return G.len(G.cross(G.sub(p2, p1), G.sub(p3, p1))) / 2; // m²
+  }
 
-  function combineLoads(mesh, loads, combo) {
+  // uniform frame load (kN/m) in a global direction → local wy/wz per element
+  function applyFrameUDL(mesh, mlArray, ent, a) {
+    const FEA = window.FEA;
+    const dir = DIRS[a.dir || 'gravity'] || DIRS.gravity;
+    const w = a.w; // kN/m == N/mm
+    mesh.frames.forEach((fr, idx) => {
+      if (fr.entityId !== ent.id) return;
+      const R = FEA.rotationMatrix(mesh.nodes[fr.ni], mesh.nodes[fr.nj]);
+      const wy = (dir[0] * R[1][0] + dir[1] * R[1][1] + dir[2] * R[1][2]) * w;
+      const wz = (dir[0] * R[2][0] + dir[1] * R[2][1] + dir[2] * R[2][2]) * w;
+      const cur = mlArray[idx] || { wy: 0, wz: 0 };
+      cur.wy += wy; cur.wz += wz;
+      mlArray[idx] = cur;
+    });
+  }
+
+  // uniform pressure (kPa) in a global direction → consistent nodal loads
+  function applyShellPressure(mesh, add, a, ent) {
+    const dir = DIRS[a.dir || 'gravity'] || DIRS.gravity;
+    const q = a.q * 1000; // N/m²
+    for (const sh of mesh.shells) {
+      if (sh.entityId !== ent.id) continue;
+      const area = shellArea(mesh, sh);
+      const f = [q * area / 3 * dir[0], q * area / 3 * dir[1], q * area / 3 * dir[2]];
+      add(a.pattern, sh.n1, f);
+      add(a.pattern, sh.n2, f);
+      add(a.pattern, sh.n3, f);
+    }
+  }
+
+  // ACI 318-19 §5.3.1 strength combinations built from the pattern TYPES:
+  // D = dead patterns (incl. self-weight), L = live, W = wind, S = snow/roof.
+  function buildCombinations(patterns) {
+    const g = t => patterns.filter(p => p.type === t).map(p => p.id);
+    const D = g('dead'), L = g('live'), W = g('wind'), S = g('snow'), Lr = g('roof');
+    const Sr = S.length ? S : Lr;
+    const mk = name => ({ name, factors: {} });
+    const c1 = mk('1.4D'); for (const id of D) c1.factors[id] = 1.4;
+    const c2 = mk('1.2D+1.6L+0.5S'); for (const id of D) c2.factors[id] = 1.2; for (const id of L) c2.factors[id] = 1.6; for (const id of Sr) c2.factors[id] = 0.5;
+    const c3 = mk('1.2D+1.6S+0.5L'); for (const id of D) c3.factors[id] = 1.2; for (const id of Sr) c3.factors[id] = 1.6; for (const id of L) c3.factors[id] = 0.5;
+    const c4 = mk('1.2D+1.0W+1.0L'); for (const id of D) c4.factors[id] = 1.2; for (const id of W) c4.factors[id] = 1.0; for (const id of L) c4.factors[id] = 1.0;
+    const c5 = mk('0.9D+1.0W'); for (const id of D) c5.factors[id] = 0.9; for (const id of W) c5.factors[id] = 1.0;
+    return [c1, c2, c3, c4, c5];
+  }
+  const COMBINATIONS = buildCombinations(DEFAULT_PATTERNS());
+
+  // merge a combination: nodal maps + member loads, both scaled by factors
+  function combineLoads(mesh, loadState, combo) {
     const merged = new Map();
+    const ml = new Array(mesh.frames.length).fill(null);
     for (const [pat, factor] of Object.entries(combo.factors)) {
-      const lv = loads[pat];
+      const lv = loadState.loads[pat];
       if (!lv) continue;
       for (const [ni, vals] of lv) {
         if (!merged.has(ni)) merged.set(ni, [0, 0, 0, 0, 0, 0]);
         for (let i = 0; i < 6; i++) merged.get(ni)[i] += factor * vals[i];
       }
+      const mls = loadState.memberLoads[pat];
+      if (mls) mls.forEach((m, i) => {
+        if (!m) return;
+        const cur = ml[i] || { wy: 0, wz: 0 };
+        cur.wy += factor * (m.wy || 0);
+        cur.wz += factor * (m.wz || 0);
+        ml[i] = cur;
+      });
     }
-    return merged;
+    const anyML = ml.some(m => m);
+    return { nodal: merged, memberLoads: anyML ? ml : null };
   }
 
   // ================================================== run + envelope design
@@ -223,13 +305,14 @@
     if (!mesh.frames.length && !mesh.shells.length) {
       return { error: 'No structural elements found — draw columns, beams, walls or slabs first' };
     }
-    const loads = buildLoads(app, mesh, opts);
+    const loadState = buildLoads(app, mesh, opts);
+    const combos = buildCombinations(loadState.patterns);
     const frameIndex = new Map(mesh.frames.map((f, i) => [f, i]));
     const results = [];
-    for (const combo of COMBINATIONS) {
-      const combined = combineLoads(mesh, loads, combo);
-      if (!combined.size) continue;
-      let sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined]);
+    for (const combo of combos) {
+      const combined = combineLoads(mesh, loadState, combo);
+      if (!combined.nodal.size && !combined.memberLoads) continue;
+      let sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined.nodal], { memberLoads: combined.memberLoads });
       let geo = null, iterations = 0;
       if (opts.pDelta) {
         // P-delta: iterate the geometric stiffness from the current axial
@@ -239,7 +322,7 @@
         for (iterations = 1; iterations <= 6; iterations++) {
           geo = new Array(mesh.frames.length).fill(null);
           for (const fe of sol.frames) geo[frameIndex.get(fe.el)] = -fe.forces[0];
-          const next = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined], { geo });
+          const next = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [combined.nodal], { geo, memberLoads: combined.memberLoads });
           let dMax = 0, uMax = 1e-12;
           for (let i = 0; i < mesh.nodes.length * 6; i++) {
             const du = Math.abs((next.U[0][i] || 0) - (sol.U[0][i] || 0));
@@ -250,7 +333,7 @@
           if (dMax < 1e-6 * Math.max(uMax, 1e-9) || dMax < 1e-9) break;
         }
       }
-      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, mesh.shells, [combined], sol.U, { geo });
+      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, mesh.shells, [combined.nodal], sol.U, { geo, memberLoads: combined.memberLoads });
       results.push({ combo: combo.name, U: sol.U[0], frames: sol.frames, reactions, pDeltaIterations: iterations });
     }
     // envelope per frame element
@@ -261,8 +344,24 @@
         if (!fe) continue;
         // local: [fx1, fy1, fz1, mx1, my1, mz1, fx2, ...]
         const axial = Math.abs(fe.forces[0]);
-        const Mz1 = Math.abs(fe.forces[5]); // bending about local z
-        const My1 = Math.abs(fe.forces[4]);
+        // span loads superpose their parabolic hump between the end values —
+        // end moments alone would miss the wL²/8 midspan of a UDL
+        let Mz1 = Math.abs(fe.forces[5]); // bending about local z
+        let My1 = Math.abs(fe.forces[4]);
+        if (fe.wl) {
+          const a = mesh.nodes[fe.el.ni], b = mesh.nodes[fe.el.nj];
+          const Lmm = window.G.dist(a, b) * 1000;
+          const hump = (wy, wz) => {
+            let best = 0;
+            for (let st = 1; st < 8; st++) {
+              const t = st / 8;
+              best = Math.max(best, Math.abs(wy * t * (1 - t) * Lmm * Lmm / 2));
+            }
+            return best;
+          };
+          Mz1 = Math.max(Mz1, hump(fe.wl.wy || 0, 0));
+          My1 = Math.max(My1, hump(fe.wl.wz || 0, 0));
+        }
         const M = Math.max(Mz1, My1);
         const Vy = Math.abs(fe.forces[1]);
         const Vz = Math.abs(fe.forces[2]);
@@ -281,7 +380,7 @@
         if (dx > maxDrift) { maxDrift = dx; maxNode = i; }
       }
     }
-    return { mesh, loads, results, envelope, maxDrift, maxNode, combos: COMBINATIONS.map(c => c.name) };
+    return { mesh, loadState, results, envelope, maxDrift, maxNode, combos: combos.map(c => c.name), patterns: loadState.patterns };
   }
 
   // Design every beam and column in the model against the envelope
@@ -354,5 +453,5 @@
     };
   }
 
-  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, COMBINATIONS, CONCRETE };
+  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, COMBINATIONS, CONCRETE, getPatterns, DEFAULT_PATTERNS, buildCombinations, DIRS };
 })();

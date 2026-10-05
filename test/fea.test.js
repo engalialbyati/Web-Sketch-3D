@@ -425,6 +425,90 @@ module.exports = h => {
     ok(/SDL/.test(loaded.massSource), 'mass source reports SDL: ' + loaded.massSource);
   });
 
+  // ============================================ member loads (ETABS UDLs)
+  test('member load: cantilever UDL δ = wL⁴/8EI, M = wL²/2', () => {
+    const E = 1000, A = 1e4, I = 1e6, w = 10; // N/mm down
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] },
+      { x: 1, y: 0, z: 0 },
+    ];
+    const sol = FEA.assembleAndSolve(nodes, [{ ni: 0, nj: 1, E, A, Iy: I, Iz: I, J: 1e5 }],
+      [], [new Map()], { memberLoads: [{ wy: -w, wz: 0 }] });
+    near(sol.U[0][8], -1250, 1, 'cantilever UDL tip deflection wL⁴/8EI');
+    near(sol.frames[0].forces[5] / 1e6, 5.0, 0.01, 'fixed-end moment wL²/2');
+    ok(sol.frames[0].wl && sol.frames[0].wl.wy === -w, 'span load reported with the results');
+  });
+
+  test('member load: simply supported UDL 5wL⁴/384EI, M_mid = wL²/8', () => {
+    const E = 1000, A = 1e4, I = 1e6, w = 10;
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 0, 0, 0] },
+      { x: 0.5, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0, fixed: [1, 1, 1, 0, 0, 0] },
+    ];
+    const fr = [
+      { ni: 0, nj: 1, E, A, Iy: I, Iz: I, J: 1e5 },
+      { ni: 1, nj: 2, E, A, Iy: I, Iz: I, J: 1e5 },
+    ];
+    const sol = FEA.assembleAndSolve(nodes, fr, [], [new Map()],
+      { memberLoads: [{ wy: -w, wz: 0 }, { wy: -w, wz: 0 }] });
+    near(sol.U[0][8], -130.2, 0.5, 'midspan deflection 5wL⁴/384EI');
+    near(sol.frames[0].forces[5] / 1e6, 0, 0.01, 'support moment ~0');
+    near(sol.frames[0].forces[11] / 1e6, 1.25, 0.01, 'midspan moment wL²/8');
+    const re = FEA.computeReactions(nodes, fr, [], [new Map()], sol.U,
+      { memberLoads: [{ wy: -w, wz: 0 }, { wy: -w, wz: 0 }] });
+    near(re[0].R[2] / 1000, 5, 0.01, 'support reaction wL/2');
+  });
+
+  test('load patterns: defaults, custom patterns join the ACI combos', () => {
+    const SA = StructuralAnalysis;
+    eq(SA.DEFAULT_PATTERNS().length, 4, 'four default patterns');
+    const combos = SA.buildCombinations([
+      ...SA.DEFAULT_PATTERNS(),
+      { id: 'CL', name: 'Cladding', type: 'dead', swMult: 0, slab: 0, wall: 0 },
+      { id: 'L2', name: 'Storage live', type: 'live', swMult: 0, slab: 4, wall: 0 },
+    ]);
+    eq(combos.length, 5, 'five combos');
+    const c1 = combos[0]; // 1.4D
+    ok(c1.factors.DL === 1.4 && c1.factors.SDL === 1.4 && c1.factors.CL === 1.4, 'custom dead pattern joins 1.4D');
+    const c2 = combos[1]; // 1.2D+1.6L+0.5S
+    ok(c2.factors.LL === 1.6 && c2.factors.L2 === 1.6, 'custom live pattern joins the 1.6L group');
+    eq(c2.factors.WL, undefined, 'wind stays out of the gravity combo');
+  });
+
+  test('assign pipeline: UDL on a beam → envelope moment wL²/8 under 1.6L', () => {
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const app7 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    const beam = bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    // ETABS-style assignment: 10 kN/m live on the beam (params persist it)
+    beam.params.loads = [{ pattern: 'LL', kind: 'udl', w: 10, dir: 'gravity' }];
+    const res = StructuralAnalysis.runAnalysis(app7, { liveLoad: 0, superDead: 0 });
+    ok(!res.error, 'analysis runs with the assignment');
+    const beamEnv = res.envelope.filter(e => e.kind === 'beam' && e.entityId === beam.id);
+    const M = Math.max(...beamEnv.map(e => e.maxM)) / 1e6;
+    // 1.6L governs: 1.6 · 10 kN/m over 6 m → simply supported wL²/8 = 72 kN·m
+    // (frame action trims the ends; the envelope end-moment is lower, the
+    // midspan hump is captured by subdivided segments ~66-72)
+    ok(M > 30 && M < 80, 'assigned UDL produces beam moment, got ' + M.toFixed(1) + ' kN·m');
+    ok(res.envelope.filter(e => e.kind === 'column').every(e => e.maxN > 0), 'UDL reaches the columns');
+    // the pattern defaults were overridden (liveLoad: 0 must not double-count)
+    const gov = beamEnv.find(e => e.maxM === Math.max(...beamEnv.map(x => x.maxM)));
+    ok(/1.6L|1.0W/.test(gov.gov), 'live combo governs: ' + gov.gov);
+  });
+
   test('shells: slab participates in the static solve (shellK regression)', () => {
     // shellK used to throw the moment any wall/slab entered the mesh
     // (a number×array coercion NaN'd the constitutive matrix) — no
@@ -449,8 +533,9 @@ module.exports = h => {
     const st = StructuralAnalysis.runAnalysis(app6, {});
     ok(!st.error, 'static analysis with slab shells runs');
     ok(st.mesh.shells.length >= 2, 'slab meshed into shell triangles');
-    // 1.4D: columns 2×6.48 + beam 0.3×0.5×6·24 = 21.6 + slab 0.15·24 m²·24 kN/m³ = 86.4
+    // 1.4D includes every dead pattern: columns 12.96 + beam 21.6 + slab 86.4
+    // + SDL default 1.5 kPa·24 m² = 36 kN → 156.96 kN × 1.4
     const rz = st.results[0].reactions.reduce((a, r) => a + r.R[2], 0) / 1000;
-    near(rz, 1.4 * (2 * 6.48 + 21.6 + 86.4), 3, 'ΣRz = 1.4·self-weight incl. slab');
+    near(rz, 1.4 * (2 * 6.48 + 21.6 + 86.4 + 1.5 * 24), 3, 'ΣRz = 1.4·D (frames + slab + SDL)');
   });
 };

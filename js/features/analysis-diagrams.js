@@ -182,8 +182,14 @@
       if (st.type === 'moment') { v0 = pairs.moment[0]; v1 = pairs.moment[1]; }
       else if (st.type === 'shear') { v0 = pairs.shear[0]; v1 = pairs.shear[1]; }
       else { v0 = -fe.forces[0]; v1 = -fe.forces[6]; } // axial, tension+
+      const wl = fe.wl || {};
+      const wSpan = st.type === 'moment' ? (pairs.axis === 'z' ? (wl.wz || 0) : (wl.wy || 0)) : 0;
       els.push({ fr, fe, a, b, len, pairs, v0, v1 });
-      gMax = Math.max(gMax, Math.abs(v0), Math.abs(v1));
+      // scale must size the parabolic hump too, not just the end values
+      for (let s = 0; s <= 4; s++) {
+        const t = s / 4;
+        gMax = Math.max(gMax, Math.abs(v0 + (v1 - v0) * t - wSpan * t * (1 - t) * len * len * 5e5));
+      }
     }
     if (gMax < 1e-9) {
       buildChip(app, T, res.combo, 'no ' + st.type + ' in this combination');
@@ -203,11 +209,18 @@
       const { a, b, len, pairs } = e;
       const ax = pairs.axis === 'z' ? localAxes(a, b).z : localAxes(a, b).y;
       const dir = { x: (b.x - a.x) / len, y: (b.y - a.y) / len, z: (b.z - a.z) / len };
+      // span loads superpose their parabolic/free bending on the linear
+      // interpolation of the end values (exact for uniform loads)
+      const wl = e.fe.wl || {};
+      const wSpan = st.type === 'moment'
+        ? (pairs.axis === 'z' ? (wl.wz || 0) : (wl.wy || 0)) : 0;
+      // w in N/mm, len in m → span moment term in N·mm (len_mm² = len²·1e6)
+      const vAt = t => e.v0 + (e.v1 - e.v0) * t - wSpan * t * (1 - t) * len * len * 5e5;
       // station points on the offset curve + on the axis
       const curve = [], axis = [];
       for (let s = 0; s <= NSEG; s++) {
         const t = s / NSEG;
-        const v = e.v0 + (e.v1 - e.v0) * t;
+        const v = vAt(t);
         const px = a.x + dir.x * len * t, py = a.y + dir.y * len * t, pz = a.z + dir.z * len * t;
         axis.push(new THREE.Vector3(px, py, pz));
         curve.push(new THREE.Vector3(px + ax[0] * v * unitScale, py + ax[1] * v * unitScale, pz + ax[2] * v * unitScale));
@@ -226,10 +239,10 @@
       // remember the extreme station of this element for labeling
       let best = 0, bi = 0;
       for (let s = 0; s <= NSEG; s++) {
-        const v = Math.abs(e.v0 + (e.v1 - e.v0) * s / NSEG);
+        const v = Math.abs(vAt(s / NSEG));
         if (v > best) { best = v; bi = s; }
       }
-      labels.push({ p: curve[bi], v: e.v0 + (e.v1 - e.v0) * bi / NSEG });
+      labels.push({ p: curve[bi], v: vAt(bi / NSEG) });
     }
     // value labels: largest stations, capped, and only significant values
     // (a wall of tiny numbers at diagram peaks reads as noise)
