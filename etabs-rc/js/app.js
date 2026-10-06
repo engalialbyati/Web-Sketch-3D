@@ -595,7 +595,7 @@
   // ---------------------------------------------------------------- analyze
   UI.runAnalysis = function () {
     const t0 = performance.now();
-    const res = RCModel.runAnalysis(app.model, { pDelta: true });
+    const res = RCModel.runAnalysis(app.model, {}); // standard linear
     const ms = Math.round(performance.now() - t0);
     if (res.error) { UI.toast(res.error, true); return; }
     // bbox for diagram scaling
