@@ -863,6 +863,21 @@
         Rcur = nxt;
       }
     }
+    // pad with M-orthogonalized coordinate directions when the starts
+    // deflated early — a complete span keeps sum(gamma^2) = total mass
+    for (let i = 0; i < nt && psi.length < p; i++) {
+      const v = new Float64Array(nt);
+      v[i] = 1;
+      for (const q of psi) {
+        let d2 = 0;
+        for (let k = 0; k < nt; k++) d2 += q[k] * Mr[k] * v[k];
+        for (let k = 0; k < nt; k++) v[k] -= d2 * q[k];
+      }
+      let nrm = 0;
+      for (let k = 0; k < nt; k++) nrm += Mr[k] * v[k] * v[k];
+      nrm = Math.sqrt(Math.max(nrm, 0));
+      if (nrm > 1e-14) { for (let k = 0; k < nt; k++) v[k] /= nrm; psi.push(v); }
+    }
     if (!psi.length) return { modes: [], mechanisms: 0 };
 
     // projected pair on span(psi): Kpsi = Ks*psi_k first, then the Gram sums
@@ -896,9 +911,14 @@
 
     const modes = [];
     let mechanisms = 0;
-    let mTot = 0;
-    for (let i = 0; i < nt; i++) mTot += Mr[i];
-    if (!(mTot > 0)) mTot = 1;
+    // per-direction total mass (isotropic lumped mass: same value each way)
+    const mTotDir = { x: 0, y: 0, z: 0 };
+    ft.forEach((d, k) => {
+      if (d % 6 === 0) mTotDir.x += Mr[k];
+      else if (d % 6 === 1) mTotDir.y += Mr[k];
+      else if (d % 6 === 2) mTotDir.z += Mr[k];
+    });
+    ['x', 'y', 'z'].forEach(dd => { if (!(mTotDir[dd] > 0)) mTotDir[dd] = 1; });
     for (let i = 0; i < values.length && modes.length < nWanted; i++) {
       let omega2 = values[i] - alpha; // remove the Rayleigh shift
       if (!isFinite(omega2)) { mechanisms++; continue; }
@@ -925,16 +945,20 @@
       let mNorm = 0;
       for (let k = 0; k < nt; k++) mNorm += Mr[k] * xt[k] * xt[k];
       if (mNorm > 0) { const sc = 1 / Math.sqrt(mNorm); for (let k = 0; k < nt; k++) phi[ft[k]] *= sc; }
+      // SIGNED participation factors Γ (modal force sign matters for CQC
+      // cross terms) + the mass-ratio squares
       const massRatio = { x: 0, y: 0, z: 0 };
+      const gammaDir = { x: 0, y: 0, z: 0 };
       const comps = [['x', 0], ['y', 1], ['z', 2]];
       for (let c = 0; c < 3; c++) {
         const key = comps[c][0], comp = comps[c][1];
         let gamma = 0;
         ft.forEach((d, k) => { if (d % 6 === comp) gamma += Mr[k] * (phi[d] || 0); });
-        massRatio[key] = gamma * gamma / mTot;
+        gammaDir[key] = gamma;
+        massRatio[key] = gamma * gamma / mTotDir[key];
       }
       const omega = Math.sqrt(omega2);
-      modes.push({ f: omega / (2 * Math.PI), T: omega > 0 ? 2 * Math.PI / omega : Infinity, phi, massRatio });
+      modes.push({ f: omega / (2 * Math.PI), T: omega > 0 ? 2 * Math.PI / omega : Infinity, phi, massRatio, gamma: gammaDir });
     }
     return { modes, mechanisms };
   }

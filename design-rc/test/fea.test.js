@@ -774,6 +774,65 @@ module.exports = h => {
     ok(Array.isArray(res.storyDrift) && res.storyDrift.length >= 1, 'story drift rows computed');
     ok(res.maxDriftRatio > 0, 'max drift ratio positive: ' + res.maxDriftRatio.toFixed(5));
   });
+
+  // ================================== response spectrum (ASCE 7-16 §12.9)
+  test('spectrum: ASCE 7 §11.4.5 design spectrum shape', () => {
+    const sp = T => StructuralAnalysis.asceSpectrum(T, { sds: 1.0, sd1: 0.6, tl: 4 });
+    near(sp(0), 0.4, 1e-6, 'Sa(0) = 0.4·SDS');
+    near(sp(0.06), 0.7, 1e-6, 'linear ramp to the plateau');
+    near(sp(0.6), 1.0, 1e-6, 'plateau Sa = SDS up to TS');
+    near(sp(2), 0.3, 1e-6, 'SD1/T branch');
+    near(sp(6), 0.6 * 4 / 36, 1e-6, 'SD1·TL/T² tail');
+  });
+
+  test('spectrum: CQC correlation — separated modes decorrelate, equal modes correlate', () => {
+    near(StructuralAnalysis.cqcRho(1, 0.05), 1, 1e-9, 'ρ(β=1) = 1');
+    ok(StructuralAnalysis.cqcRho(0.5, 0.05) < 0.03, 'ρ(β=0.5) ≈ 0 (well separated)');
+    near(StructuralAnalysis.cqcCombine([3, 4], [[1, 0], [0, 1]]), 5, 1e-9, 'uncorrelated CQC = SRSS');
+    near(StructuralAnalysis.cqcCombine([3, 4], [[1, 1], [1, 1]]), 7, 1e-9, 'fully correlated CQC = |sum|');
+  });
+
+  test('spectrum: SDOF base shear = Sa·W·(Ie/R) + missing mass', () => {
+    const THREE = w.THREE;
+    const m = new w.Model();
+    m.levels = [{ id: 'l1', name: 'B', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const appS = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === x.id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'l1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.4, depth: 0.4, height: 6, baseLevel: 'l1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.4, depth: 0.4, height: 6, baseLevel: 'l1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 6], [6, 0, 6]], height: 0.6, webWidth: 0.3, baseLevel: 'l1' }, {}, []);
+    m.autoSeismic = { sds: 1.0, sd1: 0.6, R: 8, Ie: 1, tl: 4 };
+    const res = StructuralAnalysis.runSpectrum(appS, { superDead: 0, liveLoad: 0, dirs: ['x'] });
+    ok(!res.error, 'spectrum runs');
+    // free mass = 5.0 t (column tops + beam, bases fixed): plateau Sa·Ie/R = 0.125 g
+    // V = 0.125·9.81·5.0 = 6.13 kN; CQC + missing lands within ~2%
+    ok(res.dirs.x.cumMass > 0.95, 'dominant mode captures ≥95% of the direction mass: ' + res.dirs.x.cumMass.toFixed(3));
+    near(res.dirs.x.baseShear.total, 6.13, 0.25, 'base shear Sa·W·Ie/R');
+    ok(res.dirs.x.frames.length >= 3, 'CQC member forces produced');
+    ok(res.dirs.x.frames.every(fr => fr.forces.every(v => v >= 0)), 'CQC values are absolute');
+  });
+
+  test('seismic combos: ρ multiplies E, Ω₀ adds overstrength combos', () => {
+    const combos = StructuralAnalysis.buildCombinations([
+      { id: 'DL', type: 'dead' }, { id: 'LL', type: 'live' }, { id: 'EQ', type: 'quake' },
+    ], { sds: 1.0, rho: 1.3, omega: 2.5 });
+    const names = combos.map(c => c.name);
+    ok(names.includes('Ev+Eh+D+L'), 'basic seismic combo present');
+    const c6 = combos.find(c => c.name === 'Ev+Eh+D+L');
+    near(c6.factors.EQ, 1.3, 1e-9, 'E carries the redundancy factor ρ');
+    near(c6.factors.DL, 1.2 + 0.2 * 1.0, 1e-9, 'dead factor includes Ev = 0.2·SDS·D');
+    const c8 = combos.find(c => c.name === 'D+Ω0E+L');
+    ok(c8, 'overstrength combo present');
+    near(c8.factors.EQ, 1.3 * 2.5, 1e-9, 'Emh = ρ·Ω₀·QE');
+  });
   test('modal: pin-based unbraced frame reports its mechanism instead of crashing', () => {
     // two pin-based columns + a beam = a true sway mechanism (0 Hz): the
     // solver must filter it out, count it, and still return the real modes

@@ -447,10 +447,17 @@
     // into the dead factor; rho = 1.0, overstrength not applied)
     if (patterns.some(pp => pp.type === 'quake')) {
       const Q = patterns.filter(pp => pp.type === 'quake').map(pp => pp.id);
-      const sds = sdsIn != null ? sdsIn : 0.2;
-      const c6 = mk('Ev+Eh+D+L'); for (const id of D) c6.factors[id] = 1.2 + 0.2 * sds; for (const id of Q) c6.factors[id] = 1.0; for (const id of L) c6.factors[id] = 0.5;
-      const c7 = mk('0.9D-Ev+Eh'); for (const id of D) c7.factors[id] = 0.9 - 0.2 * sds; for (const id of Q) c7.factors[id] = 1.0;
+      const sds = sdsIn != null ? sdsIn.sds : 0.2;
+      const rho = sdsIn != null && sdsIn.rho > 0 ? sdsIn.rho : 1.0;      // §12.3.4.2 redundancy
+      const omega = sdsIn != null && sdsIn.omega > 0 ? sdsIn.omega : 0; // §12.4.3 overstrength
+      const c6 = mk('Ev+Eh+D+L'); for (const id of D) c6.factors[id] = 1.2 + 0.2 * sds; for (const id of Q) c6.factors[id] = rho; for (const id of L) c6.factors[id] = 0.5;
+      const c7 = mk('0.9D-Ev+Eh'); for (const id of D) c7.factors[id] = 0.9 - 0.2 * sds; for (const id of Q) c7.factors[id] = rho;
       combos.push(c6, c7);
+      if (omega) { // §12.4.3.1 overstrength combos (Emh = Omega0*QE)
+        const c8 = mk('D+Ω0E+L'); for (const id of D) c8.factors[id] = 1.2 + 0.2 * sds; for (const id of Q) c8.factors[id] = rho * omega; for (const id of L) c8.factors[id] = 0.5;
+        const c9 = mk('0.9D+Ω0E'); for (const id of D) c9.factors[id] = 0.9 - 0.2 * sds; for (const id of Q) c9.factors[id] = rho * omega;
+        combos.push(c8, c9);
+      }
     }
     return combos;
   }
@@ -480,6 +487,207 @@
     return { nodal: merged, memberLoads: anyML ? ml : null };
   }
 
+  // ============================================= response spectrum (ASCE 7-16)
+  // §11.4.5/§11.4.6 design spectrum + §12.9 modal response spectrum analysis
+  // with the CQC combination (Der Kiureghian 1981; documented as ETABS's
+  // modal combination in CSI's Analysis Reference) and the §12.9.1.1
+  // missing-mass (rigid) correction.
+  function asceSpectrum(T, o) {
+    if (o == null) o = {};
+    const sds = o.sds != null ? o.sds : 1.0;
+    const sd1 = o.sd1 != null ? o.sd1 : 0.6;
+    const tl = o.tl != null ? o.tl : 4;
+    if (!(T > 0)) return 0.4 * sds; // T = 0 (rigid)
+    const ts = sd1 / sds, t0 = 0.2 * ts;
+    let sa;
+    if (T <= t0) sa = sds * (0.4 + 0.6 * T / t0);
+    else if (T <= ts) sa = sds;
+    else if (T <= tl) sa = sd1 / T;
+    else sa = sd1 * tl / (T * T);
+    return sa;
+  }
+
+  // CQC correlation coefficient, equal modal damping xi (Der Kiureghian 1981;
+  // Chopla eq. 13.8-10 form): beta = w_j/w_i
+  function cqcRho(beta, xi) {
+    if (!(xi > 0)) return beta === 1 ? 1 : 0;
+    if (Math.abs(1 - beta) < 1e-9) return 1;
+    const num = 8 * xi * xi * Math.pow(beta, 1.5) * (1 + beta);
+    const den = (1 - beta * beta) * (1 - beta * beta) + 4 * xi * xi * beta * (1 + beta) * (1 + beta);
+    return Math.max(0, num / den);
+  }
+
+  // Combine signed modal responses R = sqrt(sum_i sum_j r_i r_j rho_ij).
+  function cqcCombine(rs, rhos) {
+    let acc = 0;
+    for (let i = 0; i < rs.length; i++)
+      for (let j = 0; j < rs.length; j++)
+        acc += rs[i] * rs[j] * rhos[i][j];
+    return Math.sqrt(Math.max(acc, 0));
+  }
+
+  // Mass-source extras (SDL + live fraction on slabs) shared by modal and
+  // spectrum — tonnes per node.
+  function massExtra(app, mesh, opts) {
+    const G = window.G;
+    const qSDL = (opts.superDead != null ? opts.superDead : 1.5) * 1000;
+    const llFrac = opts.liveFraction != null ? opts.liveFraction : 0;
+    const qLL = (opts.liveLoad != null ? opts.liveLoad : 2) * 1000;
+    const extra = new Float64Array(mesh.nodes.length);
+    let total = 0;
+    for (const sh of mesh.shells) {
+      if (sh.kind !== 'slab') continue;
+      const area = shellArea(mesh, sh);
+      const m = (qSDL + llFrac * qLL) * area / 3 / 9810;
+      extra[sh.n1] += m; extra[sh.n2] += m; extra[sh.n3] += m;
+      total += 3 * m;
+    }
+    return { extra, total };
+  }
+
+  // Response-spectrum case: Ritz modes -> per-mode static solves scaled by
+  // Sa(T)*Gamma -> CQC per member force + the missing-mass rigid term.
+  // Returns CQC member forces (absolute), story shears, and the modal table.
+  function runSpectrum(app, opts) {
+    if (opts == null) opts = {};
+    const FEA = window.FEA;
+    const mesh = extractMesh(app);
+    if (!mesh.frames.length && !mesh.shells.length)
+      return { error: 'No structural elements found' };
+    const as = app.model.autoSeismic || {};
+    const sds = opts.sds != null ? opts.sds : as.sds != null ? as.sds : 1.0;
+    const sd1 = opts.sd1 != null ? opts.sd1 : as.sd1 != null ? as.sd1 : 0.6;
+    const tl = opts.tl != null ? opts.tl : as.tl || 4;
+    const xi = opts.damping != null ? opts.damping : 0.05;
+    const R = as.R || 8, Ie = as.Ie || 1;
+    const scale = opts.scale != null ? opts.scale : Ie / R;
+    const dirs = opts.dirs || ['x', 'y'];
+    const nModes = opts.nModes || 12;
+
+    const { extra } = massExtra(app, mesh, opts);
+    const modal = FEA.ritzModalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra, 'z');
+    if (!modal.modes.length) return { error: 'No modes found (check supports and mass)' };
+
+    // nodal mass (t): self-weight + extras (same source as the ELF weight)
+    const mNode = new Float64Array(mesh.nodes.length);
+    for (const fr of mesh.frames) {
+      const a = mesh.nodes[fr.ni], b = mesh.nodes[fr.nj];
+      const L = window.G.dist(a, b);
+      const w = (fr.A / 1e6) * CONCRETE.density * L / 2; // kN per end
+      mNode[fr.ni] += w / 9.81; mNode[fr.nj] += w / 9.81;
+    }
+    for (const sh of mesh.shells) {
+      const m = (sh.t / 1000) * CONCRETE.density * shellArea(mesh, sh) / 3 / 9.81;
+      mNode[sh.n1] += m; mNode[sh.n2] += m; mNode[sh.n3] += m;
+    }
+    for (let i = 0; i < mesh.nodes.length; i++) mNode[i] += extra[i] || 0;
+    // participation totals count only mass that can move: fixed nodes
+    // (fully restrained translations) carry no dynamic dofs
+    let mTot = 0;
+    for (let i = 0; i < mesh.nodes.length; i++) {
+      const fx = mesh.nodes[i].fixed;
+      if (fx && fx[0] && fx[1] && fx[2]) continue;
+      mTot += mNode[i];
+    }
+    if (!(mTot > 0)) mTot = 1;
+
+    const modalTable = modal.modes.map(m => ({
+      T: m.T, f: m.f, Sa: asceSpectrum(m.T, { sds, sd1, tl }) * scale,
+      mass: { x: m.massRatio.x, y: m.massRatio.y, z: m.massRatio.z },
+    }));
+
+    const out = { mesh, modes: modalTable, mechanisms: modal.mechanisms, dirs: {} };
+    for (const dir of dirs) {
+      const comp = dir === 'x' ? 0 : dir === 'y' ? 1 : 2;
+      // per-mode member forces (signed) and the CQC weights
+      const modalForces = []; // per mode: array aligned with sol.frames order
+      const gammas = [];
+      let cumMass = 0;
+      const used = [];
+      for (let mi = 0; mi < modal.modes.length; mi++) {
+        const m = modal.modes[mi];
+        const gamma = m.gamma ? m.gamma[dir] : 0;
+        if (Math.abs(gamma) < 1e-12) continue;
+        const sa = asceSpectrum(m.T, { sds, sd1, tl }) * scale;
+        if (!(sa > 0)) continue;
+        // equivalent modal force f = Gamma*Sa*M*phi (N) on global dofs
+        const f = new Map();
+        for (let i = 0; i < mesh.nodes.length; i++) {
+          const fx = comp === 0 ? 1 : 0, fy = comp === 1 ? 1 : 0, fz = comp === 2 ? 1 : 0;
+          const g = m.phi[i * 6 + comp] || 0;
+          // M*phi acts on the SAME dofs as phi moves: mass is isotropic
+          const ff = gamma * sa * mNode[i] * 9.81 * g; // t*9.81 = kN -> N
+          if (Math.abs(ff) > 0) f.set(i, [ff * (comp === 0 ? 1 : 0), ff * (comp === 1 ? 1 : 0), ff * (comp === 2 ? 1 : 0), 0, 0, 0]);
+        }
+        const sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [f]);
+        modalForces.push(sol.frames.map(fr => Float64Array.from(fr.forces)));
+        gammas.push(gamma);
+        cumMass += gamma * gamma / (mTot || 1);
+        used.push(m);
+      }
+      // missing mass (§12.9.1.1): static rigid response of the residual
+      // M*r - sum(Gamma*M*phi) at Sa(0)
+      const fMiss = new Map();
+      const sa0 = asceSpectrum(0, { sds, sd1, tl }) * scale;
+      for (let i = 0; i < mesh.nodes.length; i++) {
+        let resid = mNode[i] * 9.81; // kN in the direction
+        for (let k = 0; k < used.length; k++)
+          resid -= gammas[k] * (used[k].phi[i * 6 + comp] || 0) * mNode[i] * 9.81;
+        if (Math.abs(resid) > 1e-9) fMiss.set(i, [comp === 0 ? resid * 1000 : 0, comp === 1 ? resid * 1000 : 0, 0, 0, 0, 0]);
+      }
+      const missSol = fMiss.size ? FEA.assembleAndSolve(mesh.nodes, mesh.frames, mesh.shells, [fMiss]) : null;
+      // CQC across modes per member force component (+ SRSS of missing mass)
+      const rhos = [];
+      for (let i = 0; i < used.length; i++) {
+        rhos.push([]);
+        for (let j = 0; j < used.length; j++)
+          rhos[i].push(cqcRho(used[j].f / used[i].f, xi));
+      }
+      const framesCQC = mesh.frames.map((fr, fi) => {
+        const out2 = new Float64Array(12);
+        const idx = modalForces.length ? modalForces[0].length : 0;
+        // find this frame in the solved lists (sol.frames aligns with mesh.frames minus skipped)
+        const solIdx = solIndexOf(mesh, fr, fi);
+        for (let k = 0; k < 12; k++) {
+          const rs = [];
+          for (let mi = 0; mi < modalForces.length; mi++) {
+            const fe = modalForces[mi][solIdx];
+            rs.push(fe ? fe[k] : 0);
+          }
+          let val = cqcCombine(rs, rhos);
+          if (missSol && missSol.frames[solIdx]) {
+            const rm = missSol.frames[solIdx].forces[k];
+            val = Math.sqrt(val * val + rm * rm); // rigid part: SRSS
+          }
+          out2[k] = val;
+        }
+        return { el: fr, L: 1, forces: out2 };
+      });
+      // base shear per mode = total applied lateral force = Sa*Gamma^2*g
+      // (kN), CQC-combined + the missing-mass rigid term
+      const vs = used.map((m, k) =>
+        gammas[k] * gammas[k] * asceSpectrum(m.T, { sds, sd1, tl }) * scale * 9.81);
+      const vCQC = cqcCombine(vs, rhos);
+      const vMiss = Math.max(0, 1 - Math.min(cumMass, 1)) * mTot * 9.81 * sa0;
+      out.dirs[dir] = {
+        frames: framesCQC,
+        cumMass,
+        baseShear: { cqc: vCQC, missing: vMiss, total: vCQC + vMiss },
+      };
+    }
+      return out;
+  }
+
+  // sol.frames skips zero-length frames; map mesh index -> solution index
+  function solIndexOf(mesh, fr, fi) {
+    let n = 0;
+    for (let i = 0; i < fi; i++) {
+      const a = mesh.nodes[mesh.frames[i].ni], b = mesh.nodes[mesh.frames[i].nj];
+      if (Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) > 1e-6) n++;
+    }
+    return n;
+  }
+
   // ================================================== run + envelope design
   function runAnalysis(app, opts = {}) {
     const G = window.G;
@@ -491,7 +699,7 @@
     }
     const loadState = buildLoads(app, mesh, opts);
     const as = app.model.autoSeismic;
-    const combos = buildCombinations(loadState.patterns, as && as.sds != null ? as.sds : null);
+    const combos = buildCombinations(loadState.patterns, as || null);
     const frameIndex = new Map(mesh.frames.map((f, i) => [f, i]));
     const results = [];
     for (const combo of combos) {
@@ -676,5 +884,5 @@
     };
   }
 
-  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, COMBINATIONS, CONCRETE, getPatterns, DEFAULT_PATTERNS, buildCombinations, DIRS };
+  window.StructuralAnalysis = { extractMesh, buildLoads, runAnalysis, runDesign, runModal, runSpectrum, asceSpectrum, cqcRho, cqcCombine, massExtra, COMBINATIONS, CONCRETE, getPatterns, DEFAULT_PATTERNS, buildCombinations, DIRS };
 })();

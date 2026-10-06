@@ -254,6 +254,85 @@
     ]);
   }
 
+  // ------------------------------------------------------ Response Spectrum
+  // ASCE 7-16 §12.9 modal response spectrum: Ritz modes scaled by the
+  // §11.4.5 design spectrum, CQC-combined (Der Kiureghian) with the
+  // §12.9.1.1 missing-mass correction. Results join the diagram cycles.
+  function spectrumDialog(app) {
+    const as = app.model.autoSeismic || {};
+    const row = (id, label, val, step) =>
+      `<div class="form-row"><label>${label}</label><input type="number" id="${id}" step="${step || 1}" value="${val}" style="width:90px"></div>`;
+    app.dialog('Response Spectrum — ASCE 7-16 §12.9 (CQC)', `
+      <div class="dim" style="margin:0 0 8px">Modal responses scaled by the §11.4.5 design spectrum and combined by CQC
+      (5% damping default) with the missing-mass correction. Scale = Ie/R unless overridden.</div>
+      ${row('sp-sds', 'SDS (g)', as.sds != null ? as.sds : 1.0, 0.05)}
+      ${row('sp-sd1', 'SD1 (g)', as.sd1 != null ? as.sd1 : 0.6, 0.05)}
+      ${row('sp-tl', 'TL (s)', as.tl || 4, 0.5)}
+      ${row('sp-xi', 'Damping', 0.05, 0.01)}
+      ${row('sp-scale', 'Scale (0 = Ie/R)', 0, 0.01)}
+      ${row('sp-nm', 'Modes', 12, 2)}
+      <div class="form-row"><label>Directions</label><label style="display:flex;gap:10px">
+        <span><input type="checkbox" id="sp-dx" checked> X</span>
+        <span><input type="checkbox" id="sp-dy" checked> Y</span></label></div>
+      <div class="form-row"><label>Superimposed dead (kPa)</label><input type="number" id="sp-sdl" step="0.5" value="1.5" style="width:90px"></div>
+    `, [
+      ['Cancel', null],
+      ['Run Spectrum', () => {
+        const num = id => parseFloat((document.getElementById(id) || {}).value);
+        const dirs = [];
+        if (document.getElementById('sp-dx').checked) dirs.push('x');
+        if (document.getElementById('sp-dy').checked) dirs.push('y');
+        if (!dirs.length) { app.toast('Check at least one direction', true); return false; }
+        app.closeDialog();
+        window.__job = { state: 'running' };
+        setTimeout(() => {
+          try {
+            const res = window.StructuralAnalysis.runSpectrum(app, {
+              sds: num('sp-sds'), sd1: num('sp-sd1'), tl: num('sp-tl'),
+              damping: num('sp-xi'), scale: num('sp-scale') || undefined, nModes: num('sp-nm'),
+              dirs, superDead: num('sp-sdl'),
+            });
+            if (res.error) { app.toast(res.error, true); window.__job = { state: 'error', err: res.error }; return; }
+            app._lastSpectrum = res;
+            // join the diagram cycles as pseudo-combinations
+            if (app._lastAnalysis) {
+              for (const d of dirs) app._lastAnalysis.results.push({ combo: 'Spectrum CQC (' + d.toUpperCase() + ')', U: null, frames: res.dirs[d].frames, reactions: [], spectrum: true });
+              if (window.AnalysisDiagrams) window.AnalysisDiagrams.show(app, 'moment', app._lastAnalysis.results.length - dirs.length);
+            }
+            window.__job = { state: 'done', res };
+          } catch (e) { window.__job = { state: 'error', err: String(e && e.stack || e).slice(0, 300) }; }
+        }, 30);
+        spectrumReport(app);
+        return false;
+      }],
+    ]);
+  }
+
+  function spectrumReport(app) {
+    setTimeout(() => {
+      const job = window.__job;
+      if (!job || job.state !== 'done') { setTimeout(() => spectrumReport(app), 400); return; }
+      const res = job.res;
+      const rows = res.modes.slice(0, 10).map((m, i) => `<tr>
+        <td>${i + 1}</td><td style="text-align:right">${m.T.toFixed(3)} s</td>
+        <td style="text-align:right">${m.Sa.toFixed(3)} g</td>
+        <td style="text-align:right">${(m.mass.x * 100).toFixed(0)}% / ${(m.mass.y * 100).toFixed(0)}% / ${(m.mass.z * 100).toFixed(0)}%</td></tr>`).join('');
+      const bs = Object.entries(res.dirs).map(([d, v]) =>
+        `<div><b>${d.toUpperCase()}:</b> cum mass ${(v.cumMass * 100).toFixed(0)}% · base shear ${v.baseShear.total.toFixed(0)} kN (CQC ${v.baseShear.cqc.toFixed(0)} + missing ${v.baseShear.missing.toFixed(0)})</div>`).join('');
+      app.dialog('Response Spectrum Results — CQC', `
+        ${bs}
+        <div class="dim" style="margin:6px 0">Member forces are absolute CQC values; cycle the diagram chip to view them.</div>
+        <table class="ob-table" style="width:100%;border-collapse:collapse;font-size:11px">
+          <tr style="text-align:left"><th>#</th><th>T</th><th>Sa·scale</th><th>Mass X/Y/Z</th></tr>
+          ${rows}
+        </table>
+      `, [
+        ['Close', null],
+        ['Show Diagrams', () => { app.closeDialog(); if (app._lastAnalysis && window.AnalysisDiagrams) window.AnalysisDiagrams.show(app, 'moment', app._lastAnalysis.results.length - Object.keys(res.dirs).length); return false; }],
+      ]);
+    }, 500);
+  }
+
   // ------------------------------------------------------- Auto Lateral Loads
   // ETABS "Auto Lateral - Seismic/Wind": ASCE 7-16 §12.8 equivalent lateral
   // force (V = Cs·W, vertical distribution wx·hx²) and §26/27 velocity
@@ -370,6 +449,7 @@
   }
 
   window.EtabsUI = {
+    spectrumDialog,
     autoLateralDialog,
     newBuildingDialog, sectionsDialog, replicateDialog, supportsDialog, designPrefsDialog,
     getSections, getPrefs, DEFAULT_SECTIONS, DEFAULT_PREFS, selectedEntities,

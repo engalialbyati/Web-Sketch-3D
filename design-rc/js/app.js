@@ -192,6 +192,7 @@ const ICONS = {
   'etabs-supports': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 4v10"/><path d="M4 20h16"/><path d="M7 14h10l-5 4z"/></svg>',
   'etabs-prefs': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg>',
   'etabs-autolateral': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 20h16"/><path d="M8 20V9l4-5 4 5v11"/><path d="M2 9l2-3 2 3"/></svg>',
+  'analyze-spectrum': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 20c3 0 3-14 6-14s3 10 6 10 3-6 6-6"/><path d="M3 20h18" opacity=".4"/></svg>',
   'design-beams': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 8h18v4H3z"/><path d="M3 16h18"/><circle cx="7" cy="10" r="1" fill="currentColor"/><circle cx="12" cy="10" r="1" fill="currentColor"/><circle cx="17" cy="10" r="1" fill="currentColor"/></svg>',
   'design-columns': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="7" y="3" width="10" height="18"/><path d="M7 7h10M7 11h10M7 15h10"/></svg>',
   'design-check': '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>',
@@ -405,7 +406,7 @@ const RIBBON_TABS = {
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['analyze-run', 'analyze-design'] },
     { title: 'Loads', tools: ['loads-patterns', 'loads-assign', 'etabs-autolateral'] },
-    { title: 'Results', tools: ['analyze-diagrams', 'analyze-modal'] },
+    { title: 'Results', tools: ['analyze-diagrams', 'analyze-modal', 'analyze-spectrum'] },
   ] },
   design: { label: 'Design', groups: [
     { title: 'Concrete', tools: ['design-beams', 'design-columns', 'design-check'] },

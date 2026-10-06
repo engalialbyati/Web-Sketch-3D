@@ -20,12 +20,17 @@ only. Open `design-rc/index.html` (or serve the repo root and visit
    coefficient, Ta = Ct·hn^x, vertical distribution wx·hx², §12.4.2
    combos with Ev = 0.2·SDS·D) and wind §26/27 (qz = 0.613·Kz·Kd·V² by
    exposure) with base-shear reporting.
-8. **Analyze ▸ Run / Modal / Diagrams** — P-delta static analysis with
+8. **Analyze ▸ Response Spectrum** — ASCE 7-16 §12.9 modal response
+   spectrum: Ritz modes scaled by the §11.4.5 design spectrum, CQC
+   combination (Der Kiureghian) with the missing-mass correction,
+   per-direction base shear and mass participation; ρ/Ω₀ enter the
+   §12.4.2/§12.4.3 combos including overstrength.
+9. **Analyze ▸ Run / Modal / Diagrams** — P-delta static analysis with
    story drift ratios (Table 12.12-1 check), force diagrams per
    combination, and modal analysis by load-dependent Ritz vectors
    (Wilson/CSI's documented method, X+Y+Z start loads) with modal
    participating mass ratios; mechanisms are detected and reported.
-9. **Design ▸ Preferences + checks** — fc'/fy/cover/bars feed the ACI
+10. **Design ▸ Preferences + checks** — fc'/fy/cover/bars feed the ACI
    318-19 report with DCRs and REQUIRED steel (As and bar count) per beam.
 
 
