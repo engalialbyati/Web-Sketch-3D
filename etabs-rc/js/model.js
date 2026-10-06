@@ -8,11 +8,11 @@
   const CONCRETE = { Ec: 25000, nu: 0.2, density: 24 }; // MPa, kN/m³
 
   const DEFAULT_SECTIONS = () => ([
-    { id: 'C30x30', kind: 'column', b: 0.30, h: 0.30 },
-    { id: 'C40x40', kind: 'column', b: 0.40, h: 0.40 },
-    { id: 'C40x60', kind: 'column', b: 0.40, h: 0.60 },
-    { id: 'B25x50', kind: 'beam', b: 0.25, h: 0.50 },
-    { id: 'B30x60', kind: 'beam', b: 0.30, h: 0.60 },
+    { id: 'C30x30', kind: 'column', b: 0.30, h: 0.30, material: 'C30' },
+    { id: 'C40x40', kind: 'column', b: 0.40, h: 0.40, material: 'C40' },
+    { id: 'C40x60', kind: 'column', b: 0.40, h: 0.60, material: 'C40' },
+    { id: 'B25x50', kind: 'beam', b: 0.25, h: 0.50, material: 'C30' },
+    { id: 'B30x60', kind: 'beam', b: 0.30, h: 0.60, material: 'C30' },
   ]);
 
   const DEFAULT_PATTERNS = () => ([
@@ -22,24 +22,45 @@
     { id: 'WINDX', name: 'Wind X', type: 'wind', swMult: 0 },
   ]);
 
+  const DEFAULT_MATERIALS = () => ([
+    { id: 'C30', name: 'Concrete C30', Ec: 25000, density: 24, fc: 30 },
+    { id: 'C40', name: 'Concrete C40', Ec: 28000, density: 25, fc: 40 },
+  ]);
+
+  // ETABS Define > Mass Source: self-weight multipliers, additional joint
+  // masses, and a live-load fraction — used by modal + auto seismic weight
+  const DEFAULT_MASS_SOURCE = () => ({ selfWeight: true, additional: true, livePattern: null, liveFraction: 0 });
+
   function newModel() {
     return {
       v: 1,
       stories: [{ name: 'Story1', elevation: 0 }],
       storyHeight: 3,
       grids: { x: [], y: [] },
-      joints: [],   // {id, x, y, z, restraint: null | 'fixed' | 'pinned'}
-      frames: [],   // {id, kind, i, j, section}
+      joints: [],   // {id, x, y, z, restraint: null|'fixed'|'pinned'|[6 dof flags]}
+      jointMasses: [], // {jointId, m} tonnes (Assign > Joint > Additional Mass)
+      frames: [],   // {id, kind, i, j, section, releaseI, releaseJ}
       sections: DEFAULT_SECTIONS(),
+      materials: DEFAULT_MATERIALS(),
+      massSource: DEFAULT_MASS_SOURCE(),
       active: { column: 'C30x30', beam: 'B25x50' },
       patterns: DEFAULT_PATTERNS(),
-      frameLoads: [], // {frameId, pattern, w (kN/m), dir: 'gravity'|'+x'|'-x'|'+y'|'-y'}
+      frameLoads: [], // {frameId, pattern, w (kN/m), dir}
       jointLoads: [], // {jointId, pattern, fx, fy, fz} kN
       autoSeismic: null,
       autoWind: null,
       results: null, modal: null,
       nextJ: 1, nextF: 1,
     };
+  }
+
+  // ETABS local end releases: [P, V2, V3, T, M2, M3] per end
+  const RELEASE_DOF = { p: 0, v2: 1, v3: 2, t: 3, m2: 4, m3: 5 };
+  function releaseDofs(releaseI, releaseJ) {
+    const out = [];
+    if (releaseI) for (const k of Object.keys(releaseI)) if (releaseI[k] && RELEASE_DOF[k] != null) out.push(RELEASE_DOF[k]);
+    if (releaseJ) for (const k of Object.keys(releaseJ)) if (releaseJ[k] && RELEASE_DOF[k] != null) out.push(6 + RELEASE_DOF[k]);
+    return out;
   }
 
   const key = (x, y, z) => (Math.round(x * 1000) + '|' + Math.round(y * 1000) + '|' + Math.round(z * 1000));
@@ -92,21 +113,27 @@
     const index = new Map(m.joints.map((j, i) => [j.id, i]));
     const frames = m.frames.map(f => {
       const s = frameSection(m, f);
+      const mat = m.materials.find(x => x.id === (s.material || 'C30')) || m.materials[0];
       const b = Math.max(s.b, 0.05), h = Math.max(s.h, 0.05);
+      const releases = releaseDofs(f.releaseI, f.releaseJ);
       return {
         ni: index.get(f.i), nj: index.get(f.j),
-        E: CONCRETE.Ec,
+        E: mat.Ec,
         A: b * h * 1e6,
         Iy: h * b * b * b / 12 * 1e12,
         Iz: b * h * h * h / 12 * 1e12,
         J: 0.1 * (b + h) ** 3 / 3 * 1e12,
+        rho: mat.density / 9.81 * 1e-9, // t/mm3 for the modal mass
         kind: f.kind, frameId: f.id,
+        releases: releases.length ? releases : undefined,
       };
     });
     return { nodes, frames, index };
   }
 
   function supportOf(m, j) {
+    // ETABS Assign > Joint > Restraints: an explicit 6-flag DOF array wins
+    if (Array.isArray(j.restraint)) return j.restraint;
     const zMin = Math.min(...m.stories.map(s => s.elevation));
     if (Math.abs(j.z - zMin) < 1e-6) {
       if (j.restraint === 'pinned') return [1, 1, 1, 0, 0, 0];
@@ -198,9 +225,15 @@
       for (const n of mesh.nodes) zMax = Math.max(zMax, n.z);
       const csInfo = seismicCs(as, zMax);
       const cs = csInfo.cs;
+      const ms = m.massSource || DEFAULT_MASS_SOURCE();
       const w = new Float64Array(mesh.nodes.length);
+      // additional joint masses (Assign > Joint > Additional Mass)
+      if (ms.additional !== false) for (const jm of m.jointMasses || []) {
+        const ni = mesh.index.get(jm.jointId);
+        if (ni != null) w[ni] += (jm.m || 0) * 9.81 * 1000;
+      }
       for (const p of m.patterns) {
-        if (p.type === 'dead') {
+        if (p.type === 'dead' && ms.selfWeight !== false) {
           for (const [ni, v] of loads[p.id]) w[ni] += Math.abs(v[2] || 0);
           const ml = memberLoads[p.id];
           if (ml) mesh.frames.forEach((fr, fi) => {
@@ -211,6 +244,20 @@
             const L = Math.hypot(mesh.nodes[fr.nj].x - mesh.nodes[fr.ni].x, mesh.nodes[fr.nj].y - mesh.nodes[fr.ni].y, mesh.nodes[fr.nj].z - mesh.nodes[fr.ni].z);
             w[fr.ni] += vz * L * 1000 / 2; w[fr.nj] += vz * L * 1000 / 2;
           });
+        }
+      }
+      const lf = ms.livePattern && ms.liveFraction > 0 ? { pat: ms.livePattern, f: ms.liveFraction } : null;
+      if (lf && m.frameLoads) for (const fl of m.frameLoads.filter(x => x.pattern === lf.pat)) {
+        // vertical component of the UDL in gravity direction
+        if ((fl.dir || 'gravity') === 'gravity') {
+          const fi = mesh.frames.findIndex(x => x.frameId === fl.frameId);
+          if (fi >= 0) {
+            const fr = mesh.frames[fi];
+            const a2 = mesh.nodes[fr.ni], b2 = mesh.nodes[fr.nj];
+            const Lm = Math.hypot(b2.x - a2.x, b2.y - a2.y, b2.z - a2.z);
+            w[fr.ni] += lf.f * fl.w * Lm * 1000 / 2;
+            w[fr.nj] += lf.f * fl.w * Lm * 1000 / 2;
+          }
         }
       }
       let W = 0; for (let i = 0; i < w.length; i++) W += w[i];
@@ -427,13 +474,20 @@
     const FEA = window.FEA;
     const mesh = buildMesh(m);
     if (!mesh.frames.length) return { error: 'Draw columns and beams first' };
-    const res = FEA.ritzModalAnalysis(mesh.nodes, mesh.frames, [], opts.nModes || 8, null, opts.dir || 'z');
+    // mass source: additional joint masses (self-weight is built in)
+    const ms = m.massSource || DEFAULT_MASS_SOURCE();
+    const extra = new Float64Array(mesh.nodes.length);
+    if (ms.additional !== false) for (const jm of m.jointMasses || []) {
+      const ni = mesh.index.get(jm.jointId);
+      if (ni != null) extra[ni] += jm.m || 0;
+    }
+    const res = FEA.ritzModalAnalysis(mesh.nodes, mesh.frames, [], opts.nModes || 8, ms.additional === false ? null : extra, opts.dir || 'z');
     m.modal = res;
     return res;
   }
 
   window.RCModel = {
-    CONCRETE, newModel, addColumn, addBeam, jointAt, jointById, frameSection,
+    CONCRETE, newModel, addColumn, addBeam, jointAt, jointById, frameSection, releaseDofs, DEFAULT_MATERIALS, DEFAULT_MASS_SOURCE,
     buildMesh, buildLoads, buildCombinations, runAnalysis, runModal,
     seismicCs, DEFAULT_SECTIONS, DEFAULT_PATTERNS,
   };

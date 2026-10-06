@@ -273,7 +273,7 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      let Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
       // P-delta: soften/stiffen the transverse terms with the axial force
       if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
         const Kg = frameKg(opts.geo[elIdx], L);
@@ -289,8 +289,15 @@
         for (let j = 0; j < 12; j++)
           K[dofs[i]][dofs[j]] += Kg[i][j];
       const ml = (opts.memberLoads && opts.memberLoads[elIdx]) || null;
-      const feq = ml ? consistentUDL(ml.wy || 0, ml.wz || 0, L) : null;
-      frameInfo.push({ el, dofs, Kl, R, L, feq, wlWy: ml ? (ml.wy || 0) : 0, wlWz: ml ? (ml.wz || 0) : 0 });
+      let feq0 = ml ? consistentUDL(ml.wy || 0, ml.wz || 0, L) : null;
+      // end releases (ETABS Assign > Frame > Releases): condense the local
+      // stiffness and the member-load vector together
+      if (el.releases && el.releases.length) {
+        const rr = applyReleases(Kl, feq0, el.releases);
+        Kl = rr.K;
+        feq0 = rr.feq;
+      }
+      frameInfo.push({ el, dofs, Kl, R, L, feq: feq0, wlWy: ml ? (ml.wy || 0) : 0, wlWz: ml ? (ml.wz || 0) : 0 });
     });
     // shell elements: only membrane (in-plane) coupling between nodes — the
     // vertical bending of slabs enters via the plate diagonal on wz
@@ -388,12 +395,13 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      let Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
       if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
         const Kg = frameKg(opts.geo[elIdx], L);
         for (let i = 0; i < 12; i++)
           for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
       }
+      if (el.releases && el.releases.length) Kl = applyReleases(Kl, null, el.releases).K;
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
       const dofs = [];
@@ -422,7 +430,12 @@
         const a = nodes[el.ni], b = nodes[el.nj];
         const L = G.dist(a, b);
         if (L < 1e-6) return;
-        const feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
+        let feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
+        // released members contribute their CONDENSED equivalent loads
+        if (el.releases && el.releases.length) {
+          const Kl2 = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+          feq = applyReleases(Kl2, feq, el.releases).feq;
+        }
         const R = rotationMatrix(a, b);
         const dofs = [];
         for (const ni of [el.ni, el.nj]) for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
@@ -1017,5 +1030,55 @@
     return { nodes, nNodes, nDof, ft, fr, nt, nr, Kc, Krr, Krt, Mr };
   }
 
-  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
+  // =========================================== frame end releases (ETABS)
+  // Static condensation of released local DOFs (Assign > Frame > Releases):
+  // K' = Kss - Ksr*Krr^-1*Krs in full 12-dof storage (released rows/cols
+  // zeroed, epsilon diagonal against fully-released joints), and the
+  // consistent member-load vector is condensed the same way so span-load
+  // results stay exact on released members.
+  function applyReleases(Kl, feqIn, releases) {
+    if (!releases || !releases.length) return { K: Kl, feq: feqIn };
+    const rel = [...new Set(releases)].filter(i => i >= 0 && i < 12).sort((a, b) => a - b);
+    const kept = [];
+    for (let i = 0; i < 12; i++) if (!rel.includes(i)) kept.push(i);
+    const nr = rel.length, ns = kept.length;
+    const sub = (rows, cols) => rows.map(r => Float64Array.from(cols.map(c => Kl[r][c])));
+    const Krr = sub(rel, rel), Krs = sub(rel, kept), Ksr = sub(kept, rel), Kss = sub(kept, kept);
+    // X = Krr^-1 * Krs : RHS columns of Krs = rows of Ksr
+    const sols = solveLDLT(Krr.map(r => Float64Array.from(r)), Ksr.map(r => Float64Array.from(r)));
+    // sols[j] (kept-length) = Krr^-1 * Krs[:,j] -> condensed:
+    const Kc = Kss.map(r => Float64Array.from(r));
+    for (let i = 0; i < ns; i++)
+      for (let j = 0; j < ns; j++) {
+        let acc = 0;
+        for (let k = 0; k < nr; k++) acc += Ksr[i][k] * sols[j][k];
+        Kc[i][j] -= acc;
+      }
+    // epsilon diagonal on released dofs (guards a joint where EVERY
+    // connected element releases the same dof)
+    let dmax = 0;
+    for (let i = 0; i < 12; i++) dmax = Math.max(dmax, Kl[i][i]);
+    const eps = 1e-9 * (dmax || 1);
+    const K = [];
+    for (let i = 0; i < 12; i++) K.push(new Float64Array(12));
+    for (let i = 0; i < ns; i++)
+      for (let j = 0; j < ns; j++) K[kept[i]][kept[j]] = Kc[i][j];
+    for (const r of rel) K[r][r] = eps;
+    // member-load fixed-end vector: feq' = feq_s - Ksr*Krr^-1*feq_r
+    let feq = feqIn;
+    if (feqIn) {
+      const fr = Float64Array.from(rel.map(r => feqIn[r] || 0));
+      const y = solveLDLT(Krr.map(r => Float64Array.from(r)), [fr])[0];
+      const f2 = new Float64Array(12);
+      for (let i = 0; i < ns; i++) {
+        let acc = 0;
+        for (let k = 0; k < nr; k++) acc += Ksr[i][k] * y[k];
+        f2[kept[i]] = (feqIn[kept[i]] || 0) - acc;
+      }
+      feq = f2;
+    }
+    return { K, feq, released: rel };
+  }
+
+  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
 })();

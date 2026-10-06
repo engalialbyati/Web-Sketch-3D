@@ -81,7 +81,10 @@
     <div class="relative menu-item">
       <button class="px-2.5 py-1 hover:bg-slate-300 rounded">Define</button>
       <div class="menu-dropdown">
+        <div class="dropdown-row" onclick="UI.materialsDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-cubes text-emerald-600"></i> Materials...</span></div>
         <div class="dropdown-row" onclick="UI.sectionsDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-shapes text-sky-600"></i> Section Properties...</span></div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-row" onclick="UI.massSourceDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-weight-scale text-indigo-600"></i> Mass Source...</span></div>
         <div class="dropdown-divider"></div>
         <div class="dropdown-row" onclick="UI.patternsDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-weight-hanging text-amber-600"></i> Load Patterns...</span></div>
         <div class="dropdown-row" onclick="UI.autoLateralDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-tower-broadcast text-rose-600"></i> Auto Lateral Loads (ASCE 7-16)...</span></div>
@@ -102,7 +105,10 @@
       <div class="menu-dropdown">
         <div class="dropdown-row" onclick="UI.assignFrameSectionDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-tag text-sky-600"></i> Frame -> Section Property...</span></div>
         <div class="dropdown-row" onclick="UI.assignFrameLoadDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-arrows-down-to-line text-rose-600"></i> Frame -> Distributed Load...</span></div>
-        <div class="dropdown-row" onclick="UI.assignRestraintDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-anchor text-amber-600"></i> Joint -> Restraints (base joints)...</span></div>
+        <div class="dropdown-row" onclick="UI.assignReleasesDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-unlink text-purple-600"></i> Frame -> Releases / Partial Fixity...</span></div>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-row" onclick="UI.assignRestraintDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-anchor text-amber-600"></i> Joint -> Restraints (Supports)...</span></div>
+        <div class="dropdown-row" onclick="UI.assignJointMassDialog()"><span class="flex items-center gap-2"><i class="fa-solid fa-weight-hanging text-indigo-600"></i> Joint -> Additional Mass...</span></div>
       </div>
     </div>
     <div class="relative menu-item">

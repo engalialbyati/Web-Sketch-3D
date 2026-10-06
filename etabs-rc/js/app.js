@@ -73,7 +73,8 @@
     html += `<div class="pl-4">${node('fa-regular fa-calendar-days', m.stories.length + ' stories (' + (m.stories[1] ? (m.stories[1].elevation) : 3) + ' m typ.)', 'UI.editStoriesGrids()')}
       ${node('fa-solid fa-border-all', m.grids.x.length + '×' + m.grids.y.length + ' gridlines', 'UI.editStoriesGrids()')}
       ${node('fa-solid fa-vector-square', m.joints.length + ' joints · ' + m.frames.length + ' frames', '')}</div>`;
-    html += `<div class="tree-node font-semibold text-slate-800 mt-1"><i class="fa-solid fa-shapes text-emerald-600 mr-1.5"></i>Sections</div>`;
+    html += `<div class="tree-node font-semibold text-slate-800 mt-1"><i class="fa-solid fa-cubes text-emerald-600 mr-1.5"></i>Materials & Sections</div>`;
+    html += `<div class=\"pl-4\">` + m.materials.map(mt => `<div class=\"tree-node text-slate-600\" onclick=\"UI.materialsDialog()\"><i class=\"fa-solid fa-cube text-emerald-500 mr-1.5\"></i>${mt.id}: Ec ${mt.Ec}</div>`).join('') + `</div>`;
     html += `<div class="pl-4">` + m.sections.map(s2 =>
       `<div class="tree-node text-slate-600" onclick="UI.sectionsDialog()"><i class="fa-solid fa-shapes text-sky-500 mr-1.5"></i>${s2.id} (${s2.kind})</div>`).join('') + `</div>`;
     html += `<div class="tree-node font-semibold text-slate-800 mt-1"><i class="fa-solid fa-weight-hanging text-amber-600 mr-1.5"></i>Loads</div>`;
@@ -116,6 +117,7 @@
       <div class="flex justify-between"><span>Element:</span><span class="font-bold text-sky-800">${f.kind === 'column' ? 'Column' : 'Beam'} ${f.id}</span></div>
       <div class="flex justify-between"><span>Section:</span><span>${f.section}</span></div>
       <div class="flex justify-between"><span>Length:</span><span>${L.toFixed(2)} m</span></div>
+      ${(f.releaseI && f.releaseI.m3) || (f.releaseJ && f.releaseJ.m3) ? '<div class="flex justify-between"><span>Releases:</span><span class="text-purple-700 font-semibold">M3</span></div>' : ''}
       ${loads ? `<div class="flex justify-between"><span>Loads:</span><span>${loads}</span></div>` : ''}
       ${resLine}`;
   };
@@ -289,9 +291,11 @@
       <td><input class="rc-input sec-id" data-i="${i}" value="${s.id}" style="width:80px"></td>
       <td><select class="rc-input sec-kind" data-i="${i}"><option ${s.kind === 'column' ? 'selected' : ''}>column</option><option ${s.kind === 'beam' ? 'selected' : ''}>beam</option></select></td>
       <td><input type="number" step="0.05" class="rc-input sec-b" data-i="${i}" value="${s.b}"></td>
-      <td><input type="number" step="0.05" class="rc-input sec-h" data-i="${i}" value="${s.h}"></td></tr>`).join('');
-    UI.dialog('Frame Section Properties (Concrete)', `
-      <table class="w-full text-xs border-collapse"><tr class="text-left text-slate-500"><th>Id</th><th>Type</th><th>b (m)</th><th>h (m)</th></tr>${rows}</table>
+      <td><input type="number" step="0.05" class="rc-input sec-h" data-i="${i}" value="${s.h}"></td>
+      <td><select class="rc-input sec-mat" data-i="${i}">${m.materials.map(mt => `<option ${(s.material || 'C30') === mt.id ? 'selected' : ''}>${mt.id}</option>`).join('')}</select></td>
+      <td class="font-mono text-[10px] text-slate-500">${((s.b * s.h) * 1e6 / 1e3).toFixed(0)}e3 mm&sup2; | I33=${(s.b * s.h ** 3 / 12 * 1e12 / 1e9).toFixed(2)}e9</td></tr>`).join('');
+    UI.dialog('Frame Section Properties', `
+      <table class="w-full text-xs border-collapse"><tr class="text-left text-slate-500"><th>Id</th><th>Type</th><th>b (m)</th><th>h (m)</th><th>Material</th><th>A / I33</th></tr>${rows}</table>
       <button onclick="UI.addSectionRow()" class="etabs-btn bg-slate-100 border-slate-300">+ Add</button>`, [
       ['Close', null],
       ['Save', () => {
@@ -299,6 +303,7 @@
         document.querySelectorAll('.sec-kind').forEach(el => { const s = m.sections[+el.dataset.i]; if (s) s.kind = el.value; });
         document.querySelectorAll('.sec-b').forEach(el => { const s = m.sections[+el.dataset.i]; if (s) s.b = parseFloat(el.value) || s.b; });
         document.querySelectorAll('.sec-h').forEach(el => { const s = m.sections[+el.dataset.i]; if (s) s.h = parseFloat(el.value) || s.h; });
+        document.querySelectorAll('.sec-mat').forEach(el => { const s = m.sections[+el.dataset.i]; if (s) s.material = el.value; });
         UI.toast('Sections saved');
         UI.refreshAll();
       }, true],
@@ -368,6 +373,155 @@
         m.autoSeismic = { enabled: document.getElementById('al-se').checked, mode: 'asce', sds: num('al-sds'), sd1: num('al-sd1'), R: num('al-r'), Ie: num('al-ie'), T: num('al-t') || null, dir: document.getElementById('al-sdir').value };
         m.autoWind = { enabled: document.getElementById('al-we').checked, v: num('al-v'), exposure: document.getElementById('al-exp').value, dir: document.getElementById('al-wdir').value };
         UI.toast('Auto lateral saved — Run Analysis applies it');
+        UI.refreshAll();
+      }, true],
+    ]);
+  };
+
+  // ---- Define: materials (ETABS Define > Materials)
+  UI.materialsDialog = function () {
+    const m = app.model;
+    const rows = m.materials.map((mt, i) => `<tr>
+      <td><input class="rc-input mat-id" data-i="${i}" value="${mt.id}" style="width:60px"></td>
+      <td><input class="rc-input mat-name" data-i="${i}" value="${mt.name}" style="width:130px"></td>
+      <td><input type="number" step="500" class="rc-input mat-ec" data-i="${i}" value="${mt.Ec}"></td>
+      <td><input type="number" step="0.5" class="rc-input mat-d" data-i="${i}" value="${mt.density}"></td>
+      <td><input type="number" step="5" class="rc-input mat-fc" data-i="${i}" value="${mt.fc}"></td></tr>`).join('');
+    UI.dialog('Materials', `
+      <table class="w-full text-xs border-collapse"><tr class="text-left text-slate-500"><th>Id</th><th>Name</th><th>Ec (MPa)</th><th>&gamma; (kN/m&sup3;)</th><th>f'c (MPa)</th></tr>${rows}</table>
+      <div class="text-slate-500">Sections reference a material by id; Ec drives stiffness, &gamma; the self-weight and seismic mass.</div>`, [
+      ['Close', null],
+      ['Save', () => {
+        document.querySelectorAll('.mat-id').forEach(el => { const t = m.materials[+el.dataset.i]; if (t) t.id = el.value.trim() || t.id; });
+        document.querySelectorAll('.mat-name').forEach(el => { const t = m.materials[+el.dataset.i]; if (t) t.name = el.value; });
+        document.querySelectorAll('.mat-ec').forEach(el => { const t = m.materials[+el.dataset.i]; if (t) t.Ec = parseFloat(el.value) || t.Ec; });
+        document.querySelectorAll('.mat-d').forEach(el => { const t = m.materials[+el.dataset.i]; if (t) t.density = parseFloat(el.value) || t.density; });
+        document.querySelectorAll('.mat-fc').forEach(el => { const t = m.materials[+el.dataset.i]; if (t) t.fc = parseFloat(el.value) || t.fc; });
+        UI.toast('Materials saved');
+        UI.refreshAll();
+      }, true],
+    ]);
+  };
+
+  // ---- Define: mass source (ETABS Define > Mass Source)
+  UI.massSourceDialog = function () {
+    const m = app.model;
+    const ms = m.massSource || RCModel.DEFAULT_MASS_SOURCE();
+    UI.dialog('Mass Source', `
+      <div class="text-slate-500">What the modal analysis and auto-seismic weight count as mass.</div>
+      <label class="flex items-center gap-2"><input type="checkbox" id="ms-sw" ${ms.selfWeight !== false ? 'checked' : ''}> Element self-weight</label>
+      <label class="flex items-center gap-2"><input type="checkbox" id="ms-ad" ${ms.additional !== false ? 'checked' : ''}> Additional joint masses (Assign &gt; Joint &gt; Mass)</label>
+      <div class="flex items-center justify-between"><label>Live pattern (for mass)</label>
+        <select id="ms-lp" class="rc-input" style="width:130px"><option value="">(none)</option>${m.patterns.map(p => `<option ${ms.livePattern === p.id ? 'selected' : ''}>${p.id}</option>`).join('')}</select></div>
+      ${frow('ms-lf', 'Live fraction', ms.liveFraction || 0, 0.05)}`, [
+      ['Cancel', null],
+      ['Save', () => {
+        m.massSource = {
+          selfWeight: document.getElementById('ms-sw').checked,
+          additional: document.getElementById('ms-ad').checked,
+          livePattern: document.getElementById('ms-lp').value || null,
+          liveFraction: num('ms-lf') || 0,
+        };
+        UI.toast('Mass source saved');
+        UI.refreshAll();
+      }, true],
+    ]);
+  };
+
+  // ---- Assign: frame releases (ETABS Assign > Frame > Releases)
+  UI.assignReleasesDialog = function () {
+    const m = app.model;
+    if (!app.sel.length) { UI.toast('Select members first', true); return; }
+    const f = app.sel[0];
+    const cb = (end, k, label) => `<label class="flex items-center gap-1.5 text-[11px]"><input type="checkbox" class="rel-cb" data-end="${end}" data-k="${k}" ${f['release' + end] && f['release' + end][k] ? 'checked' : ''}>${label}</label>`;
+    UI.dialog('Assign Frame Releases / Partial Fixity', `
+      <div class="text-slate-500">${app.sel.length} member(s) — applies to all selected.</div>
+      <div class="grid grid-cols-2 gap-4">
+        <div class="border border-slate-200 rounded p-2">
+          <div class="font-semibold text-slate-700 mb-1">Start (I end)</div>
+          <div class="grid grid-cols-2 gap-1">
+            ${cb('I', 'm3', 'M3 (major)')}${cb('I', 'm2', 'M2 (minor)')}
+            ${cb('I', 'p', 'Axial P')}${cb('I', 't', 'Torsion T')}
+            ${cb('I', 'v2', 'V2')}${cb('I', 'v3', 'V3')}
+          </div>
+        </div>
+        <div class="border border-slate-200 rounded p-2">
+          <div class="font-semibold text-slate-700 mb-1">End (J end)</div>
+          <div class="grid grid-cols-2 gap-1">
+            ${cb('J', 'm3', 'M3 (major)')}${cb('J', 'm2', 'M2 (minor)')}
+            ${cb('J', 'p', 'Axial P')}${cb('J', 't', 'Torsion T')}
+            ${cb('J', 'v2', 'V2')}${cb('J', 'v3', 'V3')}
+          </div>
+        </div>
+      </div>
+      <div class="text-slate-500">M3 release = pin the major-axis end moment (the classic ETABS beam release).</div>`, [
+      ['Cancel', null],
+      ['Clear Releases', () => {
+        for (const fr of app.sel) { fr.releaseI = null; fr.releaseJ = null; }
+        UI.toast('Releases cleared');
+        UI.refreshAll();
+      }],
+      ['Assign', () => {
+        const ri = {}, rj = {};
+        document.querySelectorAll('.rel-cb').forEach(el => {
+          (el.dataset.end === 'I' ? ri : rj)[el.dataset.k] = el.checked;
+        });
+        for (const fr of app.sel) {
+          fr.releaseI = Object.values(ri).some(Boolean) ? ri : null;
+          fr.releaseJ = Object.values(rj).some(Boolean) ? rj : null;
+        }
+        UI.toast('Releases assigned to ' + app.sel.length + ' member(s)');
+        UI.refreshAll();
+      }, true],
+    ]);
+  };
+
+  // ---- Assign: joint restraints (ETABS DOF checkbox form)
+  UI.assignRestraintDialog = function () {
+    const m = app.model;
+    const zMin = Math.min(...m.stories.map(s => s.elevation));
+    const base = m.joints.filter(j => Math.abs(j.z - zMin) < 1e-6);
+    UI.dialog('Joint Restraints (Supports) — ' + base.length + ' base joints', `
+      <div class="text-slate-500">Restraint DOFs (ETABS Joint Assignment form). Applies to every base joint.</div>
+      <div class="grid grid-cols-3 gap-2">
+        ${['UX', 'UY', 'UZ', 'RX', 'RY', 'RZ'].map((d, i) =>
+      `<label class="flex items-center gap-1.5"><input type="checkbox" class="sp-dof" data-d="${i}" checked>${d}</label>`).join('')}
+      </div>
+      <div class="flex gap-2 pt-1">
+        <button onclick="document.querySelectorAll('.sp-dof').forEach(c => c.checked = true)" class="etabs-btn bg-slate-100 border-slate-300">All (Fixed)</button>
+        <button onclick="document.querySelectorAll('.sp-dof').forEach((c, i) => c.checked = i < 3)" class="etabs-btn bg-slate-100 border-slate-300">Pinned</button>
+        <button onclick="document.querySelectorAll('.sp-dof').forEach(c => c.checked = false)" class="etabs-btn bg-slate-100 border-slate-300">Free</button>
+      </div>`, [
+      ['Cancel', null],
+      ['Assign', () => {
+        const fx = [0, 0, 0, 0, 0, 0];
+        let any = false;
+        document.querySelectorAll('.sp-dof').forEach(el => { if (el.checked) { fx[+el.dataset.d] = 1; any = true; } });
+        for (const j of base) j.restraint = any ? fx : null;
+        UI.toast('Restraints assigned to ' + base.length + ' base joints');
+        UI.refreshAll();
+      }, true],
+    ]);
+  };
+
+  // ---- Assign: joint additional mass
+  UI.assignJointMassDialog = function () {
+    const m = app.model;
+    const top = m.stories[m.stories.length - 1].elevation;
+    const targets = m.joints.filter(j => Math.abs(j.z - top) < 1e-6);
+    UI.dialog('Joint Additional Mass', `
+      <div class="text-slate-500">Lumped mass (tonnes) at the TOP story joints (${targets.length} joints) — tributary cladding/services.
+      Honored when Define &gt; Mass Source includes additional masses.</div>
+      ${frow('jm-m', 'Mass per joint (t)', 2, 0.5)}`, [
+      ['Cancel', null],
+      ['Clear All', () => { m.jointMasses = []; UI.toast('Joint masses cleared'); UI.refreshAll(); }],
+      ['Assign to Top Story', () => {
+        const mt = num('jm-m') || 0;
+        for (const j of targets) {
+          m.jointMasses = m.jointMasses.filter(x => x.jointId !== j.id);
+          if (mt > 0) m.jointMasses.push({ jointId: j.id, m: mt });
+        }
+        UI.toast(mt > 0 ? mt + ' t per joint on ' + targets.length + ' joints' : 'cleared');
         UI.refreshAll();
       }, true],
     ]);

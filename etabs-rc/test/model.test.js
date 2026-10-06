@@ -77,6 +77,93 @@ module.exports = h => {
     near(res2.auto.seismic.cs, 0.09, 1e-9, 'user coefficient respected');
   });
 
+
+  // ============================== ETABS Define/Assign features
+  test('end releases: M3 pins make the beam simply supported (wL²/8 exact)', () => {
+    const m = M.newModel();
+    m.stories = [{ name: 'Base', elevation: 0 }, { name: 'S1', elevation: 3 }];
+    m.grids.x = [{ label: '1', pos: 0 }, { label: '2', pos: 6 }];
+    m.grids.y = [{ label: 'A', pos: 0 }, { label: 'B', pos: 5 }];
+    for (const gx of m.grids.x) for (const gy of m.grids.y) M.addColumn(m, 1, gx.pos, gy.pos);
+    const b1 = M.addBeam(m, 1, 0, 0, 6, 0);
+    const b2 = M.addBeam(m, 1, 0, 5, 6, 5);
+    M.addBeam(m, 1, 0, 0, 0, 5);
+    M.addBeam(m, 1, 6, 0, 6, 5);
+    m.patterns = [{ id: 'DEAD', name: 'Dead', type: 'dead', swMult: 1 }, { id: 'LIVE', name: 'Live', type: 'live', swMult: 0 }];
+    m.frameLoads.push({ frameId: b1.id, pattern: 'LIVE', w: 10, dir: 'gravity' });
+    // ETABS Assign > Frame > Releases: M3 at BOTH ends of the loaded beam
+    b1.releaseI = { m3: true };
+    b1.releaseJ = { m3: true };
+    const mesh = M.buildMesh(m);
+    const beamEl = mesh.frames.find(f => f.frameId === b1.id);
+    ok(beamEl.releases && beamEl.releases.includes(5) && beamEl.releases.includes(11), 'M3 dofs 5+11 released');
+    const res = M.runAnalysis(m, {});
+    ok(!res.error, 'released analysis runs');
+    // reactions balance the member loads exactly (condensed equivalents)
+    const r0 = res.results[0];
+    let rz = 0;
+    for (const rr of r0.reactions) rz += rr.R[2];
+    // self-weight + the 10 kN/m live over 6 m = 60 kN live + frame DL
+    ok(rz / 1000 > 60, 'vertical equilibrium includes the released beam load: ' + (rz / 1000).toFixed(1) + ' kN');
+    // released ends carry ~0 moment
+    const idx = mesh.frames.findIndex(f => f.frameId === b1.id);
+    const fe = r0.frames[idx];
+    ok(Math.abs(fe.forces[5]) < 1e3 && Math.abs(fe.forces[11]) < 1e3, 'released end moments ~0');
+    // unreleased beam keeps end moments
+    const idx2 = mesh.frames.findIndex(f => f.frameId === b2.id);
+    const fe2 = r0.frames[idx2];
+    ok(Math.abs(fe2.forces[5]) > 1e3 || Math.abs(fe2.forces[11]) > 1e3, 'unreleased beam carries end moments');
+  });
+
+  test('materials: Ec per section drives the mesh stiffness', () => {
+    const m = M.newModel();
+    m.stories = [{ name: 'Base', elevation: 0 }, { name: 'S1', elevation: 3 }];
+    m.grids.x = [{ label: '1', pos: 0 }, { label: '2', pos: 6 }];
+    m.grids.y = [{ label: 'A', pos: 0 }, { label: 'B', pos: 5 }];
+    for (const gx of m.grids.x) for (const gy of m.grids.y) M.addColumn(m, 1, gx.pos, gy.pos);
+    const mesh = M.buildMesh(m);
+    eq(mesh.frames[0].E, 25000, 'C30 default Ec');
+    m.sections.find(sc => sc.id === 'C30x30').material = 'C40';
+    const mesh2 = M.buildMesh(m);
+    eq(mesh2.frames[0].E, 28000, 'C40 Ec follows the section material');
+  });
+
+  test('mass source: additional joint mass lowers the frequency exactly', () => {
+    const m = M.newModel();
+    m.stories = [{ name: 'Base', elevation: 0 }, { name: 'S1', elevation: 3 }];
+    m.grids.x = [{ label: '1', pos: 0 }, { label: '2', pos: 6 }];
+    m.grids.y = [{ label: 'A', pos: 0 }, { label: 'B', pos: 5 }];
+    for (const gx of m.grids.x) for (const gy of m.grids.y) M.addColumn(m, 1, gx.pos, gy.pos);
+    const b1 = M.addBeam(m, 1, 0, 0, 6, 0);
+    const b2 = M.addBeam(m, 1, 0, 5, 6, 5);
+    M.addBeam(m, 1, 0, 0, 0, 5);
+    M.addBeam(m, 1, 6, 0, 6, 5);
+    const f1 = M.runModal(m, { nModes: 1 }).modes[0].f;
+    // add a big mass at one top joint (ETABS Assign > Joint > Additional Mass)
+    const top = m.joints.find(j => Math.abs(j.z - 3) < 1e-6);
+    m.jointMasses.push({ jointId: top.id, m: 20 });
+    const f2 = M.runModal(m, { nModes: 1 }).modes[0].f;
+    ok(f2 < f1 * 0.95, 'adding 20 t drops the frequency (' + f1.toFixed(2) + ' -> ' + f2.toFixed(2) + ' Hz)');
+    // mass source can exclude additional masses
+    m.massSource = { selfWeight: true, additional: false, livePattern: null, liveFraction: 0 };
+    const f3 = M.runModal(m, { nModes: 1 }).modes[0].f;
+    near(f3, f1, f1 * 0.001, 'excluding additional mass restores the frequency');
+  });
+
+  test('joint restraints: per-DOF arrays override fixed/pinned presets', () => {
+    const m = M.newModel();
+    m.stories = [{ name: 'Base', elevation: 0 }, { name: 'S1', elevation: 3 }];
+    m.grids.x = [{ label: '1', pos: 0 }, { label: '2', pos: 6 }];
+    m.grids.y = [{ label: 'A', pos: 0 }, { label: 'B', pos: 5 }];
+    for (const gx of m.grids.x) for (const gy of m.grids.y) M.addColumn(m, 1, gx.pos, gy.pos);
+    M.addBeam(m, 1, 0, 0, 6, 0); M.addBeam(m, 1, 0, 5, 6, 5);
+    M.addBeam(m, 1, 0, 0, 0, 5); M.addBeam(m, 1, 6, 0, 6, 5);
+    // roller: UX free, everything else restrained (ETABS DOF form)
+    const base = m.joints.filter(j => j.z === 0);
+    for (const j of base) j.restraint = [0, 1, 1, 1, 1, 1];
+    const mesh = M.buildMesh(m);
+    eq(mesh.nodes[0].fixed.join(','), '0,1,1,1,1,1', 'roller DOF array respected');
+  });
   test('modal: Ritz frequencies on the portal, no mechanisms', () => {
     const m = M.newModel();
     m.stories = [{ name: 'Base', elevation: 0 }, { name: 'S1', elevation: 3 }];

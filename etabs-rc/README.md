@@ -15,12 +15,17 @@ fully offline.
 2. **Draw** — Quick Columns (click a grid point; the column rises from the
    story below), Draw Beams (click joint-to-joint, chaining), Restraints
    (click a joint to cycle fixed → pinned → free).
-3. **Define** — Section Properties, Load Patterns (type + self-weight
+3. **Define** — Materials (Ec/density/f'c per section), Section Properties
+   (with A/I33 summary), Mass Source (self-weight + additional masses +
+   live fraction), Load Patterns (type + self-weight
    multiplier), Auto Lateral Loads (ASCE 7-16 §12.8 seismic with the Cs
    caps and Ta = Ct·hn^x; §26/27 wind qz by exposure), auto ACI 318-19 /
    ASCE 7 combinations.
 4. **Assign** — sections to selection, distributed frame loads (kN/m,
-   any direction), base restraints.
+   any direction), **Frame Releases** (M2/M3 end pins — true static
+   condensation in the engine, wL²/8 exact on released beams), Joint
+   Restraints (per-DOF checkbox form: fixed/pinned/roller), Joint
+   Additional Mass.
 5. **Analyze (F5)** — P-delta static analysis, story drift ratios,
    reactions; Modal (F5 menu) — Ritz vectors with mass participation.
 6. **Display** — undeformed / deformed shape, moment M3 / shear V2 /
