@@ -34,6 +34,9 @@
     raycaster.params.Line.threshold = 0.35;
     mouse3 = new THREE.Vector2();
     canvas.addEventListener('click', e => V.click(e));
+    canvas.addEventListener('mousedown', e => V.boxDown(e));
+    window.addEventListener('mouseup', e => V.boxUp(e));
+    window.addEventListener('mousemove', e => V.boxMove(e));
     window.addEventListener('resize', V.resize);
     V.animate();
   };
@@ -204,6 +207,65 @@
     overlayGroup.add(new THREE.Line(
       new THREE.BufferGeometry().setFromPoints(fp),
       new THREE.LineBasicMaterial({ color: kind === 'moment' ? 0xf87171 : kind === 'shear' ? 0x60a5fa : 0x4ade80, transparent: true, opacity: 0.5 })));
+  };
+
+  // ------------------------------------------------------------ box select
+  // Shift+drag with the Select tool: rubber-band over the 3D view. Frames
+  // whose BOTH endpoints project inside the window are selected (ETABS
+  // window select); Shift at release adds to the current selection.
+  V.boxDown = function (e) {
+    if (!e.shiftKey || !V.app || V.app.tool !== 'select' || e.button !== 0) { V.box = null; return; }
+    e.preventDefault();
+    controls.enabled = false; // pause orbit while boxing
+    const r = e.target.getBoundingClientRect();
+    V.box = { x0: e.clientX - r.left, y0: e.clientY - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top, additive: true };
+  };
+  V.boxMove = function (e) {
+    if (!V.box) return;
+    const r = document.getElementById('cadCanvas').getBoundingClientRect();
+    V.box.x1 = e.clientX - r.left;
+    V.box.y1 = e.clientY - r.top;
+    V.boxDraw();
+  };
+  V.boxUp = function (e) {
+    if (!V.box) return;
+    const b = V.box;
+    V.box = null;
+    controls.enabled = true;
+    V.boxDraw();
+    const big = Math.abs(b.x1 - b.x0) > 6 && Math.abs(b.y1 - b.y0) > 6;
+    if (!big) return;
+    const canvas = document.getElementById('cadCanvas');
+    const W = canvas.clientWidth, H = canvas.clientHeight;
+    const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1);
+    const y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+    const proj = j => {
+      const v = new THREE.Vector3(j.x, j.y, j.z).project(camera);
+      return { x: (v.x + 1) / 2 * W, y: (1 - (v.y + 1) / 2) * H };
+    };
+    const inside = p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+    const m = V.app.model;
+    const hits = [];
+    for (const f of m.frames) {
+      const ja = RCModel.jointById(m, f.i), jb = RCModel.jointById(m, f.j);
+      if (inside(proj(ja)) && inside(proj(jb))) hits.push(f);
+    }
+    V.app.selectMany(hits, b.additive);
+  };
+  V.boxDraw = function () {
+    let el = document.getElementById('rcBoxSel');
+    if (!V.box) { if (el) el.remove(); return; }
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'rcBoxSel';
+      el.style.cssText = 'position:absolute;border:1.5px dashed #38bdf8;background:rgba(56,189,248,.08);pointer-events:none;z-index:15';
+      document.getElementById('canvasContainer').appendChild(el);
+    }
+    const b = V.box;
+    el.style.left = Math.min(b.x0, b.x1) + 'px';
+    el.style.top = Math.min(b.y0, b.y1) + 'px';
+    el.style.width = Math.abs(b.x1 - b.x0) + 'px';
+    el.style.height = Math.abs(b.y1 - b.y0) + 'px';
   };
 
   // ------------------------------------------------------------ picking

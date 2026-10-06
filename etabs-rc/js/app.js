@@ -27,6 +27,19 @@
     V3.build();
     app.plan && app.plan.draw();
   };
+  // ETABS box selection: objects fully inside the window; Shift adds
+  app.selectMany = function (frames, additive) {
+    if (additive) {
+      const have = new Set(this.sel);
+      for (const f of frames) if (!have.has(f)) this.sel.push(f);
+    } else {
+      this.sel = frames;
+    }
+    UI.inspector();
+    UI.toast(this.sel.length + ' member(s) selected');
+    V3.build();
+    app.plan && app.plan.draw();
+  };
 
   // ================================================================ UI
   const UI = window.UI = {};
@@ -790,8 +803,17 @@
       else if (e.key === 'F4') { e.preventDefault(); UI.setDisplay('model'); }
       else if (e.key === 'F6') { e.preventDefault(); UI.setDisplay('deformed'); }
       else if (e.key === 'F7') { e.preventDefault(); UI.setDisplay('moment'); }
-      else if (e.key === 'Escape') UI.setDrawTool('select');
+      else if (e.key === 'Escape') { UI.setDrawTool('select'); app.select(null); }
       else if (e.key === 'Delete') UI.deleteSelected();
+      else if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        const z = app.elev();
+        const mine = app.model.frames.filter(f => {
+          const a = RCModel.jointById(app.model, f.i);
+          return f.kind === 'beam' ? Math.abs(a.z - z) < 1e-6 : Math.abs(RCModel.jointById(app.model, f.j).z - z) < 1e-6;
+        });
+        app.selectMany(mine, false);
+      }
     });
     document.getElementById('fileOpen').addEventListener('change', e => {
       if (e.target.files[0]) UI.openFile(e.target.files[0]);

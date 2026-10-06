@@ -12,6 +12,9 @@
     this.pan = { x: 60, y: 40 };
     this.hover = null;     // snapped grid point {x,y}
     this.pending = null;   // first click while drawing a beam
+    this.boxStart = null;  // rubber-band select (screen px)
+    this.boxEnd = null;
+    this.shiftDown = false;
     this.bind();
   }
 
@@ -63,8 +66,10 @@
     const pt = this.snap(mx, my);
     const app = this.app, m = app.model;
     if (app.tool === 'select') {
-      const hit = this.hitTest(mx, my);
-      app.select(hit);
+      // press starts either a click-select or a rubber-band box
+      this.boxStart = { x: mx, y: my };
+      this.boxEnd = null;
+      this.shiftDown = e.shiftKey;
       return;
     }
     if (app.tool === 'column') {
@@ -90,11 +95,43 @@
   };
   Plan.prototype.move = function (e) {
     const r = this.cv.getBoundingClientRect();
-    this.hover = this.snap(e.clientX - r.left, e.clientY - r.top);
     this.mx = e.clientX - r.left; this.my = e.clientY - r.top;
+    this.hover = this.snap(this.mx, this.my);
+    if (this.boxStart && (Math.abs(this.mx - this.boxStart.x) > 3 || Math.abs(this.my - this.boxStart.y) > 3))
+      this.boxEnd = { x: this.mx, y: this.my };
     this.draw();
   };
-  Plan.prototype.up = function () { };
+  Plan.prototype.up = function (e) {
+    if (this.boxStart && this.app.tool === 'select') {
+      const a = this.boxStart, b = this.boxEnd || this.boxStart;
+      if (this.boxEnd) this.boxSelect(a, b, e && e.shiftKey || this.shiftDown);
+      else {
+        const hit = this.hitTest(a.x, a.y);
+        if (e && e.shiftKey && hit) this.app.selectMany([hit], true);
+        else this.app.select(hit);
+      }
+    }
+    this.boxStart = this.boxEnd = null;
+    this.draw();
+  };
+
+  // ETABS window select: members at this story FULLY inside the rect
+  Plan.prototype.boxSelect = function (a, b, additive) {
+    const m = this.app.model, z = this.app.elev();
+    const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+    const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+    const inside = p => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+    const hits = [];
+    for (const f of m.frames) {
+      const ja = RCModel.jointById(m, f.i), jb = RCModel.jointById(m, f.j);
+      const atStory = f.kind === 'beam'
+        ? Math.abs(ja.z - z) < 1e-6
+        : Math.abs(jb.z - z) < 1e-6;
+      if (!atStory) continue;
+      if (inside(this.px(ja.x, ja.y)) && inside(this.px(jb.x, jb.y))) hits.push(f);
+    }
+    this.app.selectMany(hits, additive);
+  };
   Plan.prototype.dbl = function () { };
 
   Plan.prototype.hitTest = function (mx, my) {
@@ -139,7 +176,7 @@
         : Math.abs(b.z - z) < 1e-6; // column whose TOP is this story
       if (!atStory) continue;
       const A = this.px(a.x, a.y), B = this.px(b.x, b.y);
-      const isSel = sel === f;
+      const isSel = sel && sel.indexOf && sel.indexOf(f) >= 0;
       g.strokeStyle = isSel ? '#ff9f43' : f.kind === 'column' ? '#8fd3ff' : '#e8eef2';
       g.lineWidth = f.kind === 'column' ? 7 : 5;
       g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(B.x, B.y); g.stroke();
@@ -176,6 +213,19 @@
           g.beginPath(); g.moveTo(A.x, A.y); g.lineTo(B.x, B.y); g.stroke();
         }
       }
+    }
+    // rubber-band box
+    if (this.boxStart && this.boxEnd) {
+      const a = this.boxStart, b = this.boxEnd;
+      g.strokeStyle = '#38bdf8';
+      g.setLineDash([6, 4]);
+      g.lineWidth = 1.5;
+      g.fillStyle = 'rgba(56,189,248,0.08)';
+      const rx = Math.min(a.x, b.x), ry = Math.min(a.y, b.y);
+      const rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
+      g.fillRect(rx, ry, rw, rh);
+      g.strokeRect(rx, ry, rw, rh);
+      g.setLineDash([]);
     }
     // hover + pending
     if (this.hover && (this.app.tool === 'beam' || this.app.tool === 'column')) {
