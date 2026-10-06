@@ -800,5 +800,198 @@
     }
   }
 
-  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis };
+  // ================================================== load-dependent Ritz vectors
+  // Wilson, Yuan & Dickens (1982), as documented for ETABS in CSI's
+  // Analysis Reference ("Ritz vectors"): a first static solve against the
+  // acceleration load M*r, then repeated solves + M-orthogonalization build
+  // a basis shaped by the loading - better conditioned than subspace
+  // iteration, and it yields modal participating mass ratios directly.
+  function ritzModalAnalysis(nodesIn, frames, shells, nWanted, extraMass, dir) {
+    if (nWanted == null) nWanted = 8;
+    if (dir == null) dir = 'gravity';
+    const sys = buildCondensedSystem(nodesIn, frames, shells, extraMass);
+    if (!sys) return { modes: [], mechanisms: 0 };
+    const ft = sys.ft, fr = sys.fr, nt = sys.nt, nr = sys.nr;
+    const Kc = sys.Kc, Krr = sys.Krr, Krt = sys.Krt, Mr = sys.Mr, nDof = sys.nDof;
+    // Rayleigh shift for mechanisms (see modalAnalysis)
+    let trK = 0, trM = 0;
+    for (let i = 0; i < nt; i++) { trK += Kc[i][i]; trM += Mr[i]; }
+    const alpha = trM > 0 ? 1e-8 * Math.max(trK, 1e-30) / trM : 0;
+    const Ks = Kc.map((row, i) => Float64Array.from(row, (v, j) => v + (i === j ? alpha * Mr[i] : 0)));
+
+    // acceleration direction r over the translational dofs
+    const rvec = new Float64Array(nt);
+    const rc = dir === 'x' ? 0 : dir === 'y' ? 1 : 2; // gravity = z
+    ft.forEach((d, i) => { if (d % 6 === rc) rvec[i] = 1; });
+    let R = new Float64Array(nt);
+    for (let i = 0; i < nt; i++) R[i] = Mr[i] * rvec[i];
+    if (!R.some(v => v !== 0)) {
+      ft.forEach((d, i) => { if (d % 6 < 3) rvec[i] = 1; });
+      for (let i = 0; i < nt; i++) R[i] = Mr[i] * rvec[i];
+    }
+
+    const p = Math.max(2, Math.min(nWanted + 6, nt));
+    const psi = [];
+    // CSI's default Ritz start loads (Analysis Reference): acceleration in
+    // X, Y and Z. A single gravity start misses soft lateral modes of
+    // buildings with flexible beams; the three-start basis spans them.
+    const starts = dir === 'x' || dir === 'y' ? [dir] : ['z', 'x', 'y'];
+    for (const sd of starts) {
+      const sc = sd === 'x' ? 0 : sd === 'y' ? 1 : 2;
+      const rv = new Float64Array(nt);
+      ft.forEach((d, i) => { if (d % 6 === sc) rv[i] = 1; });
+      let Rcur = new Float64Array(nt);
+      for (let i = 0; i < nt; i++) Rcur[i] = Mr[i] * rv[i];
+      if (!Rcur.some(v => v !== 0)) continue;
+      const budget = Math.max(2, Math.ceil(p / starts.length));
+      for (let j = 0; j < budget && psi.length < p; j++) {
+        const sol = solveLDLT(Ks.map(r2 => Float64Array.from(r2)), [Float64Array.from(Rcur)]);
+        const v = Float64Array.from(sol[0]);
+        for (const q of psi) {
+          let d2 = 0;
+          for (let i = 0; i < nt; i++) d2 += q[i] * Mr[i] * v[i];
+          for (let i = 0; i < nt; i++) v[i] -= d2 * q[i];
+        }
+        let nrm = 0;
+        for (let i = 0; i < nt; i++) nrm += Mr[i] * v[i] * v[i];
+        nrm = Math.sqrt(Math.max(nrm, 0));
+        if (!(nrm > 1e-14)) break; // this start deflated
+        for (let i = 0; i < nt; i++) v[i] /= nrm;
+        psi.push(v);
+        const nxt = new Float64Array(nt);
+        for (let i = 0; i < nt; i++) nxt[i] = Mr[i] * v[i];
+        Rcur = nxt;
+      }
+    }
+    if (!psi.length) return { modes: [], mechanisms: 0 };
+
+    // projected pair on span(psi): Kpsi = Ks*psi_k first, then the Gram sums
+    const n2 = psi.length;
+    const Kpsi = psi.map(v => {
+      const out = new Float64Array(nt);
+      for (let i = 0; i < nt; i++) {
+        let s2 = 0;
+        for (let k = 0; k < nt; k++) s2 += Ks[i][k] * v[k];
+        out[i] = s2;
+      }
+      return out;
+    });
+    const Kt = [], Mt = [];
+    for (let i = 0; i < n2; i++) {
+      const kr = new Float64Array(n2), mr = new Float64Array(n2);
+      for (let j = 0; j <= i; j++) {
+        let a = 0, b = 0;
+        for (let k = 0; k < nt; k++) {
+          a += psi[i][k] * Kpsi[j][k];
+          b += psi[i][k] * Mr[k] * psi[j][k];
+        }
+        kr[j] = a; mr[j] = b;
+      }
+      Kt.push(kr); Mt.push(mr);
+    }
+    for (let i = 0; i < n2; i++) for (let j = 0; j < i; j++) { Kt[j][i] = Kt[i][j]; Mt[j][i] = Mt[i][j]; }
+    const ge = generalizedEigen(Kt, Mt);
+    const values = ge.values, vectors = ge.vectors;
+    if (!values || !values.length) return { modes: [], mechanisms: 1 };
+
+    const modes = [];
+    let mechanisms = 0;
+    let mTot = 0;
+    for (let i = 0; i < nt; i++) mTot += Mr[i];
+    if (!(mTot > 0)) mTot = 1;
+    for (let i = 0; i < values.length && modes.length < nWanted; i++) {
+      let omega2 = values[i] - alpha; // remove the Rayleigh shift
+      if (!isFinite(omega2)) { mechanisms++; continue; }
+      if (omega2 < 0) omega2 = 0;
+      const f = Math.sqrt(omega2) / (2 * Math.PI);
+      if (f < 0.05) { mechanisms++; continue; }
+      const xt = new Float64Array(nt);
+      for (let k = 0; k < n2; k++) {
+        const z = vectors[i][k];
+        if (!z) continue;
+        for (let t = 0; t < nt; t++) xt[t] += z * psi[k][t];
+      }
+      const phi = new Float64Array(nDof);
+      for (let k = 0; k < nt; k++) phi[ft[k]] = xt[k];
+      if (nr && omega2 > 0) {
+        const rhs = Krt.map(r2 => {
+          let s2 = 0;
+          for (let k = 0; k < nt; k++) s2 += r2[k] * phi[ft[k]];
+          return Float64Array.from([s2]);
+        });
+        const rot = solveLDLT(Krr.map(r2 => Float64Array.from(r2)), rhs);
+        for (let k = 0; k < nr; k++) phi[fr[k]] = -rot[k][0];
+      }
+      let mNorm = 0;
+      for (let k = 0; k < nt; k++) mNorm += Mr[k] * xt[k] * xt[k];
+      if (mNorm > 0) { const sc = 1 / Math.sqrt(mNorm); for (let k = 0; k < nt; k++) phi[ft[k]] *= sc; }
+      const massRatio = { x: 0, y: 0, z: 0 };
+      const comps = [['x', 0], ['y', 1], ['z', 2]];
+      for (let c = 0; c < 3; c++) {
+        const key = comps[c][0], comp = comps[c][1];
+        let gamma = 0;
+        ft.forEach((d, k) => { if (d % 6 === comp) gamma += Mr[k] * (phi[d] || 0); });
+        massRatio[key] = gamma * gamma / mTot;
+      }
+      const omega = Math.sqrt(omega2);
+      modes.push({ f: omega / (2 * Math.PI), T: omega > 0 ? 2 * Math.PI / omega : Infinity, phi, massRatio });
+    }
+    return { modes, mechanisms };
+  }
+
+  // Condensed translational system shared by the eigen and Ritz solvers:
+  // Guyan-condenses the massless rotational DOFs, returns the reduced pair.
+  function buildCondensedSystem(nodesIn, frames, shells, extraMass) {
+    const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
+    const nNodes = nodes.length;
+    const nDof = nNodes * 6;
+    const K = [];
+    for (let i = 0; i < nDof; i++) K.push(new Float64Array(nDof));
+    for (const el of frames) {
+      const a = nodes[el.ni], b = nodes[el.nj];
+      const L = G.dist(a, b);
+      if (L < 1e-6) continue;
+      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      const R = rotationMatrix(a, b);
+      const Kg = transformFrame(Kl, R);
+      const dofs = [];
+      for (const ni of [el.ni, el.nj]) for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
+      for (let i = 0; i < 12; i++) for (let j = 0; j < 12; j++) K[dofs[i]][dofs[j]] += Kg[i][j];
+    }
+    // shells: MASS only (see modalAnalysis for the conditioning rationale)
+    const M = lumpedMass(nodes, frames, shells, extraMass);
+    const ft = [], fr = [];
+    for (let ni = 0; ni < nNodes; ni++) {
+      const fixed = nodes[ni].fixed;
+      for (let d = 0; d < 6; d++) {
+        if (fixed && fixed[d]) continue;
+        (d < 3 ? ft : fr).push(ni * 6 + d);
+      }
+    }
+    if (!ft.length || !ft.some(d => M[d] > 0)) return null;
+    const nt = ft.length, nr = fr.length;
+    const Ktt = [], Ktr = [], Krt = [], Krr = [];
+    for (let i = 0; i < nt; i++) {
+      Ktt.push(Float64Array.from(ft.map(d => K[ft[i]][d])));
+      if (nr) Ktr.push(Float64Array.from(fr.map(d => K[ft[i]][d])));
+    }
+    for (let i = 0; i < nr; i++) {
+      Krt.push(Float64Array.from(ft.map(d => K[fr[i]][d])));
+      Krr.push(Float64Array.from(fr.map(d => K[fr[i]][d])));
+    }
+    const Kc = Ktt.map(r => Float64Array.from(r));
+    if (nr) {
+      const W = solveLDLT(Krr.map(r => Float64Array.from(r)), Ktr.map(r => Float64Array.from(r)));
+      for (let i = 0; i < nt; i++)
+        for (let j = 0; j < nt; j++) {
+          let s = 0;
+          for (let k = 0; k < nr; k++) s += Ktr[i][k] * W[j][k];
+          Kc[i][j] -= s;
+        }
+    }
+    const Mr = ft.map(d => M[d]);
+    return { nodes, nNodes, nDof, ft, fr, nt, nr, Kc, Krr, Krt, Mr };
+  }
+
+  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
 })();

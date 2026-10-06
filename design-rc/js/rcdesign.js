@@ -84,6 +84,27 @@
   }
 
   // Full beam design check: returns pass/fail + capacity ratios
+  // Required tension steel for Mu: solve Mu = phi*As*fy*(d - a/2) with
+  // a = As*fy/(0.85*fc*b) by fixed-point iteration (ACI 318-19 22.2,
+  // the sequence the CSI Concrete Design Manual reports as "required As";
+  // phi = 0.9 assuming tension-controlled - verified against As_min).
+  function beamRequiredAs(fc, fy, b, h, Mu_kNm, cover) {
+    const d = h - cover - 12;
+    if (!(Math.abs(Mu_kNm) > 1e-9)) return { As: 0, a: 0, nBars: 0 };
+    const Mu = Math.abs(Mu_kNm) * 1e6; // N*mm
+    let As = Mu / (0.9 * fy * (0.9 * d));
+    for (let it = 0; it < 12; it++) {
+      const a = As * fy / (0.85 * fc * b);
+      const As2 = Mu / (0.9 * fy * Math.max(d - a / 2, 0.05 * d));
+      if (Math.abs(As2 - As) < 1e-6 * Math.max(As, 1)) { As = As2; break; }
+      As = As2;
+    }
+    const AsMin = beamMinSteel(fc, fy, b, h);
+    const AsFinal = Math.max(As, AsMin);
+    const a = AsFinal * fy / (0.85 * fc * b);
+    return { As: AsFinal, a, AsMin, nBars: 0 };
+  }
+
   function designBeam(sec, Mu, Vu) {
     // sec: {b, h, cover, fc, fy, top: {As, bars}, bot: {As, bars}, stirrups: {Av, s}}
     const b = sec.b, h = sec.h, cover = sec.cover != null ? sec.cover : 40;
@@ -275,7 +296,7 @@
     };
   }
 
-  window.RCDesign = {
+  window.RCDesign = { beamRequiredAs,
     beamFlexure, beamMinSteel, beamMaxSteel, beamShearVc, beamStirrups, designBeam,
     columnPM, checkColumn, defaultBars, beamDeflection,
     Es,

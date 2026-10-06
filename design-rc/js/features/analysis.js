@@ -233,7 +233,8 @@
         if (isWall && p.wall > 0) applyShellPressure(mesh, add, { pattern: p.id, q: p.wall, dir: '+x' }, ent);
       }
     }
-    return { patterns, loads, memberLoads };
+    const auto = applyAutoLateral(app, mesh, { patterns, loads, memberLoads }, opts);
+    return { patterns, loads, memberLoads, auto };
   }
 
   function shellArea(mesh, sh) {
@@ -272,9 +273,166 @@
     }
   }
 
+  // ============================================ auto lateral loads (ETABS parity)
+  // Seismic: ASCE 7-16 §12.8 equivalent lateral force — V = Cs·W with the
+  // §12.8.3 vertical distribution Cvx = wx·hx²/Σ(wx·hx²); Cs per §12.8.2
+  // (user coefficient or SDS/SD1/R/Ie/T with the Ta = Ct·hn^x approximation,
+  // §12.8.2.1 / Table 12.8-2). Wind: ASCE 7-16 §26/27 velocity pressure
+  // qz = 0.613·Kz·Kd·V² (SI) with the exposure power-law Kz of §26.10.1,
+  // distributed to the stories as tributary-area nodal forces.
+  // Settings live on model.autoSeismic / model.autoWind (saved with the model).
+  const EXPOSURES = { // ASCE 7-16 Table 26.10-1 (SI: zg metres)
+    B: { alpha: 7.0, zg: 365.76, zmin: 9.14 },
+    C: { alpha: 9.5, zg: 274.32, zmin: 9.14 },
+    D: { alpha: 11.5, zg: 213.36, zmin: 4.57 },
+  };
+  const CT_SYSTEMS = { // ASCE 7-16 Table 12.8-2 (SI coefficients, hn in m)
+    'rcMomentFrame': { ct: 0.0466, x: 0.9 },
+    'steelMomentFrame': { ct: 0.0724, x: 0.8 },
+    'eccentricBraced': { ct: 0.0731, x: 0.75 },
+    'allOther': { ct: 0.0488, x: 0.75 },
+  };
+
+  function kz(z, exposure) {
+    const e = EXPOSURES[exposure] || EXPOSURES.C;
+    const zz = Math.max(z, e.zmin);
+    return 2.01 * Math.pow(zz / e.zg, 2 / e.alpha);
+  }
+
+  // Seismic response coefficient per ASCE 7-16 §12.8.2 from the model params
+  function seismicCs(as, buildingHeight) {
+    if (as == null) return { cs: 0, T: 0, note: 'no seismic input' };
+    if (as.cs != null) return { cs: as.cs, T: as.T || 0, note: 'user Cs' };
+    const RIe = (as.R || 8) / (as.Ie || 1);
+    // period: user T, else the approximate Ta = Ct·hn^x
+    let T = as.T;
+    let note = '';
+    if (!(T > 0)) {
+      const sys = CT_SYSTEMS[as.system] || CT_SYSTEMS.allOther;
+      T = sys.ct * Math.pow(Math.max(buildingHeight, 1), sys.x);
+      note = 'Ta = Ct·hn^x';
+    }
+    const sds = as.sds != null ? as.sds : 0.2;
+    const sd1 = as.sd1 != null ? as.sd1 : 0.1;
+    let cs = sds / RIe;                                   // §12.8-2
+    const tl = as.tl || 4.0;
+    if (T <= tl) cs = Math.min(cs, sd1 / (T * RIe));      // §12.8-3
+    else cs = Math.min(cs, sd1 * tl / (T * T * RIe));     // §12.8-4
+    cs = Math.max(cs, 0.044 * sds * (as.Ie || 1), 0.01);  // §12.8-5/6
+    return { cs, T, note };
+  }
+
+  // Apply the auto lateral loads to the pattern maps. Seismic weight W and
+  // the mass source agree: self-weight + SDL (+ live fraction), all in N.
+  function applyAutoLateral(app, mesh, loadState, opts) {
+    const m = app.model;
+    const G = window.G;
+    const out = { seismic: null, wind: null };
+
+    // ---- seismic (ASCE 7-16 §12.8)
+    const as = m.autoSeismic;
+    if (as && as.enabled !== false) {
+      let zMax = 0;
+      for (const n of mesh.nodes) zMax = Math.max(zMax, n.z);
+      const { cs, T, note } = seismicCs(as, zMax);
+      // seismic weight per node from the pattern load maps (N)
+      const w = new Float64Array(mesh.nodes.length);
+      const countW = (pid, frac) => {
+        const lv = loadState.loads[pid];
+        if (lv) for (const [ni, vals] of lv) w[ni] += (frac || 1) * Math.abs(vals[2] || 0);
+        // beam self-weight rides the consistent member-load path: add its
+        // gravity equivalent back into the nodal seismic weight
+        const ml = loadState.memberLoads[pid];
+        if (ml) mesh.frames.forEach((fr, fi) => {
+          const m = ml[fi];
+          if (!m) return;
+          const R = window.FEA.rotationMatrix(mesh.nodes[fr.ni], mesh.nodes[fr.nj]);
+          const vz = Math.abs((m.wy || 0) * R[1][2] + (m.wz || 0) * R[2][2]); // N/mm vertical
+          if (!vz) return;
+          const L = window.G.dist(mesh.nodes[fr.ni], mesh.nodes[fr.nj]);
+          const fz = (frac || 1) * vz * L * 1000 / 2; // N per end node
+          w[fr.ni] += fz; w[fr.nj] += fz;
+        });
+      };
+      for (const pat of loadState.patterns) {
+        if (pat.type === 'dead') countW(pat.id, 1);
+        if (pat.type === 'live') countW(pat.id, as.liveFraction != null ? as.liveFraction : 0);
+      }
+      let W = 0;
+      for (let i = 0; i < w.length; i++) W += w[i];
+      // §12.8.3: Cvx = wx·hx²/Σ(wx·hx²) — node-level distribution
+      const dirV = DIRS[as.dir || '+x'] || DIRS['+x'];
+      const pid = as.pattern || 'EQ';
+      if (!loadState.loads[pid]) { loadState.loads[pid] = new Map(); loadState.memberLoads[pid] = new Array(mesh.frames.length).fill(null); loadState.patterns.push({ id: pid, name: 'Seismic', type: 'quake' }); }
+      const map = loadState.loads[pid];
+      const addF = (ni, f) => {
+        if (!map.has(ni)) map.set(ni, [0, 0, 0, 0, 0, 0]);
+        map.get(ni)[0] += f * dirV[0]; map.get(ni)[1] += f * dirV[1];
+      };
+      let sumCx = 0;
+      const cv = new Float64Array(mesh.nodes.length);
+      for (let i = 0; i < mesh.nodes.length; i++) {
+        cv[i] = w[i] * Math.pow(Math.max(mesh.nodes[i].z, 0), 2);
+        sumCx += cv[i];
+      }
+      const V = cs * W;
+      if (sumCx > 0) for (let i = 0; i < mesh.nodes.length; i++) {
+        const F = V * cv[i] / sumCx;
+        if (F) addF(i, F);
+      }
+      out.seismic = { cs, T, V: V / 1000, W: W / 1000, note, pattern: pid };
+    }
+
+    // ---- wind (ASCE 7-16 §26.10.1/§27.3): qz by node elevation,
+    // tributary area from the mesh bounding box and story heights
+    const aw = m.autoWind;
+    if (aw && aw.enabled !== false && aw.v > 0) {
+      const dirV = DIRS[aw.dir || '+x'] || DIRS['+x'];
+      const kd = aw.kd != null ? aw.kd : 0.85;
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, zMax = 0;
+      for (const n of mesh.nodes) {
+        x0 = Math.min(x0, n.x); x1 = Math.max(x1, n.x);
+        y0 = Math.min(y0, n.y); y1 = Math.max(y1, n.y);
+        zMax = Math.max(zMax, n.z);
+      }
+      // face width ⊥ wind; planar models (extent ≈ 0) get a 1 m tributary strip
+      const width = Math.max(Math.abs(dirV[0]) > 0 ? (y1 - y0) : (x1 - x0), 1);
+
+      const pid = aw.pattern || 'WL';
+      if (!loadState.loads[pid]) { loadState.loads[pid] = new Map(); loadState.memberLoads[pid] = new Array(mesh.frames.length).fill(null); }
+      const map = loadState.loads[pid];
+      // story heights from level elevations (fallback: single band)
+      const lvls = (app.model.levels || []).map(l => l.elevation || 0).sort((a, b) => a - b);
+      const bands = [];
+      for (let i = 0; i + 1 < lvls.length; i++) bands.push({ z0: lvls[i], z1: lvls[i + 1] });
+      if (!bands.length) bands.push({ z0: 0, z1: zMax || 1 });
+      const nodeBand = new Int32Array(mesh.nodes.length).fill(-1);
+      const bandCount = bands.map(() => 0);
+      for (let i = 0; i < mesh.nodes.length; i++) {
+        const z = mesh.nodes[i].z;
+        for (let b = 0; b < bands.length; b++)
+          if (z >= bands[b].z0 - 1e-6 && z < bands[b].z1 + 1e-6) { nodeBand[i] = b; bandCount[b]++; break; }
+      }
+      let totalF = 0;
+      for (let i = 0; i < mesh.nodes.length; i++) {
+        const b = nodeBand[i];
+        if (b < 0 || !bandCount[b]) continue;
+        const h = Math.max(bands[b].z1 - bands[b].z0, 0.1);
+        const zc = (bands[b].z0 + bands[b].z1) / 2;
+        const qz = 0.613 * kz(zc, aw.exposure || 'C') * kd * aw.v * aw.v; // N/m²
+        const F = qz * width * h / bandCount[b]; // N per node
+        if (!map.has(i)) map.set(i, [0, 0, 0, 0, 0, 0]);
+        map.get(i)[0] += F * dirV[0]; map.get(i)[1] += F * dirV[1];
+        totalF += F;
+      }
+      out.wind = { V: aw.v, exposure: aw.exposure || 'C', baseShear_kN: totalF / 1000, pattern: pid };
+    }
+    return out;
+  }
+
   // ACI 318-19 §5.3.1 strength combinations built from the pattern TYPES:
   // D = dead patterns (incl. self-weight), L = live, W = wind, S = snow/roof.
-  function buildCombinations(patterns) {
+  function buildCombinations(patterns, sdsIn) {
     const g = t => patterns.filter(p => p.type === t).map(p => p.id);
     const D = g('dead'), L = g('live'), W = g('wind'), S = g('snow'), Lr = g('roof');
     const Sr = S.length ? S : Lr;
@@ -284,7 +442,17 @@
     const c3 = mk('1.2D+1.6S+0.5L'); for (const id of D) c3.factors[id] = 1.2; for (const id of Sr) c3.factors[id] = 1.6; for (const id of L) c3.factors[id] = 0.5;
     const c4 = mk('1.2D+1.0W+1.0L'); for (const id of D) c4.factors[id] = 1.2; for (const id of W) c4.factors[id] = 1.0; for (const id of L) c4.factors[id] = 1.0;
     const c5 = mk('0.9D+1.0W'); for (const id of D) c5.factors[id] = 0.9; for (const id of W) c5.factors[id] = 1.0;
-    return [c1, c2, c3, c4, c5];
+    const combos = [c1, c2, c3, c4, c5];
+    // ASCE 7-16 §12.4.2 strength combos with seismic (Ev = 0.2·SDS·D folded
+    // into the dead factor; rho = 1.0, overstrength not applied)
+    if (patterns.some(pp => pp.type === 'quake')) {
+      const Q = patterns.filter(pp => pp.type === 'quake').map(pp => pp.id);
+      const sds = sdsIn != null ? sdsIn : 0.2;
+      const c6 = mk('Ev+Eh+D+L'); for (const id of D) c6.factors[id] = 1.2 + 0.2 * sds; for (const id of Q) c6.factors[id] = 1.0; for (const id of L) c6.factors[id] = 0.5;
+      const c7 = mk('0.9D-Ev+Eh'); for (const id of D) c7.factors[id] = 0.9 - 0.2 * sds; for (const id of Q) c7.factors[id] = 1.0;
+      combos.push(c6, c7);
+    }
+    return combos;
   }
   const COMBINATIONS = buildCombinations(DEFAULT_PATTERNS());
 
@@ -322,7 +490,8 @@
       return { error: 'No structural elements found — draw columns, beams, walls or slabs first' };
     }
     const loadState = buildLoads(app, mesh, opts);
-    const combos = buildCombinations(loadState.patterns);
+    const as = app.model.autoSeismic;
+    const combos = buildCombinations(loadState.patterns, as && as.sds != null ? as.sds : null);
     const frameIndex = new Map(mesh.frames.map((f, i) => [f, i]));
     const results = [];
     for (const combo of combos) {
@@ -396,7 +565,33 @@
         if (dx > maxDrift) { maxDrift = dx; maxNode = i; }
       }
     }
-    return { mesh, loadState, results, envelope, maxDrift, maxNode, combos: combos.map(c => c.name), patterns: loadState.patterns };
+    // per-story drift ratios (mm/mm) vs ASCE 7-16 Table 12.12-1:
+    // design story drift = max lateral displacement difference over the
+    // story, divided by the story height (Cd not applied — elastic drift)
+    const storyDrift = [];
+    {
+      const lvls = (app.model.levels || []).map(l => ({ z: l.elevation || 0, name: l.name })).sort((a, b) => a.z - b.z);
+      if (lvls.length >= 2) {
+        for (let li = 1; li < lvls.length; li++) {
+          const zLow = lvls[li - 1].z, zHigh = lvls[li].z;
+          const h = zHigh - zLow;
+          if (!(h > 1e-6)) continue;
+          let dLowMax = 0, dHighMax = 0;
+          for (const res of results) {
+            for (let i = 0; i < mesh.nodes.length; i++) {
+              const z = mesh.nodes[i].z;
+              const disp = Math.hypot(res.U[i * 6] || 0, res.U[i * 6 + 1] || 0);
+              if (Math.abs(z - zLow) < 0.05) dLowMax = Math.max(dLowMax, disp);
+              if (Math.abs(z - zHigh) < 0.05) dHighMax = Math.max(dHighMax, disp);
+            }
+          }
+          const ratio = (dHighMax - dLowMax) / 1000 / h; // mm → m over m
+          storyDrift.push({ story: lvls[li].name || ('+' + zHigh.toFixed(1)), ratio, deltaMm: (dHighMax - dLowMax) });
+        }
+      }
+    }
+    const maxDriftRatio = storyDrift.length ? Math.max(...storyDrift.map(d => d.ratio)) : 0;
+    return { mesh, loadState, results, envelope, maxDrift, maxNode, storyDrift, maxDriftRatio, auto: loadState.auto, combos: combos.map(c => c.name), patterns: loadState.patterns };
   }
 
   // Design every beam and column in the model against the envelope
@@ -427,6 +622,10 @@
         const sec = { b: bw, h, cover: pr.cover, fc: pr.fc, fy: pr.fy,
           top: { As: AsTop }, bot: { As: AsBot }, stirrups: { Av: 101, s: 200 } };
         const check = RC.designBeam(sec, env.maxM / 1e6, env.maxV / 1000);
+        // required steel (CSI Concrete Design Manual reporting sequence)
+        const req = RC.beamRequiredAs(pr.fc, pr.fy, bw, h, env.maxM / 1e6, pr.cover);
+        const abar = Math.PI * (pr.barBot || 20) * (pr.barBot || 20) / 4;
+        check.required = { As: req.As, nBars: Math.ceil(req.As / abar), barDia: pr.barBot || 20 };
         designs.push({ entityId: env.entityId, type: 'beam', label: ent.id + (p.section ? ' [' + p.section + ']' : ''), env, check });
       }
     }
@@ -463,9 +662,14 @@
       imposedT += 3 * m;
     }
     const t0 = performance.now();
-    const res = FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra);
+    // Ritz vectors are the ETABS default (CSI Analysis Reference) — better
+    // conditioned and they carry modal participating mass ratios directly
+    const method = opts.method === 'eigenvector' ? 'eigenvector' : 'ritz';
+    const res = method === 'ritz'
+      ? FEA.ritzModalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra, opts.dir || 'gravity')
+      : FEA.modalAnalysis(mesh.nodes, mesh.frames, mesh.shells, nModes, extra);
     return {
-      mesh, modes: res.modes, mechanisms: res.mechanisms || 0,
+      mesh, modes: res.modes, mechanisms: res.mechanisms || 0, method,
       massSource: 'self-weight' + (imposedT > 0 ? ' + SDL' + (llFrac > 0 ? ' + ' + (llFrac * 100).toFixed(0) + '% LL' : '') : '') +
         (imposedT > 0 ? ' (+' + imposedT.toFixed(1) + ' t imposed)' : ''),
       ms: Math.round(performance.now() - t0),

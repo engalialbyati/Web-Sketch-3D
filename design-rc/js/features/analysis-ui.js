@@ -59,6 +59,9 @@
     }
     const nReact = results.results[0] ? results.results[0].reactions.length : 0;
     const pdNote = results.results.some(r => r.pDeltaIterations > 0) ? ' · P-Δ included' : '';
+    const autoNote = results.auto && (results.auto.seismic || results.auto.wind)
+      ? ` · <b>Auto lateral:</b> ${results.auto.seismic ? 'V = ' + results.auto.seismic.V.toFixed(0) + ' kN (Cs ' + results.auto.seismic.cs.toFixed(3) + ')' : ''}${results.auto.wind ? ' wind ΣF = ' + results.auto.wind.baseShear_kN.toFixed(0) + ' kN' : ''}`
+      : '';
     // envelope table per element (top 30)
     const rows = results.envelope
       .filter(e => e.entityId)
@@ -90,6 +93,7 @@
       </div>
       <div style="margin:0 0 8px">
         <b>Max lateral drift:</b> ${results.maxDrift.toFixed(1)} mm${pdNote}
+        · <b>Max story drift ratio:</b> ${results.maxDriftRatio.toFixed(4)} (ASCE 7-16 Table 12.12-1: ≤ 0.020 typical)${autoNote}
         · <b>Reactions:</b> ${nReact} support nodes (ΣFx ${Math.abs(baseFx / 1e3).toFixed(0)} kN, ΣFz ${(baseFz / 1e3).toFixed(0)} kN across combos)
       </div>
       <table class="ob-table" style="width:100%;border-collapse:collapse;font-size:11px">
@@ -160,11 +164,17 @@
       app.toast('Draw structural elements first (columns, beams, walls, slabs)', true);
       return;
     }
-    app.dialog('Modal Analysis — Mass Source', `
+    app.dialog('Modal Analysis — Mass Source & Method', `
       <div class="dim" style="margin:0 0 10px">
         Free vibration of ${counts.col} columns, ${counts.beam} beams, ${counts.wall} walls, ${counts.slab} slabs.
         Mass = self-weight (24 kN/m³) + the superimposed sources below (ASCE 7 §12.7.2 style).
       </div>
+      <div class="form-row"><label>Method</label><select id="sm-method">
+        <option value="ritz" selected>Ritz vectors (ETABS default)</option>
+        <option value="eigenvector">Eigenvectors (exact)</option></select></div>
+      <div class="form-row"><label>Ritz start direction</label><select id="sm-dir">
+        <option value="gravity" selected>Gravity (Z)</option>
+        <option value="x">+X</option><option value="y">+Y</option></select></div>
       <div class="form-row"><label>Superimposed dead (kPa)</label><input type="number" id="sm-sdl" step="0.5" value="1.5" style="width:90px"></div>
       <div class="form-row"><label>Live load in mass (%)</label><input type="number" id="sm-llf" step="5" min="0" max="100" value="0" style="width:90px"></div>
       <div class="form-row"><label>Live load magnitude (kPa)</label><input type="number" id="sm-ll" step="0.5" value="2.0" style="width:90px"></div>
@@ -175,7 +185,9 @@
         const llf = Math.min(Math.max(parseFloat(document.getElementById('sm-llf').value) || 0, 0), 100) / 100;
         const ll = parseFloat(document.getElementById('sm-ll').value) || 2;
         app.closeDialog();
-        const res = window.StructuralAnalysis.runModal(app, 6, { superDead: sdl, liveFraction: llf, liveLoad: ll });
+        const method = document.getElementById('sm-method').value;
+        const dir = document.getElementById('sm-dir').value;
+        const res = window.StructuralAnalysis.runModal(app, 8, { superDead: sdl, liveFraction: llf, liveLoad: ll, method, dir });
         if (res.error) { app.toast(res.error, true); return false; }
         app._lastModal = res;
         if (window.AnalysisDiagrams) window.AnalysisDiagrams.clear(app);
@@ -190,6 +202,7 @@
       <td>Mode ${i + 1}</td>
       <td style="text-align:right">${m.f.toFixed(2)} Hz</td>
       <td style="text-align:right">${m.T.toFixed(3)} s</td>
+      <td style="text-align:right">${m.massRatio ? (m.massRatio.x * 100).toFixed(0) + '/' + (m.massRatio.y * 100).toFixed(0) + '/' + (m.massRatio.z * 100).toFixed(0) + '%' : ''}</td>
       <td><button data-mode="${i}" class="btn small">View Shape</button></td></tr>`).join('');
     const warn = res.mechanisms ? `<div style="margin:0 0 6px;color:#dc2626">⚠ ${res.mechanisms} mechanism mode(s) found (0 Hz) — the structure can sway rigidly. Add bracing/walls or fix the supports before trusting the results.</div>` : '';
     app.dialog('Modal Analysis — ' + res.modes.length + ' modes, ' + res.ms + ' ms', `
@@ -199,7 +212,7 @@
         first modes govern seismic base shear.
       </div>
       <table class="ob-table" style="width:100%;border-collapse:collapse;font-size:11px">
-        <tr style="text-align:left"><th>Mode</th><th>Frequency</th><th>Period</th><th></th></tr>
+        <tr style="text-align:left"><th>Mode</th><th>Frequency</th><th>Period</th><th>Mass X/Y/Z</th><th></th></tr>
         ${rows}
       </table>
     `, [

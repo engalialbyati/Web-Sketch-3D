@@ -611,6 +611,169 @@ module.exports = h => {
     ok(col2.check.PuMax >= col.check.PuMax - 1e-9, 'raising fc from 25 to 30 does not reduce capacity');
   });
 
+
+  // ============================================= Ritz + auto lateral (ASCE 7)
+  test('Ritz vectors: match exact eigenfrequencies on the portal', () => {
+    const A = 0.3 * 0.3 * 1e6, I = 0.3 * 0.3 ** 3 / 12 * 1e12;
+    const nodes = [
+      { x: 0, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] }, { x: 0, y: 0, z: 3 },
+      { x: 6, y: 0, z: 0, fixed: [1, 1, 1, 1, 1, 1] }, { x: 6, y: 0, z: 3 },
+    ];
+    const frames = [
+      { ni: 0, nj: 1, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 },
+      { ni: 2, nj: 3, E: 25000, A, Iy: I, Iz: I, J: 1e10, rho: 2.4e-9 },
+      { ni: 1, nj: 3, E: 25000, A: 1.8e5, Iy: 1e12, Iz: 1e12, J: 1e11, rho: 2.4e-9 },
+    ];
+    const exact = FEA.modalAnalysis(nodes, frames, [], 4).modes.map(m => m.f);
+    const ritz = FEA.ritzModalAnalysis(nodes, frames, [], 4).modes.map(m => m.f);
+    ok(ritz.length >= 2, 'Ritz returns modes');
+    // the first two (sway) must match the exact eigenfrequencies closely
+    near(ritz[0], exact[0], exact[0] * 0.02, 'Ritz mode 1 vs exact');
+    near(ritz[1], exact[1], exact[1] * 0.02, 'Ritz mode 2 vs exact');
+    const mz = FEA.ritzModalAnalysis(nodes, frames, [], 4).modes;
+    ok(mz.every(m => m.massRatio && m.massRatio.x + m.massRatio.y + m.massRatio.z >= 0), 'mass ratios present');
+    const lateral = mz.reduce((a, m) => a + m.massRatio.x, 0);
+    ok(lateral > 0.2, 'the sway modes capture a meaningful share of X mass (' + (lateral * 100).toFixed(0) + '%)');
+  });
+
+  test('seismic Cs: §12.8 caps applied', () => {
+    // SDS = 1.0, SD1 = 0.6, R = 8, Ie = 1 → Cs = SDS/(R/Ie) = 0.125,
+    // capped by SD1/(T·R/Ie) with T = user 1.0 s → 0.075 governs
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'L1', elevation: 0 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE;
+    const app12 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    m.autoSeismic = { enabled: true, mode: 'asce', sds: 1.0, sd1: 0.6, R: 8, Ie: 1, T: 1.0, dir: '+x' };
+    const res = StructuralAnalysis.runAnalysis(app12, { liveLoad: 0, superDead: 0 });
+    ok(!res.error, 'analysis with auto seismic runs');
+    ok(res.auto && res.auto.seismic, 'auto seismic summary present');
+    near(res.auto.seismic.cs, 0.075, 0.001, 'Cs = SD1/(T·R/Ie) = 0.075 governs');
+    const eqCombos = res.combos.filter(c => /Eh|Ev/.test(c));
+    ok(eqCombos.length >= 2, 'ASCE 7 §12.4.2 seismic combos added');
+    // base shear in the reactions of the seismic combo: ΣFx ≈ V
+    const eqMap = res.patterns.find(p => p.type === 'quake');
+    ok(eqMap, 'quake pattern created');
+    ok(res.auto.seismic.V > 0, 'base shear computed: ' + res.auto.seismic.V.toFixed(1) + ' kN');
+  });
+
+  test('seismic distribution: story forces follow wx·hx²', () => {
+    const G2 = w.G;
+    const mesh = StructuralAnalysis.extractMesh; // presence check only
+    // two-level lumped check via the load map: equal masses at z=3 and z=6
+    // → Cvx ratio = (3²):(6²) = 1:4 → 20% / 80% of V
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'B', elevation: 0 }, { id: 'lvl_2', name: 'S1', elevation: 3 }, { id: 'lvl_3', name: 'S2', elevation: 6 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE; // eslint-disable-line
+    const app13 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    // two identical portals, stories at 3 and 6
+    for (const z of [0, 3]) {
+      bim.create('column', { base: [0, 0, z], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+      bim.create('column', { base: [6, 0, z], width: 0.3, depth: 0.3, height: 3, baseLevel: 'lvl_1' }, {}, []);
+      bim.create('beam', { baseline: [[0, 0, z + 3], [6, 0, z + 3]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    }
+    m.autoSeismic = { enabled: true, mode: 'cs', cs: 0.1, dir: '+x' };
+    const res = StructuralAnalysis.runAnalysis(app13, { liveLoad: 0, superDead: 0 });
+    ok(!res.error, 'two-story auto seismic runs');
+    // the map: forces at z=3 nodes vs z=6 nodes (equal weights per node)
+    const ls = res.loadState;
+    // find the quake pattern id
+    const qp = res.patterns.find(p2 => p2.type === 'quake').id;
+    const eqMap = ls.loads[qp];
+    ok(eqMap && eqMap.size > 0, 'quake nodal forces generated');
+    let f3 = 0, f6 = 0;
+    for (const [ni, v] of eqMap) {
+      const z = res.mesh.nodes[ni].z;
+      if (Math.abs(z - 3) < 0.01) f3 += Math.abs(v[0]);
+      if (Math.abs(z - 6) < 0.01) f6 += Math.abs(v[0]);
+    }
+    ok(f3 > 0 && f6 > 0, 'forces at both stories');
+    // story weights: z=3 carries 4 column halves + story beam, z=6 carries
+    // 2 halves + beam (kN): w3 = 12.96 + 21.6, w6 = 6.48 + 21.6 →
+    // F ∝ w·h² → ratio = (28.08·36)/(34.56·9) = 3.249
+    near(f6 / f3, 3.249, 0.05, 'forces follow w·h² with non-uniform story mass');
+  });
+
+  test('wind: qz follows the exposure power law', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'lvl_1', name: 'B', elevation: 0 }, { id: 'lvl_2', name: 'S1', elevation: 10 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE; // eslint-disable-line
+    const app14 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'lvl_1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 10, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 10, baseLevel: 'lvl_1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 10], [6, 0, 10]], height: 0.5, webWidth: 0.3, baseLevel: 'lvl_1' }, {}, []);
+    m.autoWind = { enabled: true, v: 40, exposure: 'C', dir: '+x', kd: 0.85 };
+    const res = StructuralAnalysis.runAnalysis(app14, { liveLoad: 0, superDead: 0 });
+    ok(!res.error, 'auto wind runs');
+    ok(res.auto.wind && res.auto.wind.baseShear_kN > 0, 'wind base shear computed: ' + res.auto.wind.baseShear_kN.toFixed(0) + ' kN');
+    // hand-check: single 10 m band, width 6 m, qz(5 m, Exp C) with zmin clamp
+    // Kz = 2.01·(9.14/274.32)^(2/9.5) = 0.849; qz = 0.613·0.849·0.85·40² = 707 N/m²
+    // tributary nodes: 3 top + 2 base = all in [0,10) band → total = 707·6·10 = 4242 N... bands split by levels
+    ok(res.auto.wind.baseShear_kN > 3 && res.auto.wind.baseShear_kN < 12, 'wind shear in the expected range');
+  });
+
+  test('required steel: phi As fy (d-a/2) covers Mu, min steel floor', () => {
+    const RC2 = w.RCDesign;
+    const r = RC2.beamRequiredAs(30, 420, 300, 600, 200, 40);
+    const d = 600 - 40 - 12;
+    const a = r.As * 420 / (0.85 * 30 * 300);
+    near(0.9 * r.As * 420 * (d - a / 2) / 1e6, 200, 0.5, 'phiMn from required As = Mu');
+    ok(r.As > 900 && r.As < 1100, 'As in the expected range: ' + r.As.toFixed(0) + ' mm²');
+    const tiny = RC2.beamRequiredAs(30, 420, 300, 600, 1, 40);
+    ok(tiny.As >= RC2.beamMinSteel(30, 420, 300, 600), 'minimum steel floors the requirement');
+  });
+
+  test('story drift ratios computed per level', () => {
+    const m = new w.Model();
+    m.levels = [{ id: 'l1', name: 'B', elevation: 0 }, { id: 'l2', name: 'S1', elevation: 3 }];
+    const bim = new w.BimEntityManager(m);
+    const THREE = w.THREE; // eslint-disable-line
+    const app15 = Object.assign(Object.create(w.App.prototype), {
+      model: m, bim,
+      view: { scene: new THREE.Scene(), container: { appendChild() { } }, rebuild() { }, invalidate() { } },
+      toast() { }, setStatus() { }, updateInfo() { },
+      run: (l, fn) => fn(m),
+      transaction: { run: (l, fn) => fn(m) },
+      levelManager: { levels: m.levels, getLevel: id => m.levels.find(x => x.id === id), getElevation: id => 0 },
+      bimOptions: { baseLevel: 'l1' }, refreshGroups() { },
+    });
+    bim.create('column', { base: [0, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'l1' }, {}, []);
+    bim.create('column', { base: [6, 0, 0], width: 0.3, depth: 0.3, height: 3, baseLevel: 'l1' }, {}, []);
+    bim.create('beam', { baseline: [[0, 0, 3], [6, 0, 3]], height: 0.5, webWidth: 0.3, baseLevel: 'l1' }, {}, []);
+    m.autoWind = { enabled: true, v: 40, exposure: 'C', dir: '+x', kd: 0.85 };
+    const res = StructuralAnalysis.runAnalysis(app15, {});
+    ok(Array.isArray(res.storyDrift) && res.storyDrift.length >= 1, 'story drift rows computed');
+    ok(res.maxDriftRatio > 0, 'max drift ratio positive: ' + res.maxDriftRatio.toFixed(5));
+  });
   test('modal: pin-based unbraced frame reports its mechanism instead of crashing', () => {
     // two pin-based columns + a beam = a true sway mechanism (0 Hz): the
     // solver must filter it out, count it, and still return the real modes

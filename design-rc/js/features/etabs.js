@@ -254,6 +254,70 @@
     ]);
   }
 
+  // ------------------------------------------------------- Auto Lateral Loads
+  // ETABS "Auto Lateral - Seismic/Wind": ASCE 7-16 §12.8 equivalent lateral
+  // force (V = Cs·W, vertical distribution wx·hx²) and §26/27 velocity
+  // pressure wind (qz = 0.613·Kz·Kd·V²). Settings persist on the model.
+  function autoLateralDialog(app) {
+    const m = app.model;
+    const as = m.autoSeismic || { enabled: true, mode: 'asce', sds: 1.0, sd1: 0.6, R: 8, Ie: 1.0, T: null, system: 'rcMomentFrame', tl: 4, dir: '+x', liveFraction: 0 };
+    const aw = m.autoWind || { enabled: true, v: 40, exposure: 'C', dir: '+x', kd: 0.85 };
+    const row = (id, label, val, step, extra) =>
+      `<div class="form-row"><label>${label}</label><input type="number" id="${id}" step="${step || 1}" value="${val}" style="width:90px" ${extra || ''}></div>`;
+    app.dialog('Auto Lateral Loads — ASCE 7-16', `
+      <div class="dim" style="margin:0 0 8px">Generated automatically at Run Analysis: seismic story forces
+      (§12.8 equivalent lateral force, vertical distribution wx·hx²) and wind nodal forces
+      (§26.10 exposure power-law qz).</div>
+      <div style="font-weight:600;margin:2px 0 4px">Seismic (§12.8 ELF)</div>
+      <div class="form-row"><label>Enabled</label><input type="checkbox" id="al-se" ${as.enabled !== false ? 'checked' : ''} style="width:auto"></div>
+      <div class="form-row"><label>Coefficient</label><select id="al-mode">
+        <option value="asce"${as.mode !== 'cs' ? ' selected' : ''}>ASCE 7 (SDS/SD1/R/Ie)</option>
+        <option value="cs"${as.mode === 'cs' ? ' selected' : ''}>User Cs</option></select></div>
+      ${row('al-cs', 'User Cs', as.cs != null ? as.cs : 0.09, 0.005, 'title="used when Coefficient = User Cs"')}
+      ${row('al-sds', 'SDS (g)', as.sds, 0.05)}
+      ${row('al-sd1', 'SD1 (g)', as.sd1, 0.05)}
+      ${row('al-r', 'R', as.R, 0.5)}
+      ${row('al-ie', 'Ie', as.Ie, 0.1)}
+      ${row('al-t', 'T (s, 0 = approx Ta)', as.T || 0, 0.1)}
+      <div class="form-row"><label>System (Ta = Ct·hn^x)</label><select id="al-sys">
+        <option value="rcMomentFrame"${as.system === 'rcMomentFrame' ? ' selected' : ''}>RC moment frame</option>
+        <option value="steelMomentFrame"${as.system === 'steelMomentFrame' ? ' selected' : ''}>Steel moment frame</option>
+        <option value="eccentricBraced"${as.system === 'eccentricBraced' ? ' selected' : ''}>Eccentrically braced</option>
+        <option value="allOther"${as.system === 'allOther' ? ' selected' : ''}>All other</option></select></div>
+      ${row('al-lf', 'Live in seismic mass', as.liveFraction != null ? as.liveFraction : 0, 0.05)}
+      <div class="form-row"><label>Direction</label><select id="al-sdir">
+        ${['+x', '-x', '+y', '-y'].map(d => `<option value="${d}"${as.dir === d ? ' selected' : ''}>${d}</option>`).join('')}</select></div>
+      <div style="font-weight:600;margin:10px 0 4px">Wind (§26/27)</div>
+      <div class="form-row"><label>Enabled</label><input type="checkbox" id="al-we" ${aw.enabled !== false ? 'checked' : ''} style="width:auto"></div>
+      ${row('al-v', 'V (m/s)', aw.v, 5)}
+      <div class="form-row"><label>Exposure</label><select id="al-exp">
+        ${['B', 'C', 'D'].map(e2 => `<option value="${e2}"${aw.exposure === e2 ? ' selected' : ''}>${e2}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Direction</label><select id="al-wdir">
+        ${['+x', '-x', '+y', '-y'].map(d => `<option value="${d}"${aw.dir === d ? ' selected' : ''}>${d}</option>`).join('')}</select></div>
+    `, [
+      ['Cancel', null],
+      ['Save & Preview', () => {
+        const num = id => parseFloat((document.getElementById(id) || {}).value);
+        m.autoSeismic = {
+          enabled: document.getElementById('al-se').checked,
+          mode: document.getElementById('al-mode').value,
+          cs: num('al-cs') || null,
+          sds: num('al-sds'), sd1: num('al-sd1'), R: num('al-r'), Ie: num('al-ie'),
+          T: num('al-t') || null, system: document.getElementById('al-sys').value,
+          liveFraction: num('al-lf') || 0, tl: as.tl || 4, dir: document.getElementById('al-sdir').value,
+        };
+        if (m.autoSeismic.mode === 'cs' && !(m.autoSeismic.cs > 0)) { app.toast('Enter a positive User Cs', true); return false; }
+        m.autoWind = {
+          enabled: document.getElementById('al-we').checked,
+          v: num('al-v') || 0, exposure: document.getElementById('al-exp').value,
+          dir: document.getElementById('al-wdir').value, kd: aw.kd != null ? aw.kd : 0.85,
+        };
+        app.toast('Auto lateral saved — Run Analysis applies it');
+        return true;
+      }],
+    ]);
+  }
+
   // ----------------------------------------------------------- Design Prefs
   const DEFAULT_PREFS = () => ({ fc: 30, fy: 420, cover: 40, barTop: 16, barBot: 20, colBar: 20, colPerFace: 2 });
   function getPrefs(app) {
@@ -306,6 +370,7 @@
   }
 
   window.EtabsUI = {
+    autoLateralDialog,
     newBuildingDialog, sectionsDialog, replicateDialog, supportsDialog, designPrefsDialog,
     getSections, getPrefs, DEFAULT_SECTIONS, DEFAULT_PREFS, selectedEntities,
     applySection, replicateEntity, entityBaseElevation,
