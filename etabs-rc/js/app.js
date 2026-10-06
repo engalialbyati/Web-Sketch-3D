@@ -11,6 +11,7 @@
     sel: [],
     chain: true,
     disp: { kind: 'model', combo: 0, scale: 80 },
+    pDelta: true, // Analyze > Set Analysis Options
     extrude: false,
     planMode: false,
   };
@@ -608,7 +609,7 @@
   // ---------------------------------------------------------------- analyze
   UI.runAnalysis = function () {
     const t0 = performance.now();
-    const res = RCModel.runAnalysis(app.model, {}); // standard linear
+    const res = RCModel.runAnalysis(app.model, { pDelta: app.pDelta });
     const ms = Math.round(performance.now() - t0);
     if (res.error) { UI.toast(res.error, true); return; }
     // bbox for diagram scaling
@@ -622,6 +623,18 @@
     const auto = res.auto;
     UI.toast('Analysis complete (' + ms + ' ms' + (auto && auto.seismic ? ' · V = ' + auto.seismic.V.toFixed(0) + ' kN' : '') + ')');
     UI.refreshAll();
+  };
+
+  UI.analysisOptionsDialog = function () {
+    UI.dialog('Set Analysis Options', `
+      <label class="flex items-center gap-2"><input type="checkbox" id="ao-pd" ${app.pDelta ? 'checked' : ''}> Include P-Delta (geometric stiffness, second-order effects)</label>
+      <div class="text-slate-500">P-Delta iterates K + Kg(P) from the solved axial forces — axial compression softens lateral stiffness, tension stiffens it. Unchecked = first-order linear only.</div>`, [
+      ['Cancel', null],
+      ['OK', () => {
+        app.pDelta = document.getElementById('ao-pd').checked;
+        UI.toast(app.pDelta ? 'P-Delta ON — next run includes second-order effects' : 'P-Delta OFF — first-order linear only');
+      }, true],
+    ]);
   };
 
   UI.runModal = function () {

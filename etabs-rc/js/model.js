@@ -395,10 +395,27 @@
       }
       if (!any) continue;
       const mlArg = ml.some(x => x) ? ml : null;
-      // STANDARD LINEAR ANALYSIS ONLY: first-order linear elastic solve —
-      // no geometric stiffness (P-delta) iterations, no nonlinear effects.
-      const sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, [], [merged], { memberLoads: mlArg });
-      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, [], [merged], sol.U, { memberLoads: mlArg });
+      let sol = FEA.assembleAndSolve(mesh.nodes, mesh.frames, [], [merged], { memberLoads: mlArg });
+      let geo = null;
+      // P-delta (Analyze > Set Analysis Options): iterate the geometric
+      // stiffness K + Kg(P) from the current axial forces until the
+      // displacement field converges (tension stiffens, compression softens)
+      if (opts.pDelta) {
+        const fIdx = new Map(mesh.frames.map((f, i) => [f, i]));
+        for (let it = 0; it < 6; it++) {
+          geo = new Array(mesh.frames.length).fill(null);
+          for (const fe of sol.frames) geo[fIdx.get(fe.el)] = -fe.forces[0];
+          const next = FEA.assembleAndSolve(mesh.nodes, mesh.frames, [], [merged], { geo, memberLoads: mlArg });
+          let dMax = 0, uMax = 1e-12;
+          for (let i = 0; i < mesh.nodes.length * 6; i++) {
+            dMax = Math.max(dMax, Math.abs((next.U[0][i] || 0) - (sol.U[0][i] || 0)));
+            uMax = Math.max(uMax, Math.abs(next.U[0][i] || 0));
+          }
+          sol = next;
+          if (dMax < 1e-6 * Math.max(uMax, 1e-9)) break;
+        }
+      }
+      const reactions = FEA.computeReactions(mesh.nodes, mesh.frames, [], [merged], sol.U, { geo, memberLoads: mlArg });
       results.push({ combo: combo.name, U: sol.U[0], frames: sol.frames, reactions });
     }
     // envelope per frame

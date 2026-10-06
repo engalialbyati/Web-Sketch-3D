@@ -29,15 +29,18 @@ fully offline.
    condensation in the engine, wL²/8 exact on released beams), Joint
    Restraints (per-DOF checkbox form: fixed/pinned/roller), Joint
    Additional Mass.
-6. **Analyze (F5)** — standard linear static analysis, story drift ratios,
+6. **Analyze (F5)** — static analysis (first-order linear, or with
+   **P-Delta** — Analyze > Set Analysis Options toggles the iterated
+   geometric stiffness), story drift ratios,
    reactions; Modal (F5 menu) — Ritz vectors with mass participation.
 7. **Display** — undeformed / deformed shape, moment M3 / shear V2 /
    axial P ribbons in the 3D view and color-mapped plan, results table.
 
 Model format: JSON (save/open). Units kN-m internally; engine in N-mm.
 
-Analysis is STANDARD LINEAR ONLY (first-order linear elastic; no P-delta
-/ geometric-stiffness or nonlinear iterations).
+P-Delta is optional (on by default): second-order geometric stiffness,
+iterated from the solved axial forces; turn it off in Analyze > Set
+Analysis Options for pure first-order linear.
 
 Not yet: concrete design checks (the rcdesign.js engine is bundled and
 ready — UI pending), response-spectrum case, walls/slabs.
