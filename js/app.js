@@ -308,6 +308,12 @@ const TOOL_DEFS = {
     { id: 'orbit', label: 'Orbit', key: 'O' },
     { id: 'pan', label: 'Pan', key: 'H' },
   ],
+  // RC Design & Analysis workspace: ETABS-style — you always have Select so
+  // you can pick elements and Assign to them. Kept LAST in the object so
+  // _toolMode('select') still resolves 'free' for the drawing ribbons.
+  design: [
+    { id: 'select', label: 'Select', key: 'Space' },
+  ],
 };
 // (the 'design' MODE is removed — rebar detailing is BIM work; its tools
 //  live in the bim list above and surface on the Detailing ribbon tab)
@@ -360,7 +366,7 @@ const RIBBON_GROUPS = {
 // the fallback for mode-first flows.
 // ---------------------------------------------------------------------------
 const RIBBON_TABS = {
-  // RC Design & Analysis workspace (visible only while app.mode === 'design')
+  // RC Design & Analysis workspace tabs (visible only while mode === 'design')
   define: { label: 'Define', groups: [
     { title: 'Model Sync', tools: ['defsync'] },
     { title: 'Material', tools: ['defmat', 'defrebar'] },
@@ -374,6 +380,10 @@ const RIBBON_TABS = {
     { title: 'Assignables', tools: ['defdiaph', 'defpier', 'defspan'] },
     { title: 'Datum', tools: ['defgrid'] },
     { title: 'Advanced', tools: ['defcons'] },
+  ] },
+  assign: { label: 'Assign', groups: [
+    { title: 'Sections', tools: ['asgframe', 'asgarea'] },
+    { title: 'Reset', tools: ['asgauto'] },
   ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -445,6 +455,9 @@ const RIBBON_TABS = {
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
+  asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
+  asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
+  asgauto: { label: 'Reset to Auto', glyph: '↺', tip: 'Clear manual section assignments on the selection — sections return to the dimension-based auto definition', cat: 'assignAuto' },
   defmat: { label: 'Materials', glyph: '🧱', tip: 'Materials — concrete, rebar, steel definitions', cat: 'materials' },
   defrebar: { label: 'Rebar Database', glyph: '⌇', tip: 'Rebar Database — bar sizes (area/diameter)', cat: 'rebar' },
   defsec: { label: 'Frame Sections', glyph: '▭', tip: 'Frame Sections — beam/column sections + rebar overlay', cat: 'frames' },
@@ -4714,8 +4727,8 @@ class App {
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
     document.body.classList.remove('mode-design');
-    // leaving Design & Analysis drops the Define ribbon (mode-only tab)
-    if (this.ribbonTab === 'define') {
+    // leaving Design & Analysis drops the Define/Assign ribbons (mode-only)
+    if (this.ribbonTab === 'define' || this.ribbonTab === 'assign') {
       this.ribbonTab = 'draw';
       try { localStorage.setItem('ws3d-ribbontab', 'draw'); } catch (e) { }
       this._initRibbonTabs();
@@ -4759,7 +4772,11 @@ class App {
     if (this.ribbonTab !== 'define') this.setRibbonTab('define');
     else this._buildToolbar();
     this._refreshDrawPalette && this._refreshDrawPalette();
-    this.setStatus('Mode: Design & Analysis — Define ribbon active. Camera and model preserved.');
+    // ETABS-style: Select is always armed in the design workspace so the
+    // user can pick elements and Assign to them (design has its own select
+    // entry in TOOL_DEFS, so this does not bounce back to a drawing mode)
+    this.setTool('select');
+    this.setStatus('Mode: Design & Analysis — select elements, then Assign. Define ribbon for model data.');
   }
   // The drawing plane spanned by a two-axis lock (V + X/Z etc.) through the
   // anchor — vertical and angled sketch planes for the line/arc/circle tools.
@@ -4977,10 +4994,11 @@ class App {
     row.innerHTML = '';
     row.style.display = '';
     this.ribbonTab = localStorage.getItem('ws3d-ribbontab') || 'draw';
-    if (!RIBBON_TABS[this.ribbonTab] || (this.ribbonTab === 'define' && this.mode !== 'design')) this.ribbonTab = 'draw';
+    if (!RIBBON_TABS[this.ribbonTab]
+      || ((this.ribbonTab === 'define' || this.ribbonTab === 'assign') && this.mode !== 'design')) this.ribbonTab = 'draw';
     for (const [id, t] of Object.entries(RIBBON_TABS)) {
-      // the Define ribbon belongs to the RC Design & Analysis workspace only
-      if (id === 'define' && this.mode !== 'design') continue;
+      // the Define/Assign ribbons belong to the RC Design & Analysis workspace only
+      if ((id === 'define' || id === 'assign') && this.mode !== 'design') continue;
       const b = document.createElement('button');
       b.className = 'mtab';
       b.dataset.tab = id;
@@ -5065,8 +5083,9 @@ class App {
   _buildToolbar() {
     const bar = document.getElementById('toolbar');
     bar.innerHTML = ''; // full ribbon swap per tab/mode
-    // the Define workspace ribbon gets roomier spacing (its buttons are text)
-    bar.classList.toggle('define-ribbon', this.mode === 'design' && this.ribbonTab === 'define');
+    // the Define/Assign workspace ribbons get roomier spacing (text buttons)
+    bar.classList.toggle('define-ribbon', this.mode === 'design'
+      && (this.ribbonTab === 'define' || this.ribbonTab === 'assign'));
     // current open group body — every factory appends here, the group closes
     // when the next group starts (OpenCADStudio-style titled panels)
     let body = null;
@@ -5132,14 +5151,12 @@ class App {
         if (id === 'assetlib') { mk(ICONS.assetlib, 'Asset Library — bundled tray, imported models, and the online catalogue (925 CC BY / CC0 models; the online section needs the local bridge: npm run bridge)', '', '{}', () => this.action('assetLibDlg')); continue; }
         if (id === 'levelsbtn') { mk(ICONS.levels, 'Levels — view / add / edit project levels', '', '{}', () => this.levelsDialog()); continue; }
         if (id === 'gridsbtn') { mk(ICONS.grids, 'Grids — generate / edit the grid system (snap targets)', '', '{}', () => this.gridsDialog()); continue; }
-        // RC Design & Analysis Define buttons — glyph-over-label ribbon style
-        if (id.startsWith('def')) {
+        // RC Design & Analysis Define/Assign buttons — glyph-over-label style
+        if (DEFINE_BUTTONS[id]) {
           const defBtn = DEFINE_BUTTONS[id];
-          if (defBtn) {
-            mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
-              defBtn.tip, 'tbtn-def', '{}', () => { if (window.RCDefine) RCDefine.open(this, defBtn.cat); });
-            continue;
-          }
+          mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
+            defBtn.tip, 'tbtn-def', '{}', () => { if (window.RCDefine) RCDefine.open(this, defBtn.cat); });
+          continue;
         }
         if (id === 'levelview') {
           // Level View: per-level plan isolation — appears only while a
@@ -9636,9 +9653,23 @@ class App {
       else if (ent.params && ent.params.baseLevel === 'none')
         grps.constraints.push({ ro: ['Base Level', `None — free at ${fmtLen(this.levelManager.getElevation('none'))}`] });
       if (p.hostWallId) grps.constraints.push({ ro: ['Host', p.hostWallId] });
-      // MODEL ⇄ DEFINE BRIDGE readout: the linked RC Define section
-      if (window.RCDefine && RCDefine.STRUCTURAL_TYPES.includes(ent.type))
-        grps.structural.push({ ro: ['Design Section', p.designSection || '— (auto on next sync)'] });
+      // MODEL ⇄ DEFINE BRIDGE: the linked RC Define section (editable —
+      // manual assignment overrides the auto bridge until reset to auto)
+      if (window.RCDefine && RCDefine.STRUCTURAL_TYPES.includes(ent.type)) {
+        const dd = RCDefine.ensure(this);
+        const isFrame = ['beam', 'column'].includes(ent.type);
+        const sList = isFrame ? dd.frameSections : dd.areaSections;
+        const opts = [['auto', 'Auto (from dimensions)'],
+          ...sList.map(s => {
+            const dmm = s.dims || {};
+            const dim = s.type === 'circle' || s.type === 'pipe'
+              ? `⌀${((dmm.dia ?? 0) * 1000).toFixed(0)}`
+              : `${((dmm.b ?? dmm.bf ?? 0) * 1000).toFixed(0)}×${((dmm.h ?? dmm.dia ?? 0) * 1000).toFixed(0)}`;
+            return [s.name, `${s.name} — ${dim}${isFrame ? ' · ' + (s.designType || '') : ''}`];
+          })];
+        grps.structural.push({ key: 'designSection', label: 'Design Section', kind: 'assign',
+          value: p.designSectionManual && p.designSection ? p.designSection : 'auto', options: opts });
+      }
       if ((ent.type === 'door' || ent.type === 'window') && p.height != null)
         grps.dimensions.push({ ro: ['Head Height', fmtLen((+p.sillHeight || 0) + (+p.height || 0))] });
       if (ent.type === 'room') {
@@ -9676,6 +9707,9 @@ class App {
       try { ppClosed = JSON.parse(localStorage.getItem('websketch3d.pp.grps') || '{}'); } catch (e) { }
       const fRow = f => {
         const tag = f.stair ? 'data-st="' + f.key + '" data-k="stair"' : 'data-pf="' + f.key + '" data-k="bim"';
+        if (f.kind === 'assign') return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
+          + '<select class="pp-in" data-pf="designSection" data-k="assign">' + f.options.map(([val, lab]) =>
+            '<option value="' + val + '"' + (f.value === val ? ' selected' : '') + '>' + lab + '</option>').join('') + '</select></div>';
         if (f.kind === 'select') return '<div class="pp-row"><span class="pp-lab">' + f.label + '</span>'
           + '<select class="pp-in" ' + tag + '>' + f.options.map(([val, lab]) =>
             '<option value="' + val + '"' + (f.value === val ? ' selected' : '') + '>' + lab + '</option>').join('') + '</select></div>';
@@ -9800,6 +9834,13 @@ class App {
         const ok = this.transaction.run('apply properties', () => {
           if (Object.keys(stairPatch).length
             && !window.StairsFeature.rebuildStairEntity(this, ent.id, stairPatch)) throw new Error('stairs regeneration failed');
+          // manual section assignment (Properties ▸ Design Section): sets the
+          // ETABS-style design-section overwrite; 'auto' restores the bridge
+          for (const k of keys) if (pend[k].kind === 'assign') {
+            ent.params.designSectionManual = pend[k].value !== 'auto';
+            ent.params.designSection = pend[k].value === 'auto' ? null : pend[k].value;
+            if (pend[k].value === 'auto') ent.params.designSection = RCDefine.ensureAutoSection(this, ent);
+          }
           for (const k of keys) if (pend[k].kind === 'bim' && !this._applyBimParam(ent, k, pend[k].value))
             throw new Error('regeneration failed for ' + k);
           return true;

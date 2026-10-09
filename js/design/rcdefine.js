@@ -1333,6 +1333,98 @@
       i => { d[key].splice(i, 1); renderNameList(app, key, title, base); });
   }
 
+  // ==========================================================================
+  // ASSIGN — ETABS semantics (from the published API + observed behavior):
+  // assignment targets the current selection; a section's design type
+  // (beam / column / wall / slab) must match the element — mismatched
+  // elements are SKIPPED with a partial-assignment warning, never an error;
+  // "None/auto" clears the explicit assignment back to the bridge.
+  // ==========================================================================
+
+  function selectedStructuralEnts(app, kinds) {
+    const out = [];
+    const seen = new Set();
+    for (const fid of (app.sel && app.sel.faces) || []) {
+      const f = app.model.faces.get(fid);
+      const uid = f && f.userData && f.userData.bimEntityId;
+      if (!uid || seen.has(uid)) continue;
+      seen.add(uid);
+      const ent = app.bim.getEntityById(uid);
+      if (ent && (!kinds || kinds.includes(ent.type))) out.push(ent);
+    }
+    return out;
+  }
+
+  // is a section assignmentable to this element type?
+  function assignCompatible(sec, ent, isFrame) {
+    if (isFrame) {
+      if (!['beam', 'column'].includes(ent.type)) return false;
+      return (sec.designType || 'beam') === ent.type; // beam→beam, column→column
+    }
+    if (sec.type === 'wall') return ent.type === 'wall';
+    return ['slab', 'roof'].includes(ent.type);      // slab/deck sections
+  }
+
+  // name = section name, or 'auto' to reset the selection to the bridge
+  function assignSections(app, ents, name) {
+    const d = ensure(app);
+    const sec = name === 'auto' ? null : (byName(d.frameSections, name) || byName(d.areaSections, name));
+    if (name !== 'auto' && !sec) return { assigned: 0, skipped: ents.length, badName: true };
+    const isFrame = name !== 'auto' && !!byName(d.frameSections, name);
+    let assigned = 0, skipped = 0;
+    for (const ent of ents) {
+      if (name === 'auto') {
+        ent.params.designSectionManual = false;
+        ent.params.designSection = null;
+        if (ensureAutoSection(app, ent)) assigned++; else skipped++;
+        continue;
+      }
+      if (!assignCompatible(sec, ent, isFrame)) { skipped++; continue; }
+      ent.params.designSection = name;
+      ent.params.designSectionManual = true;
+      assigned++;
+    }
+    return { assigned, skipped };
+  }
+
+  function renderAssign(app, kind) {
+    const d = ensure(app);
+    const isFrame = kind === 'assignFrames';
+    const kinds = isFrame ? ['beam', 'column'] : ['wall', 'slab', 'roof'];
+    const ents = selectedStructuralEnts(app, kinds);
+    if (!ents.length) {
+      app.toast(`Select ${isFrame ? 'beam/column' : 'wall/slab/roof'} elements first, then Assign`, true);
+      return;
+    }
+    const list = isFrame ? d.frameSections : d.areaSections;
+    const optHtml = list.map(s => {
+      const dm = s.dims || {};
+      const dim = s.type === 'circle' || s.type === 'pipe'
+        ? `⌀${((dm.dia ?? 0) * 1000).toFixed(0)}`
+        : `${((dm.b ?? dm.bf ?? 0) * 1000).toFixed(0)}×${((dm.h ?? dm.dia ?? 0) * 1000).toFixed(0)}`;
+      return `<option value="${esc(s.name)}">${esc(s.name)} — ${dim}${isFrame ? ' · ' + esc(s.designType || '') : ' · ' + esc(s.type)}</option>`;
+    }).join('');
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected` +
+      ` — type-mismatched elements will be skipped (ETABS partial-assignment rule).</p>`,
+      row(isFrame ? 'Frame Section' : 'Area Section', `<select id="ag-sec" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${optHtml || '<option value="">(none defined)</option>'}</select>`),
+      `<p style="font-size:11px;opacity:.7;margin:6px 0 0">Manual assignment overrides the dimension-based auto section until Reset to Auto.</p>`,
+    ].join('');
+    const apply = reset => {
+      const name = reset ? 'auto' : document.getElementById('ag-sec').value;
+      const r = assignSections(app, ents, name);
+      if (r.assigned) app.toast(`${name === 'auto' ? 'Auto' : name} assigned to ${r.assigned} element(s)`
+        + (r.skipped ? ` — ${r.skipped} skipped (type mismatch)` : ''));
+      else app.toast(r.badName ? 'Section no longer exists' : 'No compatible elements in selection', true);
+      if (r.assigned) app.closeDialog();
+    };
+    app.dialog('Assign ' + (isFrame ? 'Frame Sections' : 'Area Sections'), html, [
+      ['Assign', () => { apply(false); return false; }],
+      ['Reset to Auto', () => { apply(true); return false; }],
+      ['Close', null],
+    ]);
+  }
+
   // --------------------------------------------------------------- dispatch
   const DIALOGS = {
     materials: renderMaterials,
@@ -1366,6 +1458,15 @@
       const r = syncModelToDefine(app);
       app.toast(`Model → Define: ${r.linked} element(s) linked, ${r.created} new section(s) created`
         + (r.missing ? `, ${r.missing} skipped (no dimensions)` : ''));
+      return;
+    }
+    if (cat === 'assignFrames' || cat === 'assignAreas') { renderAssign(app, cat); return; }
+    if (cat === 'assignAuto') {
+      const ents = selectedStructuralEnts(app);
+      if (!ents.length) { app.toast('Select elements first, then Reset to Auto', true); return; }
+      const r = assignSections(app, ents, 'auto');
+      app.toast(`Reset to auto: ${r.assigned} element(s) relinked by dimensions`
+        + (r.skipped ? `, ${r.skipped} skipped (no dimensions)` : ''));
       return;
     }
     const fn = DIALOGS[cat];
@@ -1436,8 +1537,11 @@
   }
 
   // find-or-create the auto section for a drawn element; returns the
-  // section name and stamps ent.params.designSection
+  // section name and stamps ent.params.designSection.
+  // A MANUAL assignment (designSectionManual) wins — like ETABS's design
+  // section overwrite, it stays until Reset to Auto.
   function ensureAutoSection(app, ent) {
+    if (ent.params.designSectionManual && ent.params.designSection) return ent.params.designSection;
     const info = structuralInfo(ent);
     if (!info) return null;
     const d = ensure(app);
@@ -1466,6 +1570,7 @@
   // this element, update it in place (rename follows the new dims);
   // otherwise leave the shared section alone and link a matching/new one
   function relinkAfterEdit(app, ent) {
+    if (ent.params.designSectionManual && ent.params.designSection) return ent.params.designSection;
     const info = structuralInfo(ent);
     if (!info) return null;
     const d = ensure(app);
@@ -1512,5 +1617,7 @@
     // bridge
     structuralInfo, ensureAutoSection, relinkAfterEdit, sectionUsage,
     syncModelToDefine, STRUCTURAL_TYPES,
+    // assign
+    assignSections, selectedStructuralEnts,
   };
 })(window);
