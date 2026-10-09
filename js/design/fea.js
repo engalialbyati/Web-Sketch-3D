@@ -332,8 +332,8 @@
         Bb_[0][o+4] = -dn[0][n]; Bb_[1][o+3] = dn[1][n];
         Bb_[2][o+3] = dn[0][n]; Bb_[2][o+4] = -dn[1][n];
         // shear: gamma_x = dz/dx - thx, gamma_y = dz/dy - thy
-        Bs_[0][o+2] = dn[0][n]; Bs_[0][o+3] = -N[n];
-        Bs_[1][o+2] = dn[1][n]; Bs_[1][o+4] = -N[n];
+        Bs_[0][o+2] = dn[0][n]; Bs_[0][o+4] = -N[n];
+        Bs_[1][o+2] = dn[1][n]; Bs_[1][o+3] = +N[n];
       }
     };
     // explicit assembly loop (membrane + bending 2x2, shear 1x1)
