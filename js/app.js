@@ -394,6 +394,7 @@ const RIBBON_TABS = {
   ] },
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['anlrun'] },
+    { title: 'Diagrams', tools: ['anldiagram', 'anlforce'] },
     { title: 'Results', tools: ['anlforces'] },
   ] },
   rcdesign: { label: 'Design', groups: [
@@ -473,6 +474,8 @@ const RC_TABS = ['define', 'assign', 'analyze', 'rcdesign'];
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
   anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
+  anldiagram: { label: 'Show Diagrams', glyph: '∠', tip: 'Toggle moment/shear diagrams on beams in the 3D viewport (cycles: off → M3 → V3 → off)', cat: 'showDiagrams' },
+  anlforce: { label: 'Force Dialog', glyph: '≡', tip: 'Per-member BMD/SFD canvas with values', cat: 'showForceDialog' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
   dscbcol: { label: 'Column Design', glyph: '▣', tip: 'ACI 318-19 column design: biaxial P-M interaction, DCR', cat: 'columnDesign' },
