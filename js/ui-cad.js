@@ -384,13 +384,14 @@
   function buildGearMenu() {
     if ($('gearbtn')) return;
     const gear = document.createElement('button');
-    gear.id = 'gearbtn'; gear.title = 'Drawing mode';
+    gear.id = 'gearbtn'; gear.title = 'Mode';
     gear.innerHTML = '&#9881;';
     const menu = document.createElement('div');
     menu.id = 'gearmenu'; menu.className = 'hidden';
     menu.innerHTML = '<div class="gm-title">Drawing Mode</div>'
       + '<button data-mode="bim"><span class="gm-dot bim"></span>Precise Drawing <span class="gm-k">Revit-style</span></button>'
       + '<button data-mode="free"><span class="gm-dot free"></span>Free Drawing <span class="gm-k">SketchUp-style</span></button>'
+      + '<button data-mode="design"><span class="gm-dot design"></span>Design &amp; Analysis <span class="gm-k">RC</span></button>'
     document.body.appendChild(gear); document.body.appendChild(menu);
     gear.addEventListener('click', () => {
       const r = gear.getBoundingClientRect();

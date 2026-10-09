@@ -3998,6 +3998,9 @@ class Model {
       mats: [...((this.materials && this.materials.size) ? this.materials.values() : [])].map(mt => ({ id: mt.id, name: mt.name, color: mt.color || null, alpha: mt.alpha == null ? 1 : mt.alpha, texture: mt.texture ? { ...mt.texture } : null })),
       ann: (this.annotations || []).map(a => ({ ...a })),
       views: (this.views || []).map(v => ({ ...v })),
+      // RC Design & Analysis "Define" data (materials, sections, loads…),
+      // a plain JSON bag owned by js/design/rcdefine.js
+      rcd: this.rcDesign ? JSON.parse(JSON.stringify(this.rcDesign)) : null,
       grid: (this.grids || []).map(g => (g && g.toRecord) ? g.toRecord() : { ...g }),
       lyr: (this.layers || []).map(l => ({ ...l })),
       cur: this.currentLayerId || '0',
@@ -4061,6 +4064,9 @@ class Model {
     this.materials = new Map((data.mats || []).map(mt => [mt.id, { id: mt.id, name: mt.name, color: mt.color || null, alpha: mt.alpha == null ? 1 : mt.alpha, texture: mt.texture ? { ...mt.texture } : null }]));
     this.annotations = Array.isArray(data.ann) ? data.ann.map(a => ({ ...a })) : [];
     this.views = Array.isArray(data.views) ? data.views.map(v => ({ ...v })) : [];
+    // RC Design & Analysis "Define" data — legacy files without `rcd` keep
+    // whatever is currently set (rcdefine.js seeds defaults on first use)
+    this.rcDesign = data.rcd ? JSON.parse(JSON.stringify(data.rcd)) : (this.rcDesign || null);
     this.bimEntities = (data.bim || this.bimEntities || []).map(x => ({
       ...x, params: x.params ? _deepClone(x.params) : x.params,
       faces: [...(x.faces || [])], edges: [...(x.edges || [])],

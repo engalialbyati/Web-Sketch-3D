@@ -360,6 +360,20 @@ const RIBBON_GROUPS = {
 // the fallback for mode-first flows.
 // ---------------------------------------------------------------------------
 const RIBBON_TABS = {
+  // RC Design & Analysis workspace (visible only while app.mode === 'design')
+  define: { label: 'Define', groups: [
+    { title: 'Material', tools: ['defmat', 'defrebar'] },
+    { title: 'Frame Sections', tools: ['defsec'] },
+    { title: 'Area / Solid / Cable', tools: ['defarea', 'defsolid', 'defcable'] },
+    { title: 'Springs', tools: ['defspt', 'defslin', 'defsar'] },
+    { title: 'Supports', tools: ['deflink', 'deftend'] },
+    { title: 'Loads', tools: ['defpat', 'defcase', 'defcombo', 'defmass'] },
+    { title: 'Auto Loads', tools: ['defseis', 'defwind'] },
+    { title: 'Functions', tools: ['defrs', 'defth'] },
+    { title: 'Assignables', tools: ['defdiaph', 'defpier', 'defspan'] },
+    { title: 'Datum', tools: ['defgrid'] },
+    { title: 'Advanced', tools: ['defcons'] },
+  ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'fillet'] },
@@ -424,6 +438,33 @@ const RIBBON_TABS = {
     { title: 'Standards', tools: ['layers', 'families'] },
     { title: 'History', tools: ['undo', 'redo', 'zoomext'] },
   ] },
+};
+
+// RC Design & Analysis ▸ Define ribbon buttons — glyph + short label so the
+// ribbon stays readable; the long form lives in the hover tooltip
+const DEFINE_BUTTONS = {
+  defmat: { label: 'Materials', glyph: '🧱', tip: 'Materials — concrete, rebar, steel definitions', cat: 'materials' },
+  defrebar: { label: 'Rebar Database', glyph: '⌇', tip: 'Rebar Database — bar sizes (area/diameter)', cat: 'rebar' },
+  defsec: { label: 'Frame Sections', glyph: '▭', tip: 'Frame Sections — beam/column sections + rebar overlay', cat: 'frames' },
+  defarea: { label: 'Area Sections', glyph: '▤', tip: 'Area Sections — slab/wall/deck/ribbed sections', cat: 'areas' },
+  defsolid: { label: 'Solid Sections', glyph: '⬛', tip: 'Solid Sections — solid material sections', cat: 'solid' },
+  defcable: { label: 'Cable Sections', glyph: '◌', tip: 'Cable Sections — cable material + area', cat: 'cable' },
+  defspt: { label: 'Point Springs', glyph: '⊙', tip: 'Point Springs — K1/K2/K3 support stiffness', cat: 'springsPoint' },
+  defslin: { label: 'Line Springs', glyph: '⌣', tip: 'Line Springs — subgrade modulus', cat: 'springsLine' },
+  defsar: { label: 'Area Springs', glyph: '⊘', tip: 'Area Springs — mat foundation subgrade', cat: 'springsArea' },
+  defpat: { label: 'Load Patterns', glyph: '⬇', tip: 'Load Patterns — gravity/lateral patterns + self weight', cat: 'patterns' },
+  defcase: { label: 'Load Cases', glyph: '📄', tip: 'Load Cases — static/modal/RS/TH/buckling setups', cat: 'cases' },
+  defcombo: { label: 'Combinations', glyph: 'Σ', tip: 'Load Combinations — case/pattern × scale, auto ACI defaults', cat: 'combos' },
+  defmass: { label: 'Mass Source', glyph: '⚖', tip: 'Mass Source — elements / added mass / loads', cat: 'mass' },
+  defseis: { label: 'Seismic', glyph: '〰', tip: 'Auto Seismic Loads — code parameters (Cs)', cat: 'seismic' },
+  defwind: { label: 'Wind', glyph: '💨', tip: 'Auto Wind Loads — code parameters (qz)', cat: 'wind' },
+  defrs: { label: 'Spectrum Fn', glyph: '📈', tip: 'Response Spectrum Functions — ASCE or user curves', cat: 'rs' },
+  defth: { label: 'Time History Fn', glyph: '⏱', tip: 'Time History Functions — point data', cat: 'th' },
+  defdiaph: { label: 'Diaphragms', glyph: '⬒', tip: 'Diaphragms — rigid/semirigid per story', cat: 'diaphragms' },
+  defpier: { label: 'Piers', glyph: '▮', tip: 'Pier Labels — wall design strips', cat: 'piers' },
+  defspan: { label: 'Spandrels', glyph: '▬', tip: 'Spandrel Labels — beam strips', cat: 'spandrels' },
+  defgrid: { label: 'Grid Systems', glyph: '#', tip: 'Grid Systems — edit the grid lines', cat: 'grids' },
+  defcons: { label: 'Constraints', glyph: '⊞', tip: 'Joint Constraints — body/diaphragm/rod/weld/equal/line/plate', cat: 'constraints' },
 };
 
 // ---------------------------------------------------------------------------
@@ -4641,7 +4682,11 @@ class App {
   }
 
   setMode(mode) {
-    if (mode === this.mode || !TOOL_DEFS[mode]) return;
+    if (mode === this.mode) return;
+    // RC Design & Analysis: a tool-less workspace mode (no drawing ribbon of
+    // its own yet) — it only swaps the chrome; see _enterDesignMode()
+    if (mode === 'design') { this._enterDesignMode(); return; }
+    if (!TOOL_DEFS[mode]) return;
     // Edit In Place owns the mode until finished/cancelled (the session's own
     // switches pass through via _switching)
     if (this._eip && !(this._eip._switching)) {
@@ -4659,6 +4704,13 @@ class App {
     document.querySelectorAll('#modetabs .mtab').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
+    document.body.classList.remove('mode-design');
+    // leaving Design & Analysis drops the Define ribbon (mode-only tab)
+    if (this.ribbonTab === 'define') {
+      this.ribbonTab = 'draw';
+      try { localStorage.setItem('ws3d-ribbontab', 'draw'); } catch (e) { }
+      this._initRibbonTabs();
+    }
 
     document.getElementById('bimoptions').classList.toggle('hidden', mode !== 'bim');
     this.view.showLevels(mode === 'bim');
@@ -4673,6 +4725,32 @@ class App {
       this._pendingTool = null;
       this.setTool(t);
     }
+  }
+  // RC Design & Analysis workspace — intentionally empty for now: the model,
+  // camera and ribbon stay as they are, drawing options hide, and no drawing
+  // tool is active (viewport clicks are no-ops). Design tools land here later.
+  // Not persisted: a reload boots back into the last *drawing* mode.
+  _enterDesignMode() {
+    if (this._eip && !(this._eip._switching)) {
+      this.toast('Finish (✓) or cancel (✕) Edit In Place first', true);
+      return;
+    }
+    if (this.tool) this.tool.deactivate();
+    this.tool = null;
+    this.lockAxis = null;
+    this.clearAxisLocks();
+    this.mode = 'design';
+    document.body.classList.remove('mode-bim');
+    document.body.classList.add('mode-design');
+    document.getElementById('bimoptions').classList.add('hidden');
+    this.view.showLevels(false);
+    this.view.showGrids(false);
+    // swap in the Define ribbon (visible only in this mode) and land on it
+    this._initRibbonTabs();
+    if (this.ribbonTab !== 'define') this.setRibbonTab('define');
+    else this._buildToolbar();
+    this._refreshDrawPalette && this._refreshDrawPalette();
+    this.setStatus('Mode: Design & Analysis — Define ribbon active. Camera and model preserved.');
   }
   // The drawing plane spanned by a two-axis lock (V + X/Z etc.) through the
   // anchor — vertical and angled sketch planes for the line/arc/circle tools.
@@ -4890,8 +4968,10 @@ class App {
     row.innerHTML = '';
     row.style.display = '';
     this.ribbonTab = localStorage.getItem('ws3d-ribbontab') || 'draw';
-    if (!RIBBON_TABS[this.ribbonTab]) this.ribbonTab = 'draw';
+    if (!RIBBON_TABS[this.ribbonTab] || (this.ribbonTab === 'define' && this.mode !== 'design')) this.ribbonTab = 'draw';
     for (const [id, t] of Object.entries(RIBBON_TABS)) {
+      // the Define ribbon belongs to the RC Design & Analysis workspace only
+      if (id === 'define' && this.mode !== 'design') continue;
       const b = document.createElement('button');
       b.className = 'mtab';
       b.dataset.tab = id;
@@ -4976,6 +5056,8 @@ class App {
   _buildToolbar() {
     const bar = document.getElementById('toolbar');
     bar.innerHTML = ''; // full ribbon swap per tab/mode
+    // the Define workspace ribbon gets roomier spacing (its buttons are text)
+    bar.classList.toggle('define-ribbon', this.mode === 'design' && this.ribbonTab === 'define');
     // current open group body — every factory appends here, the group closes
     // when the next group starts (OpenCADStudio-style titled panels)
     let body = null;
@@ -5041,6 +5123,15 @@ class App {
         if (id === 'assetlib') { mk(ICONS.assetlib, 'Asset Library — bundled tray, imported models, and the online catalogue (925 CC BY / CC0 models; the online section needs the local bridge: npm run bridge)', '', '{}', () => this.action('assetLibDlg')); continue; }
         if (id === 'levelsbtn') { mk(ICONS.levels, 'Levels — view / add / edit project levels', '', '{}', () => this.levelsDialog()); continue; }
         if (id === 'gridsbtn') { mk(ICONS.grids, 'Grids — generate / edit the grid system (snap targets)', '', '{}', () => this.gridsDialog()); continue; }
+        // RC Design & Analysis Define buttons — glyph-over-label ribbon style
+        if (id.startsWith('def')) {
+          const defBtn = DEFINE_BUTTONS[id];
+          if (defBtn) {
+            mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
+              defBtn.tip, 'tbtn-def', '{}', () => { if (window.RCDefine) RCDefine.open(this, defBtn.cat); });
+            continue;
+          }
+        }
         if (id === 'levelview') {
           // Level View: per-level plan isolation — appears only while a
           // standard camera view (Top/Front/…) is locked; pick a level to
@@ -6084,7 +6175,7 @@ class App {
         if (this._armedAsset) { this._placeArmedAsset(ev); ev.preventDefault(); return; }
         const grip = this._gridGripAt(ev);
         if (grip) { this._gridDrag = grip; ev.preventDefault(); return; }
-        this.tool.onDown(ev);
+        if (this.tool) this.tool.onDown(ev);
       }
     });
     canvas.addEventListener('pointermove', (ev) => {
@@ -6098,15 +6189,15 @@ class App {
       }
       if (this._gridDrag) { this._gridDragMove(ev); return; }
       if (this._armedAsset) { this._moveArmedAssetGhost(ev); return; }
-      this.tool.onMove(ev);
+      if (this.tool) this.tool.onMove(ev);
     });
     canvas.addEventListener('pointerup', (ev) => {
       this.view.invalidate();
       if (this.nav && ev.button === 1) { this.nav = null; return; }
       if (ev.button === 0 && this._gridDrag) { this._gridDragEnd(); return; }
-      if (ev.button === 0) this.tool.onUp(ev);
+      if (ev.button === 0 && this.tool) this.tool.onUp(ev);
     });
-    canvas.addEventListener('dblclick', (ev) => { this.view.invalidate(); this.tool.onDoubleClick(ev); });
+    canvas.addEventListener('dblclick', (ev) => { this.view.invalidate(); if (this.tool) this.tool.onDoubleClick(ev); });
     // TRIPLE-CLICK selects the connected body — the whole swept/extruded
     // solid, not just the one face (the native click count arrives in
     // ev.detail; 3 rapid clicks upgrade the single/double selection)
