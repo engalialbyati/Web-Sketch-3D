@@ -96,7 +96,7 @@
       {
         name: 'FSEC1', type: 'rect', designType: 'beam', material: 'CONC25',
         t3: 0.5, t2: 0.3, tf: 0, twF: 0, twT: 0, mirrorAbout3: false,
-        modifiers: { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
+        modifiers: { a: 1, as2: 1, as3: 1, torsion: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
         autoList: [], autoStart: '',
         rebar: {
           longMat: 'REBAR500', confineMat: 'CONC25',
@@ -128,8 +128,11 @@
       ],
       combos: [],
       massSource: { includeElements: true, includeAddedMass: false, loads: [] },
-      autoSeismic: { code: 'ASCE 7-16', ss: 0.5, s1: 0.15, tl: 8, r: 5, omega: 2.5, ie: 1.0,
-        siteClass: 'D', direction: 'X', ecc: 0.05, userC: 0.1, userK: 1.0 },
+      autoSeismic: { code: 'ASCE 7-16', ss: 0.5, s1: 0.15, tl: 8, r: 5, omega: 2.5, cd: 2.5, ie: 1.0,
+        siteClass: 'D', fa: 1.0, fv: 1.5,
+        dirs: { x: true, y: false, xEcc: false, yEcc: false, xMinusEcc: false, yMinusEcc: false },
+        ecc: 0.05, periodFlag: 1, ctType: 0, userT: 0.5, topZ: null, bottomZ: null,
+        userC: 0.1, userK: 1.0 },
       autoWind: { code: 'ASCE 7-16', speed: 47, exposure: 'B', kd: 0.85, kzt: 1.0, gust: 0.85,
         direction: 'X', userQ: 1.0 },
       rsFunctions: [],
@@ -213,10 +216,30 @@
         else if (s.type === 'concTee') { s.dims.h = s.t3; s.dims.bf = s.t2; s.dims.tf = s.tf; s.dims.tw = s.twT; }
         else { s.dims.h = s.t3; s.dims.b = s.t2; s.dims.tf = s.tf; s.dims.tw = s.twT; }
       }
-      if (!s.modifiers) s.modifiers = { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 };
+      if (!s.modifiers) s.modifiers = {};
+      // official 8-value modifier set: A, As2, As3, J, I22, I33, Mass, Weight
+      for (const k of ['a', 'as2', 'as3', 'torsion', 'i22', 'i33', 'mass', 'weight'])
+        if (s.modifiers[k] == null) s.modifiers[k] = 1;
       if (!s.designType) s.designType = 'beam';
       if (s.autoList == null) s.autoList = [];
     }
+    // migrate legacy auto-seismic (single direction string → 6-direction set)
+    const a = mdl.rcDesign.autoSeismic;
+    if (a && !a.dirs) {
+      const dir = a.direction || 'X';
+      a.dirs = {
+        x: dir === 'X' || dir === '±X', y: dir === 'Y' || dir === '±Y',
+        xEcc: dir === '+X', yEcc: dir === '+Y',
+        xMinusEcc: dir === '-X' || dir === '−X' || dir === '±X',
+        yMinusEcc: dir === '-Y' || dir === '−Y' || dir === '±Y',
+      };
+    }
+    if (a && a.cd == null) a.cd = 2.5;
+    if (a && a.fa == null) a.fa = 1.0;
+    if (a && a.fv == null) a.fv = 1.5;
+    if (a && a.periodFlag == null) a.periodFlag = 1;
+    if (a && a.ctType == null) a.ctType = 0;
+    if (a && a.userT == null) a.userT = 0.5;
     return mdl.rcDesign;
   }
 
@@ -579,7 +602,7 @@
     const isNew = idx < 0;
     const s = isNew
       ? { name: uniqueName(d.frameSections, 'FSEC'), type: 'rect', designType: 'beam', material: 'CONC25',
-          dims: {}, modifiers: { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 }, autoList: [], autoStart: '',
+          dims: {}, modifiers: { a: 1, as2: 1, as3: 1, torsion: 1, i22: 1, i33: 1, mass: 1, weight: 1 }, autoList: [], autoStart: '',
           rebar: JSON.parse(JSON.stringify(d.frameSections[0].rebar)) }
       : JSON.parse(JSON.stringify(d.frameSections[idx]));
     if (!s.dims) s.dims = {};
@@ -595,7 +618,7 @@
       row('Material', sel('s-mat', concMats.concat(steelMats), s.material)),
       ...geoFields(s),
       secTitle('Stiffness Modifiers (analysis factors)'),
-      row('Axial A ×', inp('mo-a', mod.a, 'number', 'any')),
+      row('A / As2 / As3 / J ×', inp('mo-a', mod.a, 'number', 'any') + ' ' + inp('mo-as2', mod.as2, 'number', 'any') + ' ' + inp('mo-as3', mod.as3, 'number', 'any') + ' ' + inp('mo-torsion', mod.torsion, 'number', 'any')),
       row('I22 × / I33 ×', inp('mo-i22', mod.i22, 'number', 'any') + ' ' + inp('mo-i33', mod.i33, 'number', 'any')),
       row('Mass × / Weight ×', inp('mo-m', mod.mass, 'number', 'any') + ' ' + inp('mo-w', mod.weight, 'number', 'any')),
       secTitle('Rebar (beam overlay)'),
@@ -622,7 +645,9 @@
         s.designType = txt('s-dt', 'beam');
         s.material = txt('s-mat', s.material);
         readGeo(s);
-        mod.a = num('mo-a', 1); mod.i22 = num('mo-i22', 1); mod.i33 = num('mo-i33', 1);
+        mod.a = num('mo-a', 1); mod.as2 = num('mo-as2', 1); mod.as3 = num('mo-as3', 1);
+        mod.torsion = num('mo-torsion', 1);
+        mod.i22 = num('mo-i22', 1); mod.i33 = num('mo-i33', 1);
         mod.mass = num('mo-m', 1); mod.weight = num('mo-w', 1);
         r.longMat = txt('s-rmat', r.longMat);
         r.coverTop = num('s-ct', r.coverTop);
@@ -1041,30 +1066,70 @@
   function renderAutoSeismic(app) {
     const d = ensure(app);
     const a = d.autoSeismic;
+    if (!a.dirs) a.dirs = { x: true }; // safety for callers bypassing ensure()
+    const dirsHtml = [
+      ['as-dx', 'x', 'X'], ['as-dy', 'y', 'Y'],
+      ['as-dxe', 'xEcc', '+X (ecc)'], ['as-dye', 'yEcc', '+Y (ecc)'],
+      ['as-dxm', 'xMinusEcc', '−X (ecc)'], ['as-dym', 'yMinusEcc', '−Y (ecc)'],
+    ].map(([id, k, lab]) =>
+      `<label style="margin-right:10px;font-size:12px">${chk(id, !!a.dirs[k])} ${lab}</label>`).join('');
     const html = `<div ${BODY_CSS}>` + [
-      row('Code', sel('as-code', ['ASCE 7-16', 'ASCE 7-10', 'User Coefficients'], a.code)),
+      row('Code', sel('as-code', ['ASCE 7-16', 'ASCE 7-10', 'IBC 2006', 'User Coefficients'], a.code)),
       a.code === 'User Coefficients' ? [
         row('Coefficient C', inp('as-c', a.userC, 'number', 'any')),
         row('Period coefficient K', inp('as-k', a.userK, 'number', 'any')),
       ].join('') : [
-        row('Ss / S1', inp('as-ss', a.ss, 'number', 'any') + ' ' + inp('as-s1', a.s1, 'number', 'any')),
+        row('Ss / S1 (g)', inp('as-ss', a.ss, 'number', 'any') + ' ' + inp('as-s1', a.s1, 'number', 'any')),
         row('Site class', sel('as-sc', ['A', 'B', 'C', 'D', 'E', 'F'], a.siteClass)),
+        row('Fa / Fv (0 = auto)', inp('as-fa', a.fa, 'number', 'any') + ' ' + inp('as-fv', a.fv, 'number', 'any')),
         row('TL (s)', inp('as-tl', a.tl, 'number', 'any')),
-        row('R / Ω / Ie', inp('as-r', a.r, 'number', 'any') + ' ' + inp('as-om', a.omega, 'number', 'any') + ' ' + inp('as-ie', a.ie, 'number', 'any')),
+        row('R / Ω / Cd / Ie', inp('as-r', a.r, 'number', 'any') + ' ' + inp('as-om', a.omega, 'number', 'any') + ' ' + inp('as-cd', a.cd, 'number', 'any') + ' ' + inp('as-ie', a.ie, 'number', 'any')),
+        secTitle('Seismic Weight Zone'),
+        row('Top Z / Bottom Z (m)', inp('as-tz', a.topZ ?? '', 'number', 'any') + ' ' + inp('as-bz', a.bottomZ ?? '', 'number', 'any') + ' <span style="font-size:11px;opacity:.7">blank = full height</span>'),
       ],
-      row('Direction', sel('as-dir', ['X', 'Y', '±X', '±Y'], a.direction || 'X')),
+      secTitle('Period Option'),
+      row('T calculation', `<select id="as-pf" style="width:220px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">
+        <option value="1"${a.periodFlag == 1 ? ' selected' : ''}>1 — Program calculated (Ct, x)</option>
+        <option value="2"${a.periodFlag == 2 ? ' selected' : ''}>2 — User Ct-type</option>
+        <option value="3"${a.periodFlag == 3 ? ' selected' : ''}>3 — User period T</option></select>`),
+      String(a.periodFlag) === '2'
+        ? row('Ct-type', `<select id="as-ct" style="width:220px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">
+        <option value="0"${a.ctType == 0 ? ' selected' : ''}>0 — Ct=0.028 (ft), x=0.8</option>
+        <option value="1"${a.ctType == 1 ? ' selected' : ''}>1 — Ct=0.016 (ft), x=0.9</option>
+        <option value="2"${a.ctType == 2 ? ' selected' : ''}>2 — Ct=0.030 (ft), x=0.75</option>
+        <option value="3"${a.ctType == 3 ? ' selected' : ''}>3 — Ct=0.020 (ft), x=0.75</option></select>`)
+        : '',
+      String(a.periodFlag) === '3' ? row('User T (s)', inp('as-ut', a.userT, 'number', 'any')) : '',
+      secTitle('Direction & Eccentricity'),
+      `<div style="margin:2px 0 4px">${dirsHtml}</div>`,
       row('Eccentricity ratio', inp('as-ecc', a.ecc ?? 0.05, 'number', 'any')),
-      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">These parameters seed the auto-seismic load (Cs = Sds/(R/Ie) with the ASCE caps; user: C·W/K). Story-force application runs in the analysis engine when patterns marked Auto Seismic are expanded.</p>',
+      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">Parameters seed the auto-seismic load (Cs = Sds/(R/Ie) with the ASCE caps; user: C·W/K). Story-force application runs in the analysis engine when patterns marked Auto Seismic are expanded.</p>',
     ].join('') + '</div>';
     app.dialog('Define Auto Seismic Loads — ' + a.code, html, [
       ['OK', () => {
         a.code = txt('as-code', a.code);
         a.ss = num('as-ss', a.ss); a.s1 = num('as-s1', a.s1); a.tl = num('as-tl', a.tl);
-        a.r = num('as-r', a.r); a.omega = num('as-om', a.omega); a.ie = num('as-ie', a.ie);
+        a.r = num('as-r', a.r); a.omega = num('as-om', a.omega); a.cd = num('as-cd', a.cd);
+        a.ie = num('as-ie', a.ie);
         a.siteClass = txt('as-sc', a.siteClass);
+        a.fa = num('as-fa', a.fa); a.fv = num('as-fv', a.fv);
         a.userC = num('as-c', a.userC); a.userK = num('as-k', a.userK);
-        a.direction = txt('as-dir', a.direction);
+        a.dirs = {
+          x: document.getElementById('as-dx').checked,
+          y: document.getElementById('as-dy').checked,
+          xEcc: document.getElementById('as-dxe').checked,
+          yEcc: document.getElementById('as-dye').checked,
+          xMinusEcc: document.getElementById('as-dxm').checked,
+          yMinusEcc: document.getElementById('as-dym').checked,
+        };
         a.ecc = num('as-ecc', a.ecc);
+        a.periodFlag = parseInt(txt('as-pf', '1'), 10) || 1;
+        const ctEl = document.getElementById('as-ct');
+        if (ctEl) a.ctType = parseInt(ctEl.value, 10) || 0;
+        const utEl = document.getElementById('as-ut');
+        if (utEl) a.userT = num('as-ut', a.userT);
+        a.topZ = txt('as-tz', '') === '' ? null : num('as-tz', a.topZ);
+        a.bottomZ = txt('as-bz', '') === '' ? null : num('as-bz', a.bottomZ);
       }],
       ['Cancel', null],
     ]);
@@ -1387,7 +1452,7 @@
     const s = info.registry === 'frameSections'
       ? { name: uniqueName(list, info.base), type: info.type, designType: info.designType,
           material: defaultConcrete(d), dims: info.dims,
-          modifiers: { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
+          modifiers: { a: 1, as2: 1, as3: 1, torsion: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
           autoBase: info.base, autoList: [], autoStart: '',
           rebar: JSON.parse(JSON.stringify(d.frameSections[0].rebar)) }
       : { name: uniqueName(list, info.base), type: info.type, material: defaultConcrete(d),
