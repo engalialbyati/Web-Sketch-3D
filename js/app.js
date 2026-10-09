@@ -384,6 +384,7 @@ const RIBBON_TABS = {
   ] },
   assign: { label: 'Assign', groups: [
     { title: 'Sections', tools: ['asgframe', 'asgarea', 'asgauto'] },
+    { title: 'Loads', tools: ['asgfload', 'asgsload'] },
     { title: 'Material', tools: ['asgmat'] },
     { title: 'Design Procedure', tools: ['asgproc'] },
     { title: 'Releases & Supports', tools: ['asgrel', 'asgbase'] },
@@ -463,6 +464,8 @@ const DEFINE_BUTTONS = {
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
   asgauto: { label: 'Reset to Auto', glyph: '↺', tip: 'Clear manual section assignments on the selection — sections return to the dimension-based auto definition', cat: 'assignAuto' },
+  asgfload: { label: 'Frame Loads', glyph: '⬇', tip: 'Uniform (kN/m) or point (kN) loads on selected beams/columns, per load pattern', cat: 'assignFrameLoads' },
+  asgsload: { label: 'Surface Loads', glyph: '▦', tip: 'Surface pressure (kN/m²) on selected slabs/roofs/walls, per load pattern', cat: 'assignSurfaceLoads' },
   asgmat: { label: 'Material Overwrite', glyph: '◐', tip: 'Override the section material for the selected elements', cat: 'assignMaterials' },
   asgproc: { label: 'Design Procedure', glyph: '⚙', tip: 'Concrete frame design / No Design per element', cat: 'assignProc' },
   asgrel: { label: 'Frame Releases', glyph: '∘', tip: 'Pin (release major moment) at beam ends', cat: 'assignReleases' },

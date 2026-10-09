@@ -1522,6 +1522,105 @@
     ]);
   }
 
+  // ------------------------------------------------------- load assignment
+  // ETABS Assign ▸ Frame Loads / Shell Loads: magnitudes attach to elements
+  // per load pattern (multiple loads accumulate; removal is per pattern).
+  // Self-weight is NOT here — a DEAD pattern with self-weight multiplier 1.0
+  // generates it from the section + unit weight at analysis time.
+  function loadPatternOptions(app) {
+    const d = ensure(app);
+    return d.loadPatterns.map(p => ({ value: p.name, label: `${p.name} (${p.type})` }));
+  }
+
+  function renderAssignFrameLoads(app) {
+    const ents = selectedStructuralEnts(app, ['beam', 'column']);
+    if (!ents.length) { app.toast('Select beam/column elements first', true); return; }
+    const dirOpts = [['gravity', 'Gravity (−Z, global)'], ['up', '+Z (up)'], ['gx', 'Global +X'], ['gy', 'Global +Y']];
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected — loads accumulate; assign again to add more.</p>`,
+      row('Load Pattern', `<select id="fl-pat" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${
+        loadPatternOptions(app).map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select>`),
+      row('Load Type', `<select id="fl-type" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">
+        <option value="dist">Uniform — kN/m over full length</option>
+        <option value="point">Point — kN at distance a</option></select>`),
+      row('w or P (kN/m, kN)', inp('fl-val', 10, 'number', 'any')),
+      row('a from start (m)', inp('fl-a', 0, 'number', 'any')),
+      row('Direction', `<select id="fl-dir" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${
+        dirOpts.map(([v, l]) => `<option value="${v}"${v === 'gravity' ? ' selected' : ''}>${l}</option>`).join('')}</select>`),
+      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">Beam self-weight comes from the DEAD pattern self-weight multiplier, not from this dialog.</p>',
+    ].join('');
+    app.dialog('Assign Frame Loads', html, [
+      ['Add Load', () => {
+        const pat = txt('fl-pat', '');
+        const type = txt('fl-type', 'dist');
+        const val = num('fl-val', 0);
+        const dir = txt('fl-dir', 'gravity');
+        if (!pat || val <= 0) { app.toast('Pattern and a positive magnitude are required', true); return false; }
+        let n = 0;
+        for (const ent of ents) {
+          const L = ent.params.frameLoads || (ent.params.frameLoads = []);
+          L.push(type === 'dist'
+            ? { pattern: pat, type: 'dist', w: val, dir }
+            : { pattern: pat, type: 'point', P: val, a: num('fl-a', 0), dir });
+          n++;
+        }
+        app.toast(`${type === 'dist' ? 'Uniform' : 'Point'} load (${pat}) added to ${n} element(s)`);
+      }],
+      ['Remove Pattern Loads', () => {
+        const pat = txt('fl-pat', '');
+        let n = 0;
+        for (const ent of ents) {
+          const before = (ent.params.frameLoads || []).length;
+          ent.params.frameLoads = (ent.params.frameLoads || []).filter(L => L.pattern !== pat);
+          if (!ent.params.frameLoads.length) delete ent.params.frameLoads;
+          if (before !== (ent.params.frameLoads || []).length) n++;
+        }
+        app.toast(`Pattern "${pat}" loads removed from ${n} element(s)`);
+      }],
+      ['Close', null],
+    ]);
+  }
+
+  function renderAssignSurfaceLoads(app) {
+    const ents = selectedStructuralEnts(app, ['slab', 'roof', 'wall']);
+    if (!ents.length) { app.toast('Select slab/roof/wall elements first', true); return; }
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected.</p>`,
+      row('Load Pattern', `<select id="sl-pat" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${
+        loadPatternOptions(app).map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}</select>`),
+      row('Pressure (kN/m²)', inp('sl-p', 5, 'number', 'any')),
+      row('Direction', `<select id="sl-dir" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">
+        <option value="down" selected>Down (−Z, global)</option><option value="up">Up (+Z)</option></select>`),
+      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">Slab self-weight comes from the section thickness + unit weight via the pattern multiplier.</p>',
+    ].join('');
+    app.dialog('Assign Surface Loads', html, [
+      ['Add Load', () => {
+        const pat = txt('sl-pat', '');
+        const p = num('sl-p', 0);
+        if (!pat || p <= 0) { app.toast('Pattern and a positive pressure are required', true); return false; }
+        const dir = txt('sl-dir', 'down');
+        let n = 0;
+        for (const ent of ents) {
+          (ent.params.surfaceLoads = ent.params.surfaceLoads || []).push({ pattern: pat, pressure: p, dir });
+          n++;
+        }
+        app.toast(`Surface load (${pat}) added to ${n} element(s)`);
+      }],
+      ['Remove Pattern Loads', () => {
+        const pat = txt('sl-pat', '');
+        let n = 0;
+        for (const ent of ents) {
+          const before = (ent.params.surfaceLoads || []).length;
+          ent.params.surfaceLoads = (ent.params.surfaceLoads || []).filter(L => L.pattern !== pat);
+          if (!ent.params.surfaceLoads.length) delete ent.params.surfaceLoads;
+          if (before !== (ent.params.surfaceLoads || []).length) n++;
+        }
+        app.toast(`Pattern "${pat}" loads removed from ${n} element(s)`);
+      }],
+      ['Close', null],
+    ]);
+  }
+
   // --------------------------------------------------------------- dispatch
   const DIALOGS = {
     materials: renderMaterials,
@@ -1559,6 +1658,8 @@
       return;
     }
     if (cat === 'assignFrames' || cat === 'assignAreas') { renderAssign(app, cat); return; }
+    if (cat === 'assignFrameLoads') { renderAssignFrameLoads(app); return; }
+    if (cat === 'assignSurfaceLoads') { renderAssignSurfaceLoads(app); return; }
     // Assign ▸ everything else (loads/joints-family assignments)
     const ASSIGN_PICKS = {
       assignPiers: {
