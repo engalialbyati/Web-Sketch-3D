@@ -138,6 +138,7 @@
       rsFunctions: [],
       thFunctions: [],
       diaphragms: [],
+      designStrips: [{ name: 'STRIP1', width: 1.0, direction: 'X' }],
       piers: ['P1'],
       spandrels: ['S1'],
       linkProps: [],
@@ -1425,6 +1426,102 @@
     ]);
   }
 
+  // ------- generic property assignment (Assign ▸ … for loads/joints/etc.)
+  // Same ETABS contract as section assignment: targets the selection,
+  // validates compatibility, skips the rest with a count.
+  function renderAssignPick(app, cfg) {
+    const ents = selectedStructuralEnts(app, cfg.kinds);
+    if (!ents.length) { app.toast('Select ' + cfg.pickHint + ' first', true); return; }
+    const opts = (typeof cfg.options === 'function' ? cfg.options() : cfg.options)
+      .map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected.</p>`,
+      row(cfg.label, `<select id="ag-val" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${opts}</select>`),
+      cfg.note ? `<p style="font-size:11px;opacity:.7;margin:6px 0 0">${cfg.note}</p>` : '',
+    ].join('');
+    const apply = clear => {
+      const val = clear ? null : document.getElementById('ag-val').value;
+      let assigned = 0, skipped = 0;
+      for (const ent of ents) {
+        if (cfg.filter && !cfg.filter(ent, val)) { skipped++; continue; }
+        if (cfg.apply) { cfg.apply(ent, val, !!clear); assigned++; continue; }
+        if (val == null) delete ent.params[cfg.param];
+        else ent.params[cfg.param] = val;
+        assigned++;
+      }
+      if (assigned) {
+        app.toast(`${cfg.donePrefix || cfg.label}: ${assigned} element(s) updated`
+          + (skipped ? ` — ${skipped} skipped` : ''));
+        app.closeDialog();
+      } else app.toast('No compatible elements in selection', true);
+    };
+    const buttons = [['Assign', () => { apply(false); return false; }]];
+    if (cfg.allowClear) buttons.push([cfg.clearLabel || 'Clear', () => { apply(true); return false; }]);
+    buttons.push(['Close', null]);
+    app.dialog(cfg.title, html, buttons);
+  }
+
+  // slab design strips (Define ▸ Design Strips)
+  function stripEditor(app, d, idx) {
+    const isNew = idx < 0;
+    const st = isNew ? { name: uniqueName(d.designStrips, 'STRIP'), width: 1.0, direction: 'X' }
+      : JSON.parse(JSON.stringify(d.designStrips[idx]));
+    const html = [
+      row('Name', inp('st-name', st.name)),
+      row('Strip width (m)', inp('st-w', st.width, 'number', 'any')),
+      row('Direction', sel('st-dir', ['X', 'Y'], st.direction)),
+    ].join('');
+    app.dialog((isNew ? 'Add ' : 'Edit ') + 'Design Strip', html, [
+      ['OK', () => {
+        const name = txt('st-name', st.name);
+        if (!name) { app.toast('Name required', true); return false; }
+        st.name = name; st.width = num('st-w', st.width); st.direction = txt('st-dir', st.direction);
+        if (isNew) d.designStrips.push(st); else d.designStrips[idx] = st;
+        renderStrips(app);
+      }],
+      ['Cancel', null],
+    ]);
+  }
+  function renderStrips(app) {
+    const d = ensure(app);
+    listDialog(app, 'Define Design Strips', d.designStrips, ['Name', 'Width', 'Direction'],
+      st => '<td style="padding:4px 6px">' + esc(st.name) + '</td><td>' + st.width + ' m</td><td>' + esc(st.direction) + '</td>',
+      () => stripEditor(app, d, -1), i => stripEditor(app, d, i),
+      i => { d.designStrips.splice(i, 1); renderStrips(app); });
+  }
+
+  // beam end releases (ETABS Assign ▸ Frame ▸ Releases, simplified to the
+  // RC-relevant major-axis moment + torsion release per end)
+  function renderAssignReleases(app) {
+    const ents = selectedStructuralEnts(app, ['beam']);
+    if (!ents.length) { app.toast('Select beam elements first', true); return; }
+    const opts = [['fixed', 'Fixed'], ['pinM3', 'Pinned — release M3 (major moment)'], ['free', 'Free']];
+    const endSel = (id, cur) => `<select id="${id}" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">` +
+      opts.map(([v, l]) => `<option value="${v}"${cur === v ? ' selected' : ''}>${l}</option>`).join('') + '</select>';
+    const cur = ents[0].params.releases || { i: 'fixed', j: 'fixed' };
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} beam(s) selected — applied to all.</p>`,
+      row('I-End (start)', endSel('rl-i', cur.i)),
+      row('J-End (end)', endSel('rl-j', cur.j)),
+      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">Released ends carry no major-axis moment — the analysis treats them as pins.</p>',
+    ].join('');
+    app.dialog('Assign Frame Releases', html, [
+      ['Assign', () => {
+        const rel = { i: txt('rl-i', 'fixed'), j: txt('rl-j', 'fixed') };
+        let n = 0;
+        for (const ent of ents) {
+          const bothFixed = rel.i === 'fixed' && rel.j === 'fixed';
+          if (bothFixed) delete ent.params.releases;
+          else ent.params.releases = rel;
+          n++;
+        }
+        app.toast(`Releases assigned to ${n} beam(s)`);
+        app.closeDialog();
+      }],
+      ['Cancel', null],
+    ]);
+  }
+
   // --------------------------------------------------------------- dispatch
   const DIALOGS = {
     materials: renderMaterials,
@@ -1447,6 +1544,7 @@
     rs: app => renderFunctions(app, 'rs'),
     th: app => renderFunctions(app, 'th'),
     diaphragms: renderDiaphragms,
+    strips: renderStrips,
     piers: app => renderNameList(app, 'piers', 'Pier Labels', 'P'),
     spandrels: app => renderNameList(app, 'spandrels', 'Spandrel Labels', 'S'),
     constraints: renderConstraints,
@@ -1461,6 +1559,63 @@
       return;
     }
     if (cat === 'assignFrames' || cat === 'assignAreas') { renderAssign(app, cat); return; }
+    // Assign ▸ everything else (loads/joints-family assignments)
+    const ASSIGN_PICKS = {
+      assignPiers: {
+        title: 'Assign Wall Piers', label: 'Pier Label', param: 'pierLabel', kinds: ['wall'],
+        pickHint: 'wall elements', donePrefix: 'Pier label', allowClear: true, clearLabel: 'Remove Label',
+        options: () => ensure(app).piers.map(p => ({ value: p, label: p })),
+      },
+      assignSpandrels: {
+        title: 'Assign Spandrels', label: 'Spandrel Label', param: 'spandrelLabel', kinds: ['beam'],
+        pickHint: 'beam elements', donePrefix: 'Spandrel label', allowClear: true, clearLabel: 'Remove Label',
+        options: () => ensure(app).spandrels.map(s => ({ value: s, label: s })),
+      },
+      assignDiaphragms: {
+        title: 'Assign Diaphragms', label: 'Diaphragm', param: 'diaphragm', kinds: ['slab', 'roof'],
+        pickHint: 'slab/roof elements', donePrefix: 'Diaphragm', allowClear: true, clearLabel: 'Remove',
+        options: () => ensure(app).diaphragms.map(x => ({ value: x.name, label: x.name + (x.semiRigid === false ? ' (rigid)' : ' (semirigid)') })),
+        note: 'A semirigid diaphragm distributes forces by actual floor stiffness; rigid ties all points in-plane.',
+      },
+      assignMaterials: {
+        title: 'Assign Material Overwrite', label: 'Material', param: 'materialOverwrite',
+        kinds: STRUCTURAL_TYPES,
+        pickHint: 'structural elements', donePrefix: 'Material overwrite', allowClear: true, clearLabel: 'Clear Overwrite',
+        options: () => ensure(app).materials.filter(m => ['concrete', 'steel'].includes(m.type)).map(m => ({ value: m.name, label: m.name })),
+        note: 'Overrides the section material for this element only (design + analysis).',
+      },
+      assignBase: {
+        title: 'Assign Column Base Fixity', label: 'Base Fixity', param: 'baseFixity', kinds: ['column'],
+        pickHint: 'column elements', donePrefix: 'Base fixity', allowClear: true, clearLabel: 'Program Default',
+        options: () => [{ value: 'fixed', label: 'Fixed' }, { value: 'pinned', label: 'Pinned' }],
+        note: 'Applied where the column reaches its lowest level (foundation); otherwise ignored.',
+      },
+      assignProc: {
+        title: 'Assign Design Procedure', label: 'Design Procedure', param: 'designProcedure',
+        kinds: ['wall', 'slab', 'roof', 'beam', 'column'],
+        pickHint: 'structural elements', donePrefix: 'Design procedure', allowClear: true, clearLabel: 'Program Determined',
+        options: () => [
+          { value: 'concrete', label: 'Concrete Frame Design (ACI 318-19)' },
+          { value: 'nodesign', label: 'No Design' },
+        ],
+      },
+    };
+    if (ASSIGN_PICKS[cat]) { renderAssignPick(app, ASSIGN_PICKS[cat]); return; }
+    if (cat === 'assignReleases') { renderAssignReleases(app); return; }
+    if (cat === 'assignStrips') {
+      renderAssignPick(app, {
+        title: 'Assign Design Strips', label: 'Design Strip', param: 'stripLabels',
+        kinds: ['slab', 'roof'], pickHint: 'slab/roof elements', donePrefix: 'Design strip',
+        allowClear: true, clearLabel: 'Remove Strip',
+        options: () => ensure(app).designStrips.map(s => ({ value: s.name, label: `${s.name} — ${s.width} m · ${s.direction}` })),
+        note: 'A slab can carry several strips; each Assign adds one. Clear removes the selected strip.',
+        apply: (ent, val, clear) => {
+          if (clear) ent.params.stripLabels = (ent.params.stripLabels || []).filter(x => x !== val);
+          else if (!(ent.params.stripLabels || []).includes(val)) (ent.params.stripLabels = ent.params.stripLabels || []).push(val);
+        },
+      });
+      return;
+    }
     if (cat === 'assignAuto') {
       const ents = selectedStructuralEnts(app);
       if (!ents.length) { app.toast('Select elements first, then Reset to Auto', true); return; }
