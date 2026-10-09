@@ -398,6 +398,7 @@ const RIBBON_TABS = {
   ] },
   rcdesign: { label: 'Design', groups: [
     { title: 'Beam Design', tools: ['dsbbeam'] },
+    { title: 'Column Design', tools: ['dscbcol'] },
   ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -474,6 +475,7 @@ const DEFINE_BUTTONS = {
   anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
+  dscbcol: { label: 'Column Design', glyph: '▣', tip: 'ACI 318-19 column design: biaxial P-M interaction, DCR', cat: 'columnDesign' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
