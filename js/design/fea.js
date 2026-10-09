@@ -1238,5 +1238,75 @@
     return { K, feq, released: rel };
   }
 
-  window.FEA = { shellQ4, assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
+  // ============================================================ shell forces
+  function shellForces(nodesIn, shells, U0) {
+    const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
+    return shells.map(sh => {
+      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
+      if (!p4) return { ...sh, forces: null };
+      const qq = shellQ4(sh.E, sh.nu, sh.t, p1, p2, p3, p4);
+      if (!qq) return { ...sh, forces: null };
+      const Rgg = [[qq.ex.x, qq.ex.y, qq.ex.z], [qq.ey.x, qq.ey.y, qq.ey.z], [qq.ez.x, qq.ez.y, qq.ez.z]];
+      const ns2 = [sh.n1, sh.n2, sh.n3, sh.n4];
+      const TT = [];
+      for (let i = 0; i < 20; i++) TT.push(new Float64Array(24));
+      for (let nn = 0; nn < 4; nn++) for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) TT[nn*5+c][nn*6+r] = Rgg[r][c];
+        for (let c = 0; c < 2; c++) TT[nn*5+3+c][nn*6+3+r] = Rgg[r][c];
+      }
+      const uLoc = new Float64Array(20);
+      for (let nn = 0; nn < 4; nn++) for (let lg = 0; lg < 6; lg++) {
+        const gVal = U0[ns2[nn]*6 + lg];
+        if (gVal === 0) continue;
+        for (let ll = 0; ll < 5; ll++) {
+          const tVal = TT[nn*5 + ll][nn*6 + lg];
+          if (tVal !== 0) uLoc[nn*5 + ll] += tVal * gVal;
+        }
+      }
+      const toL = p => [G.dot(G.sub(p, p1), qq.ex), G.dot(G.sub(p, p1), qq.ey)];
+      const lp = [toL(p1), toL(p2), toL(p3), toL(p4)];
+      const shape = (xi, et) => ({
+        N: [0.25*(1-xi)*(1-et), 0.25*(1+xi)*(1-et), 0.25*(1+xi)*(1+et), 0.25*(1-xi)*(1+et)],
+        dN: [[-0.25*(1-et), 0.25*(1-et), 0.25*(1+et), -0.25*(1+et)],
+             [-0.25*(1-xi), -0.25*(1+xi), 0.25*(1+xi), 0.25*(1-xi)]],
+      });
+      const dNs = (xi, et) => {
+        const d = shape(xi, et).dN;
+        const J11 = d[0][0]*lp[0][0] + d[0][1]*lp[1][0] + d[0][2]*lp[2][0] + d[0][3]*lp[3][0];
+        const J12 = d[0][0]*lp[0][1] + d[0][1]*lp[1][1] + d[0][2]*lp[2][1] + d[0][3]*lp[3][1];
+        const J21 = d[1][0]*lp[0][0] + d[1][1]*lp[1][0] + d[1][2]*lp[2][0] + d[1][3]*lp[3][0];
+        const J22 = d[1][0]*lp[0][1] + d[1][1]*lp[1][1] + d[1][2]*lp[2][1] + d[1][3]*lp[3][1];
+        const det = J11*J22 - J12*J21;
+        return [
+          [J22/det*d[0][0] - J12/det*d[1][0], J22/det*d[0][1] - J12/det*d[1][1], J22/det*d[0][2] - J12/det*d[1][2], J22/det*d[0][3] - J12/det*d[1][3]],
+          [-J21/det*d[0][0] + J11/det*d[1][0], -J21/det*d[0][1] + J11/det*d[1][1], -J21/det*d[0][2] + J11/det*d[1][2], -J21/det*d[0][3] + J11/det*d[1][3]],
+        ];
+      };
+      const d0 = sh.E / (1 - sh.nu * sh.nu);
+      const t3 = sh.t ** 3;
+      const Db = [[d0*t3/12, d0*sh.nu*t3/12, 0], [d0*sh.nu*t3/12, d0*t3/12, 0], [0, 0, d0*(1-sh.nu)*t3/24]];
+      const Dm = [[d0, d0*sh.nu, 0], [d0*sh.nu, d0, 0], [0, 0, d0*(1-sh.nu)/2]];
+      const dnC = dNs(0, 0);
+      let kxx = 0, kyy = 0, kxy = 0, nxx = 0, nyy = 0, nxy = 0;
+      for (let n = 0; n < 4; n++) {
+        const o = n * 5;
+        kxx += -dnC[0][n] * uLoc[o + 4];
+        kyy += +dnC[1][n] * uLoc[o + 3];
+        kxy += +dnC[0][n] * uLoc[o + 3] - dnC[1][n] * uLoc[o + 4];
+        nxx += +dnC[0][n] * uLoc[o];
+        nyy += +dnC[1][n] * uLoc[o + 1];
+        nxy += +dnC[1][n] * uLoc[o] + dnC[0][n] * uLoc[o + 1];
+      }
+      const M11 = Db[0][0] * kxx + Db[0][1] * kyy;
+      const M22 = Db[1][1] * kyy + Db[1][0] * kxx;
+      const M12 = Db[2][2] * kxy;
+      const N11 = Dm[0][0] * nxx + Dm[0][1] * nyy;
+      const N22 = Dm[1][1] * nyy + Dm[1][0] * nxx;
+      const N12 = Dm[2][2] * nxy;
+      return { n1: sh.n1, n2: sh.n2, n3: sh.n3, n4: sh.n4, entId: sh.entId,
+        forces: { M11, M22, M12, N11, N22, N12 } };
+    });
+  }
+
+  window.FEA = { shellForces, shellQ4, assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
 })();
