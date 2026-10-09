@@ -384,7 +384,8 @@ const RIBBON_TABS = {
   ] },
   assign: { label: 'Assign', groups: [
     { title: 'Sections', tools: ['asgframe', 'asgarea', 'asgauto'] },
-    { title: 'Loads', tools: ['asgfload', 'asgsload'] },
+    { title: 'Loads', tools: ['asgfload', 'asgsload', 'asgjload'] },
+    { title: 'Springs', tools: ['asgspring'] },
     { title: 'Material', tools: ['asgmat'] },
     { title: 'Design Procedure', tools: ['asgproc'] },
     { title: 'Releases & Supports', tools: ['asgrel', 'asgbase'] },
@@ -475,6 +476,8 @@ const DEFINE_BUTTONS = {
   asgauto: { label: 'Reset to Auto', glyph: '↺', tip: 'Clear manual section assignments on the selection — sections return to the dimension-based auto definition', cat: 'assignAuto' },
   asgfload: { label: 'Frame Loads', glyph: '⬇', tip: 'Uniform (kN/m) or point (kN) loads on selected beams/columns, per load pattern', cat: 'assignFrameLoads' },
   asgsload: { label: 'Surface Loads', glyph: '▦', tip: 'Surface pressure (kN/m²) on selected slabs/roofs/walls, per load pattern', cat: 'assignSurfaceLoads' },
+  asgjload: { label: 'Joint Loads', glyph: '↓↓', tip: 'Nodal forces (Fx/Fy/Fz kN) at a member end node', cat: 'assignJointLoads' },
+  asgspring: { label: 'Point Springs', glyph: '⊚→', tip: 'Assign point springs to column bases', cat: 'assignPointSpring' },
   asgmat: { label: 'Material Overwrite', glyph: '◐', tip: 'Override the section material for the selected elements', cat: 'assignMaterials' },
   asgproc: { label: 'Design Procedure', glyph: '⚙', tip: 'Concrete frame design / No Design per element', cat: 'assignProc' },
   asgrel: { label: 'Frame Releases', glyph: '∘', tip: 'Pin (release major moment) at beam ends', cat: 'assignReleases' },
@@ -5181,8 +5184,9 @@ class App {
           const defBtn = DEFINE_BUTTONS[id];
           mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
             defBtn.tip, 'tbtn-def', '{}', () => {
-              const mod = (defBtn.cat === 'runAnalysis' || defBtn.cat === 'forceTable') ? window.RCModel : window.RCDefine;
-              if (mod) mod.open(this, defBtn.cat);
+              const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring'].includes(defBtn.cat);
+              const mod = isRCModel ? window.RCModel : window.RCDefine;
+              if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
             });
           continue;
         }

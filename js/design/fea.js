@@ -61,16 +61,22 @@
   // Local DOFs: [u1x, u1y, u1z, r1x, r1y, r1z, u2x, u2y, u2z, r2x, r2y, r2z]
   // The element axis is local x; bending in local y and z planes; torsion
   // about local x. For 3D frames this gives 12 DOF total.
-  function frameK(E, A, Iy, Iz, J, L, Gm) {
+  function frameK(E, A, Iy, Iz, J, L, Gm, As2, As3) {
     const EA = E * A / L;
-    const cy = 12 * E * Iz / (L * L * L);  // shear stiffness in local y
-    const cz = 12 * E * Iy / (L * L * L);  // in local z
-    const my = 6 * E * Iz / (L * L);
-    const mz = 6 * E * Iy / (L * L);
-    const by = 4 * E * Iz / L;
-    const dy = 2 * E * Iz / L;
-    const bz = 4 * E * Iy / L;
-    const dz = 2 * E * Iy / L;
+    // Timoshenko shear deformation (optional): phi = 12EI/(G·As·L²).
+    // As2 = shear area in local y (bent by Iz), As3 = local z (bent by Iy).
+    // No As → Euler-Bernoulli (phi = 0).
+    const Gy = Gm || E / 2.6;
+    const phiY = (As2 && Gy) ? 12 * E * Iz / (Gy * As2 * L * L) : 0;
+    const phiZ = (As3 && Gy) ? 12 * E * Iy / (Gy * As3 * L * L) : 0;
+    const cy = 12 * E * Iz / (L * L * L * (1 + phiY));
+    const cz = 12 * E * Iy / (L * L * L * (1 + phiZ));
+    const my = 6 * E * Iz / (L * L * (1 + phiY));
+    const mz = 6 * E * Iy / (L * L * (1 + phiZ));
+    const by = (4 + phiY) * E * Iz / (L * (1 + phiY));
+    const dy = (2 - phiY) * E * Iz / (L * (1 + phiY));
+    const bz = (4 + phiZ) * E * Iy / (L * (1 + phiZ));
+    const dz = (2 - phiZ) * E * Iy / (L * (1 + phiZ));
     const t = (Gm || E / 2.6) * J / L; // St-Venant torsion; caller passes G = E/(2(1+ν))
     const K = [];
     for (let i = 0; i < 12; i++) { K.push(new Float64Array(12)); }
@@ -355,6 +361,26 @@
       }
       return f;
     });
+    // nodal springs: diagonal stiffness additions (opts.nodalSprings:
+    // [{ni, k:[kx,ky,kz,mx,my,mz]}] — N/mm and N·mm/rad)
+    for (const sp of opts.nodalSprings || []) {
+      for (let d = 0; d < 6; d++) {
+        if (!sp.k || !sp.k[d]) continue;
+        K[sp.ni * 6 + d][sp.ni * 6 + d] += sp.k[d];
+      }
+    }
+    // rigid diaphragm ties (opts.rigidLinks: [{master, slave, dofs:[...]}]) —
+    // penalty coupling of the in-plane dofs to the master node
+    for (const rl of opts.rigidLinks || []) {
+      let kref = 0;
+      for (let i = 0; i < nDof; i++) kref = Math.max(kref, K[i][i]);
+      const kp = 1e8 * Math.max(kref, 1);
+      for (const dof of rl.dofs) {
+        const m = rl.master * 6 + dof, s2 = rl.slave * 6 + dof;
+        K[m][m] += kp; K[s2][s2] += kp;
+        K[m][s2] -= kp; K[s2][m] -= kp;
+      }
+    }
     // boundary conditions: zero out fixed dofs (penalty-free row/col wipe)
     for (let ni = 0; ni < nNodes; ni++) {
       const fix = nodes[ni].fixed;
@@ -443,7 +469,7 @@
         let feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
         // released members contribute their CONDENSED equivalent loads
         if (el.releases && el.releases.length) {
-          const Kl2 = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+          const Kl2 = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
           feq = applyReleases(Kl2, feq, el.releases).feq;
         }
         const R = rotationMatrix(a, b);
@@ -571,7 +597,7 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) continue;
-      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
       const dofs = [];
@@ -998,7 +1024,7 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) continue;
-      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L);
+      const Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
       const dofs = [];
