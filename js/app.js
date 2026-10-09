@@ -391,6 +391,10 @@ const RIBBON_TABS = {
     { title: 'Wall Design', tools: ['asgpier', 'asgspan'] },
     { title: 'Slab Design', tools: ['asgstrip', 'asgdiaph'] },
   ] },
+  analyze: { label: 'Analyze', groups: [
+    { title: 'Run', tools: ['anlrun'] },
+    { title: 'Results', tools: ['anlforces'] },
+  ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'fillet'] },
@@ -457,9 +461,14 @@ const RIBBON_TABS = {
   ] },
 };
 
+// RC workspace ribbon tab ids (visible only in Design & Analysis mode)
+const RC_TABS = ['define', 'assign', 'analyze'];
+
 // RC Design & Analysis ▸ Define ribbon buttons — glyph + short label so the
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
+  anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
+  anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
@@ -4744,8 +4753,8 @@ class App {
       b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
     document.body.classList.remove('mode-design');
-    // leaving Design & Analysis drops the Define/Assign ribbons (mode-only)
-    if (this.ribbonTab === 'define' || this.ribbonTab === 'assign') {
+    // leaving Design & Analysis drops the RC workspace ribbons (mode-only)
+    if (RC_TABS.includes(this.ribbonTab)) {
       this.ribbonTab = 'draw';
       try { localStorage.setItem('ws3d-ribbontab', 'draw'); } catch (e) { }
       this._initRibbonTabs();
@@ -5012,10 +5021,10 @@ class App {
     row.style.display = '';
     this.ribbonTab = localStorage.getItem('ws3d-ribbontab') || 'draw';
     if (!RIBBON_TABS[this.ribbonTab]
-      || ((this.ribbonTab === 'define' || this.ribbonTab === 'assign') && this.mode !== 'design')) this.ribbonTab = 'draw';
+      || (RC_TABS.includes(this.ribbonTab) && this.mode !== 'design')) this.ribbonTab = 'draw';
     for (const [id, t] of Object.entries(RIBBON_TABS)) {
-      // the Define/Assign ribbons belong to the RC Design & Analysis workspace only
-      if ((id === 'define' || id === 'assign') && this.mode !== 'design') continue;
+      // the RC workspace ribbons belong to Design & Analysis only
+      if (RC_TABS.includes(id) && this.mode !== 'design') continue;
       const b = document.createElement('button');
       b.className = 'mtab';
       b.dataset.tab = id;
@@ -5101,8 +5110,7 @@ class App {
     const bar = document.getElementById('toolbar');
     bar.innerHTML = ''; // full ribbon swap per tab/mode
     // the Define/Assign workspace ribbons get roomier spacing (text buttons)
-    bar.classList.toggle('define-ribbon', this.mode === 'design'
-      && (this.ribbonTab === 'define' || this.ribbonTab === 'assign'));
+    bar.classList.toggle('define-ribbon', this.mode === 'design' && RC_TABS.includes(this.ribbonTab));
     // current open group body — every factory appends here, the group closes
     // when the next group starts (OpenCADStudio-style titled panels)
     let body = null;
@@ -5172,7 +5180,10 @@ class App {
         if (DEFINE_BUTTONS[id]) {
           const defBtn = DEFINE_BUTTONS[id];
           mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
-            defBtn.tip, 'tbtn-def', '{}', () => { if (window.RCDefine) RCDefine.open(this, defBtn.cat); });
+            defBtn.tip, 'tbtn-def', '{}', () => {
+              const mod = (defBtn.cat === 'runAnalysis' || defBtn.cat === 'forceTable') ? window.RCModel : window.RCDefine;
+              if (mod) mod.open(this, defBtn.cat);
+            });
           continue;
         }
         if (id === 'levelview') {
