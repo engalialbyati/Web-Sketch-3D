@@ -353,11 +353,12 @@
       name: cs.name,
       members: cs.members.map(m => ({
         id: m.id, type: m.type,
-        Mi: m.Mi / 1e6, Mj: m.Mj / 1e6,       // kN·m (major)
-        Mi2: (m.Mi2 || 0) / 1e6, Mj2: (m.Mj2 || 0) / 1e6, // kN·m (minor)
-        Vi: m.Vi / 1e3, Vj: m.Vj / 1e3,       // kN
-        Vi2: (m.Vi2 || 0) / 1e3, Vj2: (m.Vj2 || 0) / 1e3,
         P: (Math.abs(m.Fi) > Math.abs(m.Fj) ? m.Fi : m.Fj) / 1e3, // kN (worst end)
+        V2i: (m.Vi2 || 0) / 1e3, V2j: (m.Vj2 || 0) / 1e3,   // kN — ETABS V2 (minor axis)
+        V3i: m.Vi / 1e3, V3j: m.Vj / 1e3,                    // kN — ETABS V3 (major/gravity)
+        T: (m.Ti || 0) / 1e6,                                // kN·m — ETABS T (torsion)
+        M2i: (m.Mi2 || 0) / 1e6, M2j: (m.Mj2 || 0) / 1e6,   // kN·m — ETABS M2 (minor)
+        M3i: m.Mi / 1e6, M3j: m.Mj / 1e6,                    // kN·m — ETABS M3 (major/gravity)
       })),
     }));
   }
@@ -394,18 +395,20 @@
         const rows = cs.members.map(m =>
           '<tr><td style="padding:3px 8px">' + esc2(m.type) + '</td><td>' + esc2(m.id) + '</td>' +
           '<td>' + m.P.toFixed(1) + '</td>' +
-          '<td>' + m.Vi.toFixed(1) + ' / ' + m.Vj.toFixed(1) + '</td>' +
-          '<td>' + m.Mi.toFixed(1) + ' / ' + m.Mj.toFixed(1) + '</td>' +
-          '<td>' + (m.Vi2 || 0).toFixed(1) + ' / ' + (m.Vj2 || 0).toFixed(1) + '</td>' +
-          '<td>' + (m.Mi2 || 0).toFixed(1) + ' / ' + (m.Mj2 || 0).toFixed(1) + '</td></tr>').join('');
+          '<td>' + m.V2i.toFixed(1) + ' / ' + m.V2j.toFixed(1) + '</td>' +
+          '<td>' + m.V3i.toFixed(1) + ' / ' + m.V3j.toFixed(1) + '</td>' +
+          '<td>' + m.T.toFixed(2) + '</td>' +
+          '<td>' + m.M2i.toFixed(1) + ' / ' + m.M2j.toFixed(1) + '</td>' +
+          '<td>' + m.M3i.toFixed(1) + ' / ' + m.M3j.toFixed(1) + '</td></tr>').join('');
         return '<table style="width:100%;border-collapse:collapse;font-size:12px">' +
           '<thead><tr style="text-align:left;opacity:.7"><th style="padding:4px 8px;border-bottom:1px solid #d7dde3">Type</th>' +
           '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">Element</th>' +
           '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">P (kN)</th>' +
-          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">V i/j (kN)</th>' +
-          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">M i/j (kN&middot;m)</th>' +
           '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">V2 i/j (kN)</th>' +
-          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">M2 i/j (kN&middot;m)</th></tr></thead>' +
+          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">V3 i/j (kN)</th>' +
+          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">T (kN&middot;m)</th>' +
+          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">M2 i/j (kN&middot;m)</th>' +
+          '<th style="padding:4px 8px;border-bottom:1px solid #d7dde3">M3 i/j (kN&middot;m)</th></tr></thead>' +
           '<tbody>' + rows + '</tbody></table>';
       };
       const html = '<div style="max-height:60vh;overflow:auto">' + extra.join('') + '<div id="ft-wrap">' + render(0) + '</div></div>';
