@@ -1,7 +1,7 @@
 {
   "name": "websketch3d",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WebSketch 3D — a SketchUp/AutoCAD-style 3D drawing & BIM app with MNL-66 reinforcement detailing.",
   "scripts": {
     "test": "node test/run.js",
@@ -36,7 +36,8 @@
       "assets/**",
       "README.md",
       "docs/AI-AUTHORING.md",
-      "package.json"
+      "package.json",
+      "js/design/**"
     ],
     "win": {
       "target": [
