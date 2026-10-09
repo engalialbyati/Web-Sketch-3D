@@ -112,6 +112,109 @@
       map.push({ ent, idx: frames.length - 1, len: null });
     }
 
+    // ---------------- shells: walls and slabs meshed into quads ------------
+    // Mesh size from Define (d.mesh.size, meters). Slabs/roofs: grid over the
+    // region bbox, cells kept when their center is inside the region polygon.
+    // Walls: rectangular nx x nz grid over the wall face.
+    // Shell-only nodes get their drilling rotation (rz) constrained — shell
+    // elements carry no drilling stiffness (standard thin-shell practice).
+    const dMesh = d.mesh || { size: 1.0 };
+    const shellEls = [];
+    const shellNode = (x, y, z) => {
+      const k = `${Math.round(x * 1000)}|${Math.round(y * 1000)}|${Math.round(z * 1000)}`;
+      if (nodeKey.has(k)) return nodeKey.get(k);
+      const idx = nodes.length;
+      nodes.push({ x, y, z, fixed: null });
+      nodeKey.set(k, idx);
+      return idx;
+    };
+    const matFor = ent => materialOf(app, sectionOf(app, ent) || {}, ent);
+
+    for (const ent of app.bim.entities) {
+      if (ent.type !== 'slab' && ent.type !== 'roof' && ent.type !== 'wall') continue;
+      const mat = matFor(ent);
+      if (!mat) continue;
+      const Ec = RD().matE(mat), nu = mat.iso ? mat.iso.u : 0.2;
+      const rho = (() => {
+        const g = mat.weight ? mat.weight.value : 25;
+        return ((mat.weight && mat.weight.as === 'mass') ? g : g * 1000 / 9.81) * 1e-12;
+      })();
+      const t = (ent.params.thickness || 0.2) * 1000; // mm
+      const size = dMesh.size || 1.0;
+
+      if (ent.type === 'wall') {
+        const b = ent.params.base || [0, 0, 0], e = ent.params.end || [0, 0, 0];
+        const lenM = Math.hypot(e[0] - b[0], e[1] - b[1]);
+        const hgt = +ent.params.height || 3;
+        const dx = (e[0] - b[0]) / lenM, dy = (e[1] - b[1]) / lenM;
+        const nx = Math.max(1, Math.round(lenM / size));
+        const nz = Math.max(1, Math.round(hgt / size));
+        const grid = (i, j) => nodeAt(b[0] + dx * lenM * i / nx, b[1] + dy * lenM * i / nx, b[2] + hgt * j / nz);
+        const g00 = grid(0, 0);
+        const row = [[g00]];
+        for (let i2 = 1; i2 <= nx; i2++) row[0].push(nodeAt(b[0] + dx * lenM * i2 / nx, b[1] + dy * lenM * i2 / nx, b[2]));
+        for (let j2 = 1; j2 <= nz; j2++) {
+          const rj = [];
+          for (let i2 = 0; i2 <= nx; i2++)
+            rj.push(nodeAt(b[0] + dx * lenM * i2 / nx, b[1] + dy * lenM * i2 / nx, b[2] + hgt * j2 / nz));
+          row.push(rj);
+        }
+        for (let i2 = 0; i2 < nx; i2++)
+          for (let j2 = 0; j2 < nz; j2++)
+            shellEls.push({ n1: row[j2][i2], n2: row[j2][i2 + 1], n3: row[j2 + 1][i2 + 1], n4: row[j2 + 1][i2],
+              E: Ec, nu, t, rho, entId: ent.id });
+      } else {
+        const zLvl = ent.params.baseLevel ? (app.levelManager.levels.find(l => l.id === ent.params.baseLevel)?.elevation ?? 0) : 0;
+        const regions = ent.params.regions || [];
+        for (const reg of regions) {
+          const outer = reg.outer || [];
+          if (outer.length < 3) continue;
+          const xs = outer.map(p => p[0]), ys = outer.map(p => p[1]);
+          const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+          const nx = Math.max(1, Math.round((x1 - x0) / size));
+          const ny = Math.max(1, Math.round((y1 - y0) / size));
+          const inside = (px, py) => {
+            let c = false;
+            for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
+              const [xi, yi] = outer[i], [xj, yj] = outer[j];
+              if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) c = !c;
+            }
+            return c;
+          };
+          const grid = [];
+          for (let i2 = 0; i2 <= nx; i2++) {
+            grid.push([]);
+            for (let j2 = 0; j2 <= ny; j2++) {
+              const px = x0 + (x1 - x0) * i2 / nx, py = y0 + (y1 - y0) * j2 / ny;
+              // keep nodes near/inside the polygon: center test for cells,
+              // nodes kept if inside or on the bbox edge of a kept cell
+              grid[i2].push(inside(px, py) || i2 === 0 || j2 === 0 || i2 === nx || j2 === ny
+                ? shellNode(px, py, zLvl) : null);
+            }
+          }
+          for (let i2 = 0; i2 < nx; i2++)
+            for (let j2 = 0; j2 < ny; j2++) {
+              const a = grid[i2][j2], b2 = grid[i2 + 1][j2], c2 = grid[i2 + 1][j2 + 1], dd = grid[i2][j2 + 1];
+              if (a == null || b2 == null || c2 == null || dd == null) continue;
+              shellEls.push({ n1: a, n2: b2, n3: c2, n4: dd, E: Ec, nu, t, rho, entId: ent.id });
+            }
+        }
+      }
+    }
+
+    // drilling constraint: nodes used only by shells (not by any frame) have
+    // no rz stiffness from shell elements — pin rz to avoid a singular solve
+    const usedByFrame = new Set();
+    for (const f of frames) { usedByFrame.add(f.ni); usedByFrame.add(f.nj); }
+    const usedByShell = new Set();
+    for (const sh of shellEls) for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) usedByShell.add(ni);
+    for (const ni of usedByShell) {
+      if (usedByFrame.has(ni)) continue;
+      const n = nodes[ni];
+      if (!n.fixed) n.fixed = [0, 0, 0, 0, 0, 1];
+      else n.fixed[5] = 1;
+    }
+
     // supports: columns reaching the lowest base elevation
     let zMin = Infinity;
     for (const f of frames) {
@@ -127,7 +230,7 @@
       n.fixed = fixity === 'pinned' ? fixPin : fixAll;
     }
 
-    return { nodes, frames, map, skipped, patternsData: d };
+    return { nodes, frames, shells: shellEls, map, skipped, patternsData: d, mesh: dMesh };
   }
 
   // ----------------------------------------------------------- pattern loads
@@ -182,6 +285,27 @@
         }
       }
 
+      // surface loads on shells: q (kN/m²) → nodal q·A_cell/4 (slabs down,
+      // walls along their normal is phase-2; slabs only in v1)
+      for (const sh of model.shells) {
+        const owner = app.bim.getEntityById(sh.entId);
+        if (!owner) continue;
+        for (const L of owner.params.surfaceLoads || []) {
+          if (L.pattern !== pat.name) continue;
+          const p1 = model.nodes[sh.n1], p2 = model.nodes[sh.n2], p3 = model.nodes[sh.n3], p4 = model.nodes[sh.n4];
+          const Acell = Math.abs(
+            ((p2.x - p1.x) * (p3.y - p1.y) - (p3.x - p1.x) * (p2.y - p1.y)) / 2 +
+            ((p3.x - p1.x) * (p4.y - p1.y) - (p4.x - p1.x) * (p3.y - p1.y)) / 2);
+          const F = (L.pressure || 0) * Acell / 4; // kN (kN/m² × m²)
+          const s2 = L.dir === 'up' ? 1 : -1;
+          for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) {
+            const c = nodal.get(ni) || [0, 0, 0, 0, 0, 0];
+            c[2] += s2 * F * 1000; // kN → N
+            nodal.set(ni, c);
+          }
+        }
+      }
+
       // element loads assigned on members
       for (let i = 0; i < model.frames.length; i++) {
         const m = model.map.find(x => x.idx === i);
@@ -222,7 +346,8 @@
   // member end forces per 'add' combination. Results in N and N·mm.
   function runAnalysis(app, opts = {}) {
     const model = buildModel(app);
-    if (!model.frames.length) return { error: 'No beams/columns with assigned sections to analyze.' };
+    if (!model.frames.length && !model.shells.length)
+      return { error: 'Nothing to analyze — no members or shells.' };
     const base = augmentModel(app, model);   // springs, rigid ties, generated loads
     const { loads, memberLoads, patternNames } = buildLoads2(app, model, base);
 
@@ -239,7 +364,7 @@
     for (let p = 0; p < loads.length; p++) {
       let geo = null, U = null, forces = null, reactions = null;
       for (let it = 0; it < 3; it++) {
-        const r = FE().assembleAndSolve(model.nodes, model.frames, [], [loads[p]],
+        const r = FE().assembleAndSolve(model.nodes, model.frames, model.shells, [loads[p]],
           { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
         U = r.U[0]; forces = r.frames;
         if (!base.pDelta) break;
@@ -247,13 +372,17 @@
         geo = forces.map(f => (f.forces[0] + f.forces[6]) / 2);
       }
       // support reactions: R = K·u − f at fixed dofs (re-assemble w/o destroy)
-      reactions = FE().computeReactions(model.nodes, model.frames, [], [loads[p]],
+      reactions = FE().computeReactions(model.nodes, model.frames, model.shells, [loads[p]],
         [U], { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
+
+      // displacements (mm) from the last solve of this pattern
+      results.U = U;
+      results.nodesMM = model.nodes.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000 }));
 
       // station forces along each member (statics from end forces + loads)
       const members = forces.map((f, i) => {
+        if (!model.map[i]) return null; // dummy links and shells are not members
         if (model.frames[i].dummy) return null;
-        const m = model.map[i] || {};
         const ml = (memberLoads[p] || [])[i] || {};
         const L = f.L;
         const wy = ml.wy || 0, pts = ml.points || [];

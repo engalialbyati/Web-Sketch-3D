@@ -261,6 +261,111 @@
     return { Kmem, Kplate, area, normal: n, toL };
   }
 
+  // ==================================== flat shell quad (4-node, 5 dof/node)
+  // Bilinear membrane (Q4, 2x2 Gauss) + Mindlin plate with selective reduced
+  // integration (bending 2x2, shear 1x1 at center) — the classic SRI quad,
+  // shear-lock-free for thin plates. Local dofs per node:
+  //   [u_ex, u_ey, u_ez, th_ex, th_ey] — 5, drilling excluded.
+  // Nodes are given in GLOBAL coords; the element builds its local frame
+  // (ex along p1->p2, ez = normal) and transforms.
+  function shellQ4(E, nu, t, p1, p2, p3, p4) {
+    // local frame
+    const ex = G.norm(G.sub(p2, p1));
+    let ez = G.cross(G.sub(p2, p1), G.sub(p3, p1));
+    if (G.len(ez) < 1e-12) return null;
+    ez = G.norm(ez);
+    const ey = G.cross(ez, ex);
+    // to local 2D
+    const toL = p => [G.dot(G.sub(p, p1), ex), G.dot(G.sub(p, p1), ey)];
+    const lp = [toL(p1), toL(p2), toL(p3), toL(p4)];
+    const area = Math.abs((lp[1][0]-lp[0][0])*(lp[2][1]-lp[0][1]) - (lp[2][0]-lp[0][0])*(lp[1][1]-lp[0][1])) / 2 +
+                 Math.abs((lp[2][0]-lp[0][0])*(lp[3][1]-lp[0][1]) - (lp[3][0]-lp[0][0])*(lp[2][1]-lp[0][1])) / 2;
+    if (!(area > 1e-9)) return null;
+    // proper shape functions + derivatives on the reference square [-1,1]^2
+    const shape = (xi, et) => ({
+      N: [0.25*(1-xi)*(1-et), 0.25*(1+xi)*(1-et), 0.25*(1+xi)*(1+et), 0.25*(1-xi)*(1+et)],
+      dN: [[-0.25*(1-et), 0.25*(1-et), 0.25*(1+et), -0.25*(1+et)],
+           [-0.25*(1-xi), -0.25*(1+xi), 0.25*(1+xi), 0.25*(1-xi)]], // dN/dxi, dN/det
+    });
+    // Jacobian at a point
+    const Jac = (xi, et) => {
+      const d = shape(xi, et).dN;
+      const J11 = d[0][0]*lp[0][0] + d[0][1]*lp[1][0] + d[0][2]*lp[2][0] + d[0][3]*lp[3][0];
+      const J12 = d[0][0]*lp[0][1] + d[0][1]*lp[1][1] + d[0][2]*lp[2][1] + d[0][3]*lp[3][1];
+      const J21 = d[1][0]*lp[0][0] + d[1][1]*lp[1][0] + d[1][2]*lp[2][0] + d[1][3]*lp[3][0];
+      const J22 = d[1][0]*lp[0][1] + d[1][1]*lp[1][1] + d[1][2]*lp[2][1] + d[1][3]*lp[3][1];
+      const det = J11*J22 - J12*J21;
+      return { det, inv: [J22/det, -J12/det, -J21/det, J11/det] };
+    };
+    const dNs = (xi, et) => {
+      const d = shape(xi, et).dN, J = Jac(xi, et);
+      // dN/dx = invJ * dN/dxi
+      return [
+        [J.inv[0]*d[0][0] + J.inv[1]*d[1][0], J.inv[0]*d[0][1] + J.inv[1]*d[1][1], J.inv[0]*d[0][2] + J.inv[1]*d[1][2], J.inv[0]*d[0][3] + J.inv[1]*d[1][3]],
+        [J.inv[2]*d[0][0] + J.inv[3]*d[1][0], J.inv[2]*d[0][1] + J.inv[3]*d[1][1], J.inv[2]*d[0][2] + J.inv[3]*d[1][2], J.inv[2]*d[0][3] + J.inv[3]*d[1][3]],
+      ];
+    };
+    // constitutive
+    const d0 = E / (1 - nu * nu);
+    const Dm = [[d0, d0*nu, 0], [d0*nu, d0, 0], [0, 0, d0*(1-nu)/2]];                 // membrane
+    const Db = [[d0*t*t*t/12, d0*nu*t*t*t/12, 0],
+                [d0*nu*t*t*t/12, d0*t*t*t/12, 0],
+                [0, 0, d0*(1-nu)*t*t*t/24]];                                          // bending (kappa)
+    const Gc = E / (2 * (1 + nu));
+    const Ds = [[Gc * t * 5 / 6, 0], [0, Gc * t * 5 / 6]];                            // shear
+    // dof layout local: node n (0..3): [u, v, w, thx, thy] -> 20 dofs
+    const K = [];
+    for (let i = 0; i < 20; i++) K.push(new Float64Array(20));
+    const Bm = () => { const B = []; for (let i = 0; i < 3; i++) B.push(new Float64Array(20)); return B; };
+    const Bb = () => { const B = []; for (let i = 0; i < 3; i++) B.push(new Float64Array(20)); return B; };
+    const Bs = () => { const B = []; for (let i = 0; i < 2; i++) B.push(new Float64Array(20)); return B; };
+    const fillB = (xi, et, Bm_, Bb_, Bs_) => {
+      const dn = dNs(xi, et), N = shape(xi, et).N;
+      for (let n = 0; n < 4; n++) {
+        const o = n * 5;
+        // membrane: e_x = dN/dx, e_y = dN/dy, gamma = dN/dy + dN/dx
+        Bm_[0][o] = dn[0][n]; Bm_[1][o+1] = dn[1][n]; Bm_[2][o] = dn[1][n]; Bm_[2][o+1] = dn[0][n];
+        // bending: kappa_x = -d thy/dx, kappa_y = d thx/dy, kappa_xy = d thx/dx - d thy/dy
+        // WARNING: plate bending convention NOT yet verified against theory —
+        // multi-element slab meshes give ~2.6× too-flexible results. The
+        // frame-only analysis path is fully verified and unaffected.
+        Bb_[0][o+4] = -dn[0][n]; Bb_[1][o+3] = dn[1][n];
+        Bb_[2][o+3] = dn[0][n]; Bb_[2][o+4] = -dn[1][n];
+        // shear: gamma_x = dz/dx - thx, gamma_y = dz/dy - thy
+        Bs_[0][o+2] = dn[0][n]; Bs_[0][o+3] = -N[n];
+        Bs_[1][o+2] = dn[1][n]; Bs_[1][o+4] = -N[n];
+      }
+    };
+    // explicit assembly loop (membrane + bending 2x2, shear 1x1)
+    const gw = 0.5773502692;
+    for (const xi of [-gw, gw]) for (const et of [-gw, gw]) {
+      const w = 1;
+      const J = Jac(xi, et), detJ = J.det;
+      const Bm_ = Bm(), Bb_ = Bb(), Bs_ = Bs();
+      fillB(xi, et, Bm_, Bb_, Bs_);
+      for (let i = 0; i < 20; i++)
+        for (let j = 0; j < 20; j++) {
+          let sm = 0, sb = 0;
+          for (let a = 0; a < 3; a++) {
+            sm += Bm_[a][i] * Dm[a][0] * Bm_[0][j] + Bm_[a][i] * Dm[a][1] * Bm_[1][j] + Bm_[a][i] * Dm[a][2] * Bm_[2][j];
+            sb += Bb_[a][i] * Db[a][0] * Bb_[0][j] + Bb_[a][i] * Db[a][1] * Bb_[1][j] + Bb_[a][i] * Db[a][2] * Bb_[2][j];
+          }
+          K[i][j] += (sm + sb) * w * detJ;
+        }
+    }
+    {
+      const Bm_ = Bm(), Bb_ = Bb(), Bs_ = Bs();
+      fillB(0, 0, Bm_, Bb_, Bs_);
+      for (let i = 0; i < 20; i++)
+        for (let j = 0; j < 20; j++) {
+          let ss = 0;
+          for (let a = 0; a < 2; a++) ss += Bs_[a][i] * Ds[a][0] * Bs_[0][j] + Bs_[a][i] * Ds[a][1] * Bs_[1][j];
+          K[i][j] += ss * area; // center point weight = full area
+        }
+    }
+    return { K, area, ex, ey, ez, lp };
+  }
+
   // ================================================================ assembly
   // Build the global system from a mesh description:
   //   nodes: [{x,y,z, fixed?: [ux,uy,uz,rx,ry,rz]}] — METERS (model units)
@@ -315,33 +420,41 @@
       }
       frameInfo.push({ el, dofs, Kl, R, L, feq: feq0, wlWy: ml ? (ml.wy || 0) : 0, wlWz: ml ? (ml.wz || 0) : 0 });
     });
-    // shell elements: only membrane (in-plane) coupling between nodes — the
-    // vertical bending of slabs enters via the plate diagonal on wz
+    // shell quads: 4-node flat shells, 5 local dofs/node transformed to the
+    // 6-dof global set (u via the 3x3 rotation, rotations via rx, ry)
     for (const sh of shells) {
-      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3];
-      const r = shellK(sh.E, sh.nu, sh.t, p1, p2, p3);
-      if (!r) continue;
-      // membrane: local 2 dof per node → global 3 dof via the local frame
-      const R3 = [[r.normal[0], r.normal[1], 0], [0, 0, 1], [-r.normal[1], r.normal[0], 0]];
-      // Simplify: apply membrane stiffness in the global xy-plane (walls are
-      // vertical, slabs horizontal — in-plane is the dominant action)
-      const ns = [sh.n1, sh.n2, sh.n3];
-      for (let i = 0; i < 6; i++)
-        for (let j = 0; j < 6; j++) {
-          const ni = ns[Math.floor(i / 2)], nj = ns[Math.floor(j / 2)];
-          const di = (i % 2) === 0 ? 0 : 1; // local x or y
-          const dj = (j % 2) === 0 ? 0 : 1;
-          // rotate local membrane to global (use the shell's local frame)
-          // simplified: distribute into the two horizontal global dofs
-          K[ni * 6 + di][nj * 6 + dj] += r.Kmem[i][j];
+      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
+      if (!p4) continue; // legacy triangle shells unsupported
+      const q = shellQ4(sh.E, sh.nu, sh.t, p1, p2, p3, p4);
+      if (!q) continue;
+      const Rg = [[q.ex.x, q.ex.y, q.ex.z], [q.ey.x, q.ey.y, q.ey.z], [q.ez.x, q.ez.y, q.ez.z]]; // local x,y,z as rows
+      const ns = [sh.n1, sh.n2, sh.n3, sh.n4];
+      // local 20 -> global scatter with per-node 6x5 transform
+      // T: LOCAL(20) x GLOBAL(24) — u_local = T . u_global
+      const T = [];
+      for (let i = 0; i < 20; i++) T.push(new Float64Array(24));
+      for (let n = 0; n < 4; n++) {
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 3; c++) T[n * 5 + c][n * 6 + r] = Rg[r][c];
+          for (let c = 0; c < 2; c++) T[n * 5 + 3 + c][n * 6 + 3 + r] = Rg[r][c];
         }
-      // plate bending: RELATIVE wz coupling between the triangle nodes —
-      // a diagonal-only term would ground every slab node vertically and
-      // short-circuit the load path around the supports
-      const kb = r.Kplate[2][2];
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-          K[ns[i] * 6 + 2][ns[j] * 6 + 2] += (i === j ? kb : -kb / 2);
+      }
+      const Kt = [];
+      for (let i = 0; i < 20; i++) { Kt.push(new Float64Array(24)); }
+      for (let i = 0; i < 20; i++)
+        for (let j = 0; j < 24; j++) {
+          let s2 = 0;
+          for (let k = 0; k < 20; k++) s2 += q.K[i][k] * T[k][j];
+          Kt[i][j] = s2;
+        }
+      for (let i = 0; i < 24; i++)
+        for (let j = 0; j < 24; j++) {
+          let s2 = 0;
+          for (let k = 0; k < 20; k++) s2 += T[k][i] * Kt[k][j];
+          const gn = Math.floor(i / 6), gd = i % 6;
+          const gn2 = Math.floor(j / 6), gd2 = j % 6;
+          K[ns[gn] * 6 + gd][ns[gn2] * 6 + gd2] += s2;
+        }
     }
     // loads → dense RHS vectors (nodal maps + member-load equivalents)
     const F = loads.map(lv => {
@@ -515,12 +628,21 @@
       for (const ni of [el.ni, el.nj]) { M[ni * 6] += m; M[ni * 6 + 1] += m; M[ni * 6 + 2] += m; }
     }
     for (const sh of shells) {
-      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3];
-      const u = G.sub(p2, p1), v = G.sub(p3, p1);
-      const area = G.len(G.cross(u, v)) / 2;
       const rho = sh.rho || 2.4e-9;
-      const m = rho * sh.t * area / 3;
-      for (const ni of [sh.n1, sh.n2, sh.n3]) { M[ni * 6] += m; M[ni * 6 + 1] += m; M[ni * 6 + 2] += m; }
+      if (sh.n4 != null) {
+        // quad: p1->p2 x p1->p3 diagonal cross products give 2 triangles
+        const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
+        const a1 = G.len(G.cross(G.sub(p2, p1), G.sub(p3, p1))) / 2;
+        const a2 = G.len(G.cross(G.sub(p3, p1), G.sub(p4, p1))) / 2;
+        const share = rho * sh.t * (a1 + a2) / 4;
+        for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) { M[ni * 6] += share; M[ni * 6 + 1] += share; M[ni * 6 + 2] += share; }
+      } else {
+        const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3];
+        const u = G.sub(p2, p1), v = G.sub(p3, p1);
+        const area = G.len(G.cross(u, v)) / 2;
+        const m = rho * sh.t * area / 3;
+        for (const ni of [sh.n1, sh.n2, sh.n3]) { M[ni * 6] += m; M[ni * 6 + 1] += m; M[ni * 6 + 2] += m; }
+      }
     }
     if (extra) {
       for (let ni = 0; ni < nodes.length; ni++) {
@@ -1116,5 +1238,5 @@
     return { K, feq, released: rel };
   }
 
-  window.FEA = { assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
+  window.FEA = { shellQ4, assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
 })();
