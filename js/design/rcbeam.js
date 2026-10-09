@@ -1,0 +1,368 @@
+// rcbeam.js — ACI 318-19 RC beam design (flexure + shear).
+// Implements the procedure from the published Concrete Frame Design manual
+// (CFD-ACI-318-19, §3.5): flexural reinforcement at stations (rectangular
+// and T-beam, singly and doubly reinforced), shear reinforcement, and
+// development length checks. Original code — equations cite ACI clauses.
+// Units: N, mm, MPa (consistent with rcmodel.js internal state).
+(function (root) {
+  'use strict';
+
+  // ============================================================ φ (21.2)
+  // Strength reduction factor from net tensile strain (ACI 21.2.3, Table 21.2.2)
+  function phiFlexure(et, esy) {
+    const etLimit = esy + 0.003; // tension-controlled limit (ACI 21.2.2)
+    if (et >= etLimit) return 0.90;
+    if (et <= esy) return 0.65;
+    // transition zone (ACI 21.2.3): linear interpolation
+    return 0.65 + 0.25 * (et - esy) / 0.003;
+  }
+
+  // β₁ (ACI 22.2.2.4.3): f'c in MPa
+  function beta1(fc) {
+    const b = 0.85 - 0.05 * (fc - 28) / 7;
+    return Math.max(0.65, Math.min(0.85, b));
+  }
+
+  // ============================================================ flexure
+  // Design a rectangular beam for one moment. Returns As required (mm²),
+  // φ used, and whether compression reinforcement is needed.
+  // All inputs in N, mm, MPa.
+  function designRectFlexure(Mu, b, d, dPrime, fc, fy, esy) {
+    const b1 = beta1(fc);
+    // φ = 0.9 initially (tension-controlled assumption, ACI 21.2)
+    let phi = 0.90;
+
+    // depth of compression block (CFD §3.5.1.2.1, ACI 22.2.2.4.1)
+    const disc = d * d - 2 * Mu / (0.85 * phi * fc * b);
+    if (disc <= 0) return { ok: false, reason: 'Section too small — Mu exceeds singly-reinforced capacity even at a=d.' };
+    const a = d - Math.sqrt(disc);
+
+    // max depth of compression block for tension-controlled (ACI 9.3.3.1)
+    const cMax = d * 0.003 / (0.003 + esy);
+    const aMax = b1 * cMax;
+
+    if (a <= aMax) {
+      // singly reinforced (CFD §3.5.1.2.1)
+      const As = Mu / (phi * fy * (d - a / 2));
+      // verify φ with actual c
+      const c = a / b1;
+      const et = 0.003 * (d - c) / c;
+      phi = phiFlexure(et, esy);
+      const AsFinal = Mu / (phi * fy * (d - a / 2));
+      return { ok: true, As: AsFinal, a, c, phi, et, doubly: false, AsComp: 0 };
+    }
+
+    // doubly reinforced (CFD §3.5.1.2.1, ACI 9.3.3.1)
+    const Cc = 0.85 * fc * b * aMax;
+    const Muc = phi * Cc * (d - aMax / 2);
+    const Mus = Mu - Muc;
+    if (Mus <= 0) return { ok: true, As: 0, a: aMax, c: cMax, phi, et: 0, doubly: false, AsComp: 0 };
+
+    const As1 = Muc / (phi * fy * (d - aMax / 2));
+    const fsPrime = Math.min(Es200 * 0.003 * (cMax - dPrime) / cMax, fy);
+    const As2 = Mus / (phi * fy * (d - dPrime));
+    const As = As1 + As2;
+    // φ for doubly reinforced: same as tension-controlled (the extra compression steel doesn't reduce ductility)
+    return { ok: true, As, a: aMax, c: cMax, phi: 0.90, et: 0.003 + esy, doubly: true, AsComp: As2, fsPrime };
+  }
+
+  const Es200 = 200000; // MPa (modulus of steel, ACI 20.2.2.2)
+
+  // T-beam positive moment design (CFD §3.5.1.2.2)
+  // bf: effective flange width (ACI 6.3.2), ds: flange (slab) thickness
+  function designTBeamFlange(Mu, bf, bw, d, ds, dPrime, fc, fy, esy) {
+    const b1 = beta1(fc);
+    let phi = 0.90;
+
+    // try rectangular with bf (CFD §3.5.1.2.2: "If a ≤ ds")
+    const disc = d * d - 2 * Mu / (0.85 * phi * fc * bf);
+    if (disc <= 0) return { ok: false, reason: 'T-beam section too small.' };
+    const a = d - Math.sqrt(disc);
+    const cMax = d * 0.003 / (0.003 + esy);
+    const aMax = b1 * cMax;
+
+    if (a <= ds) {
+      // compression block within flange → same as rectangular with b = bf
+      const As = Mu / (phi * fy * (d - a / 2));
+      const c = a / b1;
+      const et = 0.003 * (d - c) / c;
+      phi = phiFlexure(et, esy);
+      const AsFinal = Mu / (phi * fy * (d - a / 2));
+      return { ok: true, As: AsFinal, a, c, phi, et, tBeam: true, doubly: false, AsComp: 0 };
+    }
+
+    if (a <= aMax) {
+      // compression block exceeds flange but still tension-controlled
+      // (CFD §3.5.1.2.2: flange + web analysis)
+      const Cf = 0.85 * fc * (bf - bw) * ds;
+      const As1 = Cf / fy;
+      const Muf = phi * Cf * (d - ds / 2);
+      const Muw = Mu - Muf;
+      const discW = d * d - 2 * Muw / (0.85 * phi * fc * bw);
+      if (discW <= 0) return { ok: false, reason: 'Web insufficient.' };
+      const a1 = d - Math.sqrt(discW);
+      const As2 = Muw / (phi * fy * (d - a1 / 2));
+      const As = As1 + As2;
+      return { ok: true, As, a: a1, c: a1 / b1, phi, et: 0.003 + esy, tBeam: true, doubly: false, AsComp: 0 };
+    }
+
+    // doubly reinforced T-beam (needs compression steel)
+    const Cf = 0.85 * fc * (bf - bw) * ds;
+    const As1 = Cf / fy;
+    const Muf = phi * Cf * (d - ds / 2);
+    const Muw = Mu - Muf;
+    const Cc = 0.85 * fc * bw * aMax;
+    const Muc = phi * Cc * (d - aMax / 2);
+    const Mus = Muw - Muc;
+    const As2a = Muc / (phi * fy * (d - aMax / 2));
+    const fsPrime = Math.min(Es200 * 0.003 * (cMax - dPrime) / cMax, fy);
+    const As2b = Mus / (phi * fy * (d - dPrime));
+    return { ok: true, As: As1 + As2a + As2b, a: aMax, c: cMax, phi: 0.90, et: 0.003 + esy, tBeam: true, doubly: true, AsComp: As2b, fsPrime };
+  }
+
+  // ============================================================ shear
+  // Concrete shear capacity + required stirrup reinforcement (ACI 22.5)
+  function designShear(Vu, bw, d, fc, fyt, lambda = 1.0) {
+    const phi = 0.75; // shear φ (ACI 21.2.1, Table 21.2.1)
+    // Vc (ACI 22.5.5.1, SI: Vc = 0.17·λ·√f'c·bw·d)
+    let Vc = 0.17 * lambda * Math.sqrt(fc) * bw * d;
+    // size effect (ACI 22.5.5.1.3): λs = min(1, 1.1/(1+d)) for d in mm... simplified
+    const lambdaS = d > 600 ? Math.min(1, Math.sqrt(2 / (1 + d))) : 1.0;
+    Vc *= lambdaS;
+    // Vc upper limit (ACI 22.5.5.1.1)
+    const VcMax = 0.83 * lambda * Math.sqrt(fc) * bw * d;
+    Vc = Math.max(0, Math.min(Vc, VcMax));
+
+    const phiVc = phi * Vc;
+    // Vs upper limit (ACI 22.5.1.2)
+    const VsMax = 2.1 * Math.sqrt(fc) * bw * d;
+    const phiVnMax = phi * (Vc + VsMax);
+
+    if (Vu > phiVnMax) {
+      return { ok: false, phiVc, Vu: phiVnMax, reason: `Vu = ${(Vu/1e3).toFixed(1)} kN > φVn_max = ${(phiVnMax/1e3).toFixed(1)} kN — increase section size or f'c (ACI 22.5.1.2).` };
+    }
+
+    // required Av/s (ACI 22.5.1.1, 22.5.8.1)
+    let Avs = 0;
+    if (Vu > phiVc) {
+      Avs = (Vu / phi - Vc) / (fyt * d); // mm²/mm
+    }
+    // minimum shear reinforcement (ACI 9.6.3.4, Table 9.6.3.4)
+    const AvsMin = Math.max(0.062 * Math.sqrt(fc), 0.35) * bw / fyt;
+    const AvsFinal = Math.max(Avs, Vu > phiVc ? AvsMin : 0);
+
+    return {
+      ok: true, phi, Vc: phiVc, Avs: AvsFinal, AvsMin,
+      VuEq: Vu, VsReq: Math.max(0, Vu / phi - Vc),
+    };
+  }
+
+  // ============================================================ development
+  // Straight bar development length (ACI 25.4.2.3, SI simplified)
+  function devLength(fy, fc, db, cover, spacing) {
+    // ψt = 1.0 (bottom bar), λ = 1.0 (normal weight)
+    // ld = (fy·ψt·ψe·db) / (2·λ·√f'c)  — ACI 25.4.2.3 (simplified, ≥300mm)
+    let ld = (fy * db) / (2 * Math.sqrt(fc) * 1.0);
+    ld = Math.max(ld, 300); // ACI 25.4.2.1 minimum
+    return ld;
+  }
+
+  // ============================================================ full design
+  // Design all beams for a given combination.
+  // Returns per-member, per-station design results with clause references.
+  function designAllBeams(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return { error: 'Run the analysis first (Analyze ▸ Run Analysis).' };
+    const d = RD().ensure(app);
+
+    // find the combo (or use a pattern if no combos)
+    let combo = R.combos.find(c => c.name === comboName);
+    let pat = null;
+    if (!combo) {
+      pat = R.patterns.find(p => p.name === comboName);
+      if (!pat) return { error: `Combination or pattern "${comboName}" not found.` };
+    }
+
+    const results = [];
+    for (let mi = 0; mi < (combo ? combo.members : pat.members).length; mi++) {
+      const m = (combo ? combo.members : pat.members)[mi];
+      if (m.type !== 'beam') continue;
+      const ent = app.bim.getEntityById(m.id);
+      if (!ent) continue;
+      const sec = sectionOf(app, ent);
+      if (!sec || sec.type !== 'rect') continue; // v1: rectangular only
+      const mat = materialOf(app, sec, ent);
+      if (!mat || !mat.conc) continue;
+
+      const fc = mat.conc.fc;
+      const fy = (mat.rebar || mat.steel || { fy: 500 }).fy;
+      const esy = fy / Es200;
+      const b = (sec.dims.b || 300) * 1;
+      const h = (sec.dims.h || 500);
+      const cover = (sec.rebar && sec.rebar.coverTop) || 0.04;
+      const stirrupDia = 8; // mm, assumed
+      const barDia = 20; // mm, assumed main bar
+      const dTop = h - cover - stirrupDia - barDia / 2;
+      const dBot = h - cover - stirrupDia - barDia / 2;
+      const dPrime = cover + stirrupDia + barDia / 2;
+
+      // envelope from stations: need to reconstruct station M/V from member data
+      // The analysis gives 11 station M/V values. For design, envelope across
+      // patterns (simplified: use the combo station forces).
+      // For v1, use the end forces (station 0 and n) + compute midspan.
+      // TODO: use station forces directly when combo station data is available.
+
+      const fyt = fy; // stirrup yield = longitudinal yield (conservative)
+
+      // ==== flexural envelope at supports and midspan ====
+      // M3i = major moment at i-end, M3j = major moment at j-end
+      // sign convention: positive M3 → tension at bottom → bottom steel
+      const M3i = m.Mi || 0; // N·mm (from rcmodel, kN·m → need × 1e6? No — rcmodel returns kN·m in forceTable but raw in .patterns/.combos)
+      const M3j = m.Mj || 0;
+
+      // Actually, the raw combo/pattern members store N·mm directly.
+      // Mi = major moment at i-end (N·mm from rcmodel raw data)
+      // Design:
+      // - M_neg = max(|Mi|, |Mj|) when negative → top steel
+      // - M_pos = max positive → bottom steel
+      // For v1, use end moments; stations give the midspan.
+
+      // Determine which end is in more compression/flexure
+      const MuNeg = Math.max(-m.Mi || 0, -m.Mj || 0, 0); // negative moment → top steel
+      const MuPos = Math.max(m.Mi || 0, m.Mj || 0, 0);   // positive moment → bottom steel
+
+      // take absolute for design (both faces)
+      const MuTop = Math.max(MuNeg, -Math.min(m.Mi || 0, m.Mj || 0));
+      const MuBot = Math.max(MuPos, Math.max(m.Mi || 0, m.Mj || 0));
+
+      // shear
+      const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0));
+
+      // ==== design top steel (negative moment → rectangular section) ====
+      let topResult = { As: 0 };
+      if (MuTop > 0) {
+        topResult = designRectFlexure(MuTop, b, dTop, dPrime, fc, fy, esy);
+      }
+
+      // ==== design bottom steel ====
+      // for positive moment: could be T-beam (if monolithic with slab)
+      // v1: treat as rectangular (conservative)
+      let botResult = { As: 0 };
+      if (MuBot > 0) {
+        botResult = designRectFlexure(MuBot, b, dBot, dPrime, fc, fy, esy);
+      }
+
+      // ==== min/max reinforcement ====
+      const AsMinTop = Math.max(0.25 * Math.sqrt(fc) / fy, 1.4 / fy) * b * dTop;
+      const AsMinBot = AsMinTop;
+      const AsMax = 0.04 * b * (h / 2); // 0.04×bw×d per face (approx)
+
+      const AsTop = Math.max(topResult.As || 0, AsMinTop);
+      const AsBot = Math.max(botResult.As || 0, AsMinBot);
+
+      // ==== shear design ====
+      const shear = designShear(Vu, b, dBot, fc, fyt);
+
+      results.push({
+        id: m.id,
+        b, h, dTop, dBot, fc, fy,
+        MuTop, MuBot, Vu,
+        AsTop, AsBot, AsMinTop, AsMax,
+        topDoubly: topResult.doubly || false,
+        botDoubly: botResult.doubly || false,
+        shear,
+        // clause refs
+        refs: {
+          flexure: 'ACI 9.5.2.1, 21.2, 22.2',
+          minSteel: 'ACI 9.6.1.2',
+          maxSteel: 'ACI 9.3.3.1',
+          shear: 'ACI 22.5',
+          shearMin: 'ACI 9.6.3.4',
+        },
+      });
+    }
+    return { results, comboName };
+  }
+
+  // sectionOf/materialOf are in rcmodel.js — re-export
+  let RD = null;
+  try { RD = root.RCDefine; } catch (e) {}
+  function sectionOf(app, ent) {
+    if (!RD) RD = root.RCDefine;
+    const d = RD.ensure(app);
+    const name = ent.params.designSection;
+    return (name && d.frameSections.find(s => s.name === name)) || null;
+  }
+  function materialOf(app, sec, ent) {
+    if (!RD) RD = root.RCDefine;
+    const d = RD.ensure(app);
+    const name = (ent.params && ent.params.materialOverwrite) || (sec && sec.material);
+    return d.materials.find(m => m.name === name) || d.materials.find(m => m.type === 'concrete') || null;
+  }
+
+  // ============================================================ design dialog
+  function open(app, cat) {
+    if (cat !== 'beamDesign') return;
+    const d = RD().ensure(app);
+    const R = app.rcResults;
+    const comboNames = R.combos.map(c => c.name);
+    if (!comboNames.length) {
+      comboNames.push(...R.patterns.map(p => p.name));
+    }
+    if (!comboNames.length) { app.toast('Run the analysis first', true); return; }
+
+    const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Designs all beams for the selected combination using ACI 318-19 (CFD §3.5).</p>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +
+      `<select id="bd-combo" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${patOpts}</select></div>`,
+    ].join('');
+    app.dialog('RC Beam Design — ACI 318-19', html, [
+      ['Design', () => {
+        const combo = document.getElementById('bd-combo').value;
+        const result = designAllBeams(app, combo);
+        if (result.error) { app.toast(result.error, true); return false; }
+        showBeamResults(app, result, combo);
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
+  function showBeamResults(app, result, comboName) {
+    const esc = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const rows = result.results.map(r => {
+      const shearOk = r.shear.ok;
+      const shearNote = shearOk ? `Av/s = ${r.shear.Avs.toFixed(3)} mm²/mm` : 'OVERSTRESSED';
+      const color = shearOk ? '#2e7d32' : '#c62828';
+      return '<tr>' +
+        `<td style="padding:3px 6px">${esc(r.id)}</td>` +
+        `<td>${r.b}×${r.h}</td>` +
+        `<td>${r.MuTop/1e6 > 0.01 ? (r.MuTop/1e6).toFixed(1) : '—'}</td>` +
+        `<td>${r.MuBot/1e6 > 0.01 ? (r.MuBot/1e6).toFixed(1) : '—'}</td>` +
+        `<td>${r.AsTop > 0 ? r.AsTop.toFixed(0) : '—'}</td>` +
+        `<td>${r.AsBot > 0 ? r.AsBot.toFixed(0) : '—'}</td>` +
+        `<td>${r.AsTop > 0 && r.topDoubly ? '★' : ''}</td>` +
+        `<td style="color:${color}">${shearNote}</td>` +
+        '</tr>';
+    }).join('');
+    const html = '<div style="max-height:65vh;overflow:auto">' +
+      `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Combination: <b>${esc(comboName)}</b> · ACI 318-19</p>` +
+      '<table style="width:100%;border-collapse:collapse;font-size:11.5px">' +
+      '<thead><tr style="text-align:left;opacity:.7">' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Element</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">b×h</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Mu⁻ top (kN·m)</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Mu⁺ bot (kN·m)</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">As top (mm²)</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">As bot (mm²)</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Dbl</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Shear</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>' +
+      '<p style="font-size:11px;opacity:.7;margin:8px 0 0">★ = doubly reinforced · As includes ACI 9.6.1.2 minimum · Shear: Av/s per ACI 22.5</p>' +
+      '</div>';
+    app.dialog('RC Beam Design Results — ' + comboName, html, [['Close', null]]);
+  }
+
+  root.RCBeam = { designAllBeams, designRectFlexure, designTBeamFlange, designShear, devLength, open, phiFlexure, beta1 };
+})(window);

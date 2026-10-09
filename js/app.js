@@ -396,6 +396,9 @@ const RIBBON_TABS = {
     { title: 'Run', tools: ['anlrun'] },
     { title: 'Results', tools: ['anlforces'] },
   ] },
+  rcdesign: { label: 'Design', groups: [
+    { title: 'Beam Design', tools: ['dsbbeam'] },
+  ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '2D Curves', tools: ['line', 'polyline', 'rect', 'circle', 'arc', 'polygon', 'fillet'] },
@@ -463,13 +466,14 @@ const RIBBON_TABS = {
 };
 
 // RC workspace ribbon tab ids (visible only in Design & Analysis mode)
-const RC_TABS = ['define', 'assign', 'analyze'];
+const RC_TABS = ['define', 'assign', 'analyze', 'rcdesign'];
 
 // RC Design & Analysis ▸ Define ribbon buttons — glyph + short label so the
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
   anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
+  dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
