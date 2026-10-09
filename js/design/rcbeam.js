@@ -183,95 +183,71 @@
       if (!pat) return { error: `Combination or pattern "${comboName}" not found.` };
     }
 
+    const rebarDb = d.rebarDb || [];
+
     const results = [];
-    for (let mi = 0; mi < (combo ? combo.members : pat.members).length; mi++) {
-      const m = (combo ? combo.members : pat.members)[mi];
+    const members = combo ? combo.members : pat.members;
+    for (let mi = 0; mi < members.length; mi++) {
+      const m = members[mi];
       if (m.type !== 'beam') continue;
       const ent = app.bim.getEntityById(m.id);
       if (!ent) continue;
       const sec = sectionOf(app, ent);
-      if (!sec || sec.type !== 'rect') continue; // v1: rectangular only
+      if (!sec || sec.type !== 'rect') continue;
       const mat = materialOf(app, sec, ent);
       if (!mat || !mat.conc) continue;
 
       const fc = mat.conc.fc;
       const fy = (mat.rebar || mat.steel || { fy: 500 }).fy;
       const esy = fy / Es200;
-      const b = (sec.dims.b || 300) * 1;
-      const h = (sec.dims.h || 500);
-      const cover = (sec.rebar && sec.rebar.coverTop) || 0.04;
-      const stirrupDia = 8; // mm, assumed
-      const barDia = 20; // mm, assumed main bar
-      const dTop = h - cover - stirrupDia - barDia / 2;
-      const dBot = h - cover - stirrupDia - barDia / 2;
-      const dPrime = cover + stirrupDia + barDia / 2;
+      const dims = sec.dims || {};
+      const b = dims.b || 300;
+      const h = dims.h || 500;
+      const cover = ((sec.rebar && sec.rebar.coverTop) || 0.04) * 1000;
+      const stirrupDia = 8;
+      const assumedBar = 20;
+      const dTop = h - cover - stirrupDia - assumedBar / 2;
+      const dBot = h - cover - stirrupDia - assumedBar / 2;
+      const dPrime = cover + stirrupDia + assumedBar / 2;
+      const fyt = fy;
 
-      // envelope from stations: need to reconstruct station M/V from member data
-      // The analysis gives 11 station M/V values. For design, envelope across
-      // patterns (simplified: use the combo station forces).
-      // For v1, use the end forces (station 0 and n) + compute midspan.
-      // TODO: use station forces directly when combo station data is available.
-
-      const fyt = fy; // stirrup yield = longitudinal yield (conservative)
-
-      // ==== flexural envelope at supports and midspan ====
-      // M3i = major moment at i-end, M3j = major moment at j-end
-      // sign convention: positive M3 → tension at bottom → bottom steel
-      const M3i = m.Mi || 0; // N·mm (from rcmodel, kN·m → need × 1e6? No — rcmodel returns kN·m in forceTable but raw in .patterns/.combos)
-      const M3j = m.Mj || 0;
-
-      // Actually, the raw combo/pattern members store N·mm directly.
-      // Mi = major moment at i-end (N·mm from rcmodel raw data)
-      // Design:
-      // - M_neg = max(|Mi|, |Mj|) when negative → top steel
-      // - M_pos = max positive → bottom steel
-      // For v1, use end moments; stations give the midspan.
-
-      // Determine which end is in more compression/flexure
-      const MuNeg = Math.max(-m.Mi || 0, -m.Mj || 0, 0); // negative moment → top steel
-      const MuPos = Math.max(m.Mi || 0, m.Mj || 0, 0);   // positive moment → bottom steel
-
-      // take absolute for design (both faces)
-      const MuTop = Math.max(MuNeg, -Math.min(m.Mi || 0, m.Mj || 0));
-      const MuBot = Math.max(MuPos, Math.max(m.Mi || 0, m.Mj || 0));
-
-      // shear
+      // design moments from the combo/pattern end forces (N·mm)
+      const Mi = m.Mi || 0, Mj = m.Mj || 0;
+      const MuTop = Math.max(-Mi, -Mj, 0);
+      const MuBot = Math.max(Mi, Mj, 0);
       const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0));
 
-      // ==== design top steel (negative moment → rectangular section) ====
+      // design flexure
       let topResult = { As: 0 };
-      if (MuTop > 0) {
-        topResult = designRectFlexure(MuTop, b, dTop, dPrime, fc, fy, esy);
-      }
-
-      // ==== design bottom steel ====
-      // for positive moment: could be T-beam (if monolithic with slab)
-      // v1: treat as rectangular (conservative)
+      if (MuTop > 0) topResult = designRectFlexure(MuTop, b, dTop, dPrime, fc, fy, esy);
       let botResult = { As: 0 };
-      if (MuBot > 0) {
-        botResult = designRectFlexure(MuBot, b, dBot, dPrime, fc, fy, esy);
-      }
+      if (MuBot > 0) botResult = designRectFlexure(MuBot, b, dBot, dPrime, fc, fy, esy);
 
-      // ==== min/max reinforcement ====
+      // min/max
       const AsMinTop = Math.max(0.25 * Math.sqrt(fc) / fy, 1.4 / fy) * b * dTop;
-      const AsMinBot = AsMinTop;
-      const AsMax = 0.04 * b * (h / 2); // 0.04×bw×d per face (approx)
+      const AsMax = 0.04 * b * dTop;
+      const AsTopRaw = Math.max(topResult.As || 0, AsMinTop);
+      const AsBotRaw = Math.max(botResult.As || 0, AsMinTop);
 
-      const AsTop = Math.max(topResult.As || 0, AsMinTop);
-      const AsBot = Math.max(botResult.As || 0, AsMinBot);
+      // rebar selection
+      const topBars = selectRebar(rebarDb, AsTopRaw, b, cover);
+      const botBars = selectRebar(rebarDb, AsBotRaw, b, cover);
 
-      // ==== shear design ====
+      // shear + stirrups
       const shear = designShear(Vu, b, dBot, fc, fyt);
+      const stirrups = selectStirrups(shear, rebarDb, b, dBot);
+
+      // development length
+      const devTop = topBars ? devLength(fy, fc, topBars.dia, cover, 100) : 0;
+      const devBot = botBars ? devLength(fy, fc, botBars.dia, cover, 100) : 0;
 
       results.push({
-        id: m.id,
-        b, h, dTop, dBot, fc, fy,
+        id: m.id, b, h, dTop, dBot, fc, fy,
         MuTop, MuBot, Vu,
-        AsTop, AsBot, AsMinTop, AsMax,
+        AsTop: AsTopRaw, AsBot: AsBotRaw, AsMinTop, AsMax,
         topDoubly: topResult.doubly || false,
         botDoubly: botResult.doubly || false,
-        shear,
-        // clause refs
+        shear, topBars, botBars, stirrups, devTop, devBot,
         refs: {
           flexure: 'ACI 9.5.2.1, 21.2, 22.2',
           minSteel: 'ACI 9.6.1.2',
@@ -281,7 +257,7 @@
         },
       });
     }
-    return { results, comboName };
+    return { results, comboName, rebarDb };
   }
 
   // sectionOf/materialOf are in rcmodel.js — re-export
@@ -298,6 +274,35 @@
     const d = RD.ensure(app);
     const name = (ent.params && ent.params.materialOverwrite) || (sec && sec.material);
     return d.materials.find(m => m.name === name) || d.materials.find(m => m.type === 'concrete') || null;
+  }
+
+  // ============================================================ rebar selection
+  // Pick the minimum bars from the database to satisfy As
+  function selectRebar(rebarDb, As, b, cover) {
+    if (!rebarDb || !rebarDb.length || As <= 0) return null;
+    for (const bar of rebarDb) {
+      const minCount = 2;
+      if (minCount * bar.area >= As)
+        return { count: minCount, dia: bar.dia, area: bar.area, As: minCount * bar.area };
+    }
+    const largest = rebarDb[rebarDb.length - 1];
+    const count = Math.max(2, Math.ceil(As / largest.area));
+    const maxFit = Math.floor((b - 2 * (cover + 8)) / (largest.dia + 25));
+    const finalCount = Math.min(count, Math.max(2, maxFit));
+    return { count: finalCount, dia: largest.dia, area: largest.area, As: finalCount * largest.area };
+  }
+
+  function selectStirrups(shear, rebarDb, bw, d) {
+    if (!shear.ok) return null;
+    if (shear.Avs <= 0) return { dia: 8, spacing: 200, note: 'minimum' };
+    for (const bar of rebarDb) {
+      const Av2leg = 2 * bar.area;
+      const spacing = Av2leg / shear.Avs;
+      const sMax = Math.min(d / 2, 600);
+      const sFinal = Math.min(Math.floor(spacing / 10) * 10, sMax);
+      if (sFinal >= 50) return { dia: bar.dia, spacing: sFinal, AvsProvided: Av2leg / sFinal };
+    }
+    return { dia: 16, spacing: 100, AvsProvided: 0 };
   }
 
   // ============================================================ design dialog
@@ -333,16 +338,20 @@
     const esc = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const rows = result.results.map(r => {
       const shearOk = r.shear.ok;
-      const shearNote = shearOk ? `Av/s = ${r.shear.Avs.toFixed(3)} mm²/mm` : 'OVERSTRESSED';
+      const shearNote = shearOk && r.stirrups
+        ? `Ø${r.stirrups.dia}@${r.stirrups.spacing}mm` : 'OVERSTRESSED';
       const color = shearOk ? '#2e7d32' : '#c62828';
+      const topBarStr = r.topBars ? `${r.topBars.count}Ø${r.topBars.dia}` : '—';
+      const botBarStr = r.botBars ? `${r.botBars.count}Ø${r.botBars.dia}` : '—';
+      const dblMark = r.topDoubly || r.botDoubly ? ' ★' : '';
       return '<tr>' +
         `<td style="padding:3px 6px">${esc(r.id)}</td>` +
         `<td>${r.b}×${r.h}</td>` +
         `<td>${r.MuTop/1e6 > 0.01 ? (r.MuTop/1e6).toFixed(1) : '—'}</td>` +
         `<td>${r.MuBot/1e6 > 0.01 ? (r.MuBot/1e6).toFixed(1) : '—'}</td>` +
-        `<td>${r.AsTop > 0 ? r.AsTop.toFixed(0) : '—'}</td>` +
-        `<td>${r.AsBot > 0 ? r.AsBot.toFixed(0) : '—'}</td>` +
-        `<td>${r.AsTop > 0 && r.topDoubly ? '★' : ''}</td>` +
+        `<td><b>${topBarStr}</b>${dblMark}</td>` +
+        `<td><b>${botBarStr}</b></td>` +
+        `<td>${r.devTop > 0 ? r.devTop.toFixed(0) : '—'}</td>` +
         `<td style="color:${color}">${shearNote}</td>` +
         '</tr>';
     }).join('');
@@ -354,9 +363,9 @@
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">b×h</th>' +
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Mu⁻ top (kN·m)</th>' +
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Mu⁺ bot (kN·m)</th>' +
-      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">As top (mm²)</th>' +
-      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">As bot (mm²)</th>' +
-      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Dbl</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Top Rebar</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Bot Rebar</th>' +
+      '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">ld (mm)</th>' +
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Shear</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table>' +
       '<p style="font-size:11px;opacity:.7;margin:8px 0 0">★ = doubly reinforced · As includes ACI 9.6.1.2 minimum · Shear: Av/s per ACI 22.5</p>' +
