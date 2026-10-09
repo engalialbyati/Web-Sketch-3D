@@ -645,7 +645,7 @@
   function renderFrameSections(app) {
     const d = ensure(app);
     listDialog(app, 'Define Frame Sections', d.frameSections,
-      ['Name', 'Type', 'Design', 'Material', 'Dimensions', 'A (m²) / I33 (m⁴)', 'Rebar'],
+      ['Name', 'Type', 'Design', 'Material', 'Dimensions', 'A (m²) / I33 (m⁴)', 'Rebar', 'Used'],
       s => {
         const p = frameSectionProps(s);
         const dm = s.dims || {};
@@ -659,11 +659,19 @@
           '<td>' + esc(s.designType || 'beam') + '</td>',
           '<td>' + esc(s.material) + '</td>', '<td>' + dim + '</td>',
           '<td>' + (isNaN(p.A) ? 'auto' : p.A.toFixed(3) + ' / ' + p.I33.toExponential(2)) + '</td>',
-          '<td>' + (s.rebar.toBeDesigned ? 'to be designed' : esc(s.rebar.rebarSize)) + '</td>'].join('');
+          '<td>' + (s.rebar.toBeDesigned ? 'to be designed' : esc(s.rebar.rebarSize)) + '</td>',
+          '<td>' + sectionUsage(app, s.name) + '</td>'].join('');
       },
       () => frameSectionEditor(app, d, -1),
       i => frameSectionEditor(app, d, i),
-      i => { d.frameSections.splice(i, 1); renderFrameSections(app); });
+      i => {
+        const used = sectionUsage(app, d.frameSections[i].name);
+        const doDelete = () => { d.frameSections.splice(i, 1); renderFrameSections(app); };
+        if (used > 0) {
+          app.dialog('Section In Use', `<p>${esc(d.frameSections[i].name)} is referenced by <b>${used}</b> drawn element(s). Delete it anyway? Those elements fall back to a new auto section on the next sync.</p>`,
+            [['Cancel', null], ['Delete Anyway', doDelete]]);
+        } else doDelete();
+      });
   }
 
   // ========================================================= AREA SECTIONS ==
@@ -704,11 +712,18 @@
   }
   function renderAreaSections(app) {
     const d = ensure(app);
-    listDialog(app, 'Define Area Sections', d.areaSections, ['Name', 'Type', 'Material', 'Thickness / Ribs'],
+    listDialog(app, 'Define Area Sections', d.areaSections, ['Name', 'Type', 'Material', 'Thickness / Ribs', 'Used'],
       s => '<td style="padding:4px 6px">' + esc(s.name) + '</td><td>' + esc(s.type) + '</td><td>' + esc(s.material) + '</td><td>' +
-        (s.ribs ? `${(s.ribs.spacing * 1000)}mm c/c rib + ${(s.ribs.topping * 1000)}mm top` : (s.thickness * 1000) + ' mm') + '</td>',
+        (s.ribs ? `${(s.ribs.spacing * 1000)}mm c/c rib + ${(s.ribs.topping * 1000)}mm top` : (s.thickness * 1000) + ' mm') + '</td><td>' + sectionUsage(app, s.name) + '</td>',
       () => areaSectionEditor(app, d, -1), i => areaSectionEditor(app, d, i),
-      i => { d.areaSections.splice(i, 1); renderAreaSections(app); });
+      i => {
+        const used = sectionUsage(app, d.areaSections[i].name);
+        const doDelete = () => { d.areaSections.splice(i, 1); renderAreaSections(app); };
+        if (used > 0) {
+          app.dialog('Section In Use', `<p>${esc(d.areaSections[i].name)} is referenced by <b>${used}</b> drawn element(s). Delete it anyway? Those elements fall back to a new auto section on the next sync.</p>`,
+            [['Cancel', null], ['Delete Anyway', doDelete]]);
+        } else doDelete();
+      });
   }
 
   // ============================================== SOLID / CABLE / SPRINGS ===
@@ -1282,12 +1297,155 @@
 
   function open(app, cat) {
     if (cat === 'grids') { app.gridsDialog(); return; }
+    if (cat === 'sync') {
+      const r = syncModelToDefine(app);
+      app.toast(`Model → Define: ${r.linked} element(s) linked, ${r.created} new section(s) created`
+        + (r.missing ? `, ${r.missing} skipped (no dimensions)` : ''));
+      return;
+    }
     const fn = DIALOGS[cat];
     if (fn) ensure(app), fn(app);
+  }
+
+  // ==========================================================================
+  // MODEL ⇄ DEFINE BRIDGE — drawn elements auto-map to Define sections.
+  // Each structural entity carries params.designSection (a reference into
+  // the registries, never a copy), so the design engine can walk
+  // element → section → demands, and a Define edit updates every linked
+  // element at once.
+  // ==========================================================================
+
+  const STRUCTURAL_TYPES = ['wall', 'slab', 'roof', 'beam', 'column'];
+
+  // classifying signature of a drawn element: { registry, designType, dims, base }
+  // dims are MILLIMETRES (display) — sections store metres internally
+  function structuralInfo(ent) {
+    if (!ent || !STRUCTURAL_TYPES.includes(ent.type)) return null;
+    const p = ent.params || {};
+    const mm = v => Math.round((+v || 0) * 1000);
+    if (ent.type === 'beam') {
+      const w = mm(p.webWidth ?? p.width), h = mm(p.height);
+      if (!w || !h) return null;
+      const isT = p.profile === 't' || p.profile === 'T';
+      return { registry: 'frameSections', designType: 'beam',
+        dims: isT ? { h: h / 1000, bf: (mm(p.flangeWidth) || w * 3) / 1000, tf: (mm(p.flangeThickness) || h / 5 / 1000), tw: w / 1000 }
+                  : { b: w / 1000, h: h / 1000 },
+        type: isT ? 'concTee' : 'rect',
+        base: (isT ? 'BT' : 'B') + w + '×' + h, label: (isT ? 'BT' : 'B') + w + '×' + h };
+    }
+    if (ent.type === 'column') {
+      const w = mm(p.width), dep = mm(p.depth || p.width);
+      if (!w || !dep) return null;
+      return { registry: 'frameSections', designType: 'column', dims: { b: dep / 1000, h: w / 1000 },
+        type: 'rect', base: 'C' + w + '×' + dep, label: 'C' + w + '×' + dep };
+    }
+    if (ent.type === 'wall') {
+      const t = mm(p.thickness);
+      if (!t) return null;
+      return { registry: 'areaSections', designType: 'wall', dims: { thickness: t / 1000 },
+        type: 'wall', base: 'W' + t, label: 'W' + t };
+    }
+    // slab / roof → area section, type 'slab' (ETABS models roofs as slabs)
+    const t = mm(p.thickness);
+    if (!t) return null;
+    const roof = ent.type === 'roof';
+    return { registry: 'areaSections', designType: 'slab', dims: { thickness: t / 1000 },
+      type: 'slab', base: (roof ? 'R' : 'S') + t, label: (roof ? 'R' : 'S') + t };
+  }
+
+  // true when a registry entry matches the element's dims + type exactly
+  function sectionMatches(s, info) {
+    if (s.type !== info.type) return false;
+    if (s.autoBase !== info.base) return false;
+    if (info.registry === 'frameSections') {
+      const dd = s.dims || {};
+      const a = frameSectionProps(s), b = frameSectionProps({ type: s.type, dims: info.dims });
+      return Math.abs(dd.h - info.dims.h) < 1e-6 && Math.abs(a.I33 - b.I33) < 1e-9
+        && Math.abs(a.A - b.A) < 1e-9;
+    }
+    return Math.abs((s.thickness || 0) - info.dims.thickness) < 1e-6;
+  }
+
+  function defaultConcrete(d) {
+    return (byName(d.materials, 'CONC25') || d.materials.find(m => m.type === 'concrete') || {}).name || 'CONC25';
+  }
+
+  // find-or-create the auto section for a drawn element; returns the
+  // section name and stamps ent.params.designSection
+  function ensureAutoSection(app, ent) {
+    const info = structuralInfo(ent);
+    if (!info) return null;
+    const d = ensure(app);
+    const list = d[info.registry];
+    // 1) already linked & still valid → keep the user's assignment
+    const linked = ent.params.designSection && byName(list, ent.params.designSection);
+    if (linked && sectionMatches(linked, info)) return linked.name;
+    // 2) an existing auto section with identical geometry → reuse it
+    const existing = list.find(s => s.autoBase && sectionMatches(s, info));
+    if (existing) { ent.params.designSection = existing.name; return existing.name; }
+    // 3) create one with readable dims-based name and ETABS-ish defaults
+    const s = info.registry === 'frameSections'
+      ? { name: uniqueName(list, info.base), type: info.type, designType: info.designType,
+          material: defaultConcrete(d), dims: info.dims,
+          modifiers: { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
+          autoBase: info.base, autoList: [], autoStart: '',
+          rebar: JSON.parse(JSON.stringify(d.frameSections[0].rebar)) }
+      : { name: uniqueName(list, info.base), type: info.type, material: defaultConcrete(d),
+          thickness: info.dims.thickness, ribs: null, autoBase: info.base };
+    list.push(s);
+    ent.params.designSection = s.name;
+    return s.name;
+  }
+
+  // after a parametric edit (resize): if the old section is used ONLY by
+  // this element, update it in place (rename follows the new dims);
+  // otherwise leave the shared section alone and link a matching/new one
+  function relinkAfterEdit(app, ent) {
+    const info = structuralInfo(ent);
+    if (!info) return null;
+    const d = ensure(app);
+    const list = d[info.registry];
+    const old = ent.params.designSection && byName(list, ent.params.designSection);
+    const others = sectionUsage(app, ent.params.designSection, ent.id);
+    if (old && old.autoBase && others === 0) {
+      // sole user — mutate the section and refresh its dims-based name
+      old.autoBase = info.base;
+      if (info.registry === 'frameSections') { old.type = info.type; old.dims = info.dims; }
+      else old.thickness = info.dims.thickness;
+      old.name = uniqueName(list, info.base);
+      ent.params.designSection = old.name;
+      return old.name;
+    }
+    ent.params.designSection = null; // force find-or-create below
+    return ensureAutoSection(app, ent);
+  }
+
+  // how many drawn elements reference a section (excluding optionally one id)
+  function sectionUsage(app, name, excludeId) {
+    if (!name || !app || !app.bim) return 0;
+    return app.bim.entities.filter(e =>
+      e.id !== excludeId && (e.params || {}).designSection === name).length;
+  }
+
+  // backfill: catalogue every drawn structural element into Define
+  function syncModelToDefine(app) {
+    const d = ensure(app);
+    const before = { f: d.frameSections.length, a: d.areaSections.length };
+    let linked = 0, missing = 0;
+    for (const ent of app.bim.entities) {
+      if (!STRUCTURAL_TYPES.includes(ent.type)) continue;
+      const name = ensureAutoSection(app, ent);
+      if (name) linked++; else missing++;
+    }
+    const created = (d.frameSections.length - before.f) + (d.areaSections.length - before.a);
+    return { linked, missing, created };
   }
 
   root.RCDefine = {
     ensure, open, matE, matG, concreteEc, frameSectionProps, defaultState,
     MAT_LABEL, FRAME_LABEL, asceSa, rsValue,
+    // bridge
+    structuralInfo, ensureAutoSection, relinkAfterEdit, sectionUsage,
+    syncModelToDefine, STRUCTURAL_TYPES,
   };
 })(window);

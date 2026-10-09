@@ -362,6 +362,7 @@ const RIBBON_GROUPS = {
 const RIBBON_TABS = {
   // RC Design & Analysis workspace (visible only while app.mode === 'design')
   define: { label: 'Define', groups: [
+    { title: 'Model Sync', tools: ['defsync'] },
     { title: 'Material', tools: ['defmat', 'defrebar'] },
     { title: 'Frame Sections', tools: ['defsec'] },
     { title: 'Area / Solid / Cable', tools: ['defarea', 'defsolid', 'defcable'] },
@@ -443,6 +444,7 @@ const RIBBON_TABS = {
 // RC Design & Analysis ▸ Define ribbon buttons — glyph + short label so the
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
+  defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   defmat: { label: 'Materials', glyph: '🧱', tip: 'Materials — concrete, rebar, steel definitions', cat: 'materials' },
   defrebar: { label: 'Rebar Database', glyph: '⌇', tip: 'Rebar Database — bar sizes (area/diameter)', cat: 'rebar' },
   defsec: { label: 'Frame Sections', glyph: '▭', tip: 'Frame Sections — beam/column sections + rebar overlay', cat: 'frames' },
@@ -891,6 +893,13 @@ class BimEntityManager {
   }
   create(type, params, faceRoles, edgeIds = [], opts = {}) {
     const ent = this._createInner(type, params, faceRoles, edgeIds);
+    // MODEL ⇄ DEFINE BRIDGE: a freshly drawn structural element is catalogued
+    // into the RC Define registries (find-or-create a matching section) and
+    // carries params.designSection — guarded so drawing never breaks if the
+    // design module is absent
+    if (ent && window.RCDefine && !opts.noDefine) {
+      try { RCDefine.ensureAutoSection(window.app, ent); } catch (e) { console.warn('RCDefine bridge:', e); }
+    }
     // joined-wall PRE-REGISTRATION opts in before anything below can run:
     // this create fires app.opDone at its end, whose empty-faces reap would
     // detach the not-yet-extruded entity on the spot (the 90° corner wall
@@ -9627,6 +9636,9 @@ class App {
       else if (ent.params && ent.params.baseLevel === 'none')
         grps.constraints.push({ ro: ['Base Level', `None — free at ${fmtLen(this.levelManager.getElevation('none'))}`] });
       if (p.hostWallId) grps.constraints.push({ ro: ['Host', p.hostWallId] });
+      // MODEL ⇄ DEFINE BRIDGE readout: the linked RC Define section
+      if (window.RCDefine && RCDefine.STRUCTURAL_TYPES.includes(ent.type))
+        grps.structural.push({ ro: ['Design Section', p.designSection || '— (auto on next sync)'] });
       if ((ent.type === 'door' || ent.type === 'window') && p.height != null)
         grps.dimensions.push({ ro: ['Head Height', fmtLen((+p.sillHeight || 0) + (+p.height || 0))] });
       if (ent.type === 'room') {
@@ -9793,6 +9805,12 @@ class App {
           return true;
         });
         if (ok) {
+          // MODEL ⇄ DEFINE BRIDGE: dimensions may have changed — relink the
+          // element to the right RC Define section (in-place if it was the
+          // section's only user, otherwise find-or-create)
+          if (window.RCDefine) {
+            try { RCDefine.relinkAfterEdit(this, ent); } catch (e) { console.warn('RCDefine relink:', e); }
+          }
           this._eiPending = {};
           this.selectElement(ent.id); // keep the selection across the rebuild
           this.updateInfo();
