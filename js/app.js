@@ -8573,10 +8573,11 @@ class App {
       const aid = this.view.pickAssetAt(q);
       if (aid != null) return { face: null, edge: null, edges: [], group: null, asset: aid };
     }
-    // OBJECT MODE (Precise Drawing): whole elements first — one Group raycast,
-    // never the merged mesh or the edge list. The returned face still lets
-    // sub-element callers (Edit In Place entry) work unchanged.
-    if (this.mode === 'bim' && this.view.pickElementAt) {
+    // OBJECT MODE (Precise Drawing + Design & Analysis): whole elements
+    // first — one Group raycast, never the merged mesh or the edge list.
+    // The returned face still lets sub-element callers (Edit In Place
+    // entry) work unchanged.
+    if ((this.mode === 'bim' || this.mode === 'design') && this.view.pickElementAt) {
       const ep = this.view.pickElementAt(q);
       if (ep) return { face: ep.faceId, entity: ep.entityId, group: null };
     }

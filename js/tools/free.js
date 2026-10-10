@@ -54,12 +54,19 @@ function bimGuardEdge(app, edge) {
 class SelectTool extends Tool {
   static id = 'select';
   cleanup() { this._gdrag = null; super.cleanup(); }
+  // Precise Drawing AND Design & Analysis pick whole elements (ETABS-style).
+  // Design keeps sub-element access one modifier away: Ctrl+click = face/edge.
+  get _objectMode() {
+    return (this.app.mode === 'bim' || this.app.mode === 'design') && !this.app._eip;
+  }
   get hint() {
     if (this._awaitLen) return 'Wall length: type the new length + Enter (Esc cancels).';
     if (this._hdrag) return 'Wall: drag the handle — the wall stretches parametrically.';
-    return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.' : (this.app.mode === 'bim'
-      ? `Select: click selects whole ELEMENTS. Drag = window select (elements too). Faces and edges are selectable in Free Drawing — Measure Area still picks faces.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`
-      : `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds. With edges selected: Shift++ extends the run along the chain (through corners), Shift+− steps back.`);
+    if (this._objectMode) return this._bandStart ? 'Drag to window-select (right-to-left = crossing). Shift/Ctrl adds.'
+      : (this.app.mode === 'design'
+        ? 'Select: click selects whole ELEMENTS (ETABS-style) — Assign and Element Data work on the pick. Ctrl+click selects a face/edge (sub-element). Drag = window select (elements).'
+        : `Select: click selects whole ELEMENTS. Drag = window select (elements too). Faces and edges are selectable in Free Drawing — Measure Area still picks faces.${this.app.mode === 'bim' ? ' Grid lines: click (or box-select) to select — amber = selected; drag to move, Del to delete.' : ''}`);
+    return `Select: click an edge or face (faces of BIM elements included). Alt+click a BIM element selects the WHOLE element; double-click edits it in place. Drag = window select. Shift adds. With edges selected: Shift++ extends the run along the chain (through corners), Shift+− steps back.`;
   }
   // ---- Revit shape handles for selected parametric walls -------------------
   // FREE mode is face-first: the handles/badge live at the wall's BASE, and
@@ -211,10 +218,11 @@ class SelectTool extends Tool {
       this._gdrag = { grid: gl.grid, z: gl.z, last: null, moved: false };
       return;
     }
-    // OBJECT MODE (Precise Drawing): a hit on a BIM element selects the WHOLE
-    // element — never its faces/edges (those belong to Edit In Place / Free
-    // Drawing, the app's "edit modes"). Shift toggles it into the selection.
-    if (this.app.mode === 'bim') {
+    // OBJECT MODE (Precise Drawing + Design & Analysis): a hit on a BIM
+    // element selects the WHOLE element — never its faces/edges (those
+    // belong to Edit In Place / Free Drawing, or Ctrl+click in Design).
+    // Shift toggles it into the selection.
+    if (this._objectMode && !ev.ctrlKey) {
       const pe = this.app.pickEntity(ev);
       let eid = pe && pe.entity;
       if (!eid && pe && pe.face != null) {
@@ -442,8 +450,8 @@ class SelectTool extends Tool {
       const crossing = q.x < this._bandStart.x;
       const picked = this._collect(x0, y0, x1, y1, crossing);
       app.bandGroupMerge(picked, crossing, (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
-      if (app.mode === 'bim' && !app._eip) {
-        // PRECISE DRAWING: the window resolves to whole ELEMENTS — stamped
+      if (this._objectMode) {
+        // PRECISE + DESIGN: the window resolves to whole ELEMENTS — stamped
         // faces expand to their element's full face set; unstamped faces
         // and raw edges drop out (sub-geometry lives in Free mode)
         const ids = new Set();
@@ -498,18 +506,21 @@ class SelectTool extends Tool {
         const f = app.model.faces.get(pick.face);
         const ent = f && app.bim.getEntityForFace(f);
         const sub = ev.ctrlKey || app._tabHeld; // sub-element mode: the face itself
-        if (ent && !sub && !app._eip && app.mode === 'bim') {
-          // PRECISE DRAWING: one click on any part = the whole element
+        if (ent && !sub && this._objectMode) {
+          // PRECISE + DESIGN: one click on any part = the whole element
           if (this._mod) app.selectElement(ent.id, 'toggle');
           else {
             app.selectElement(ent.id);
-            app.setStatus(`${ent.type} ${ent.id} selected — faces and edges are selectable in Free Drawing (Measure Area still picks faces)`);
+            app.setStatus(app.mode === 'design'
+              ? `${ent.type} ${ent.id} selected — Ctrl+click selects a face/edge (sub-element)`
+              : `${ent.type} ${ent.id} selected — faces and edges are selectable in Free Drawing (Measure Area still picks faces)`);
           }
-        } else if (app.mode === 'bim' && !app._eip) {
+        } else if (this.app.mode === 'bim' && !app._eip) {
           // PRECISE DRAWING: never a raw face — an unstamped face (or a
           // Ctrl/Tab query) is empty space here. Faces and edges are
           // selectable in FREE mode; Measure Area picks faces through its
           // own tool; Edit In Place keeps sub-element access while open.
+          // DESIGN (Ctrl+click) falls through to the face selection below.
           if (!this._mod) app.clearSelection();
         } else if (ent && ev.altKey && !app._eip) {
           // FREE DRAWING is FACE-first (SketchUp semantics): plain click
@@ -524,8 +535,9 @@ class SelectTool extends Tool {
             app.setStatus(`Face of ${ent.type} ${ent.id} — Alt+click selects the whole element · double-click edits in place`);
         }
       } else if (pick.edges && pick.edges.length) {
-        if (app.mode === 'bim' && !app._eip) {
+        if (this.app.mode === 'bim' && !app._eip) {
           // PRECISE DRAWING: edges are Free-mode targets — never selected here
+          // (DESIGN Ctrl+click falls through and selects the edge)
           if (!this._mod) app.clearSelection();
         } else if (this._mod) app.toggleEntities({ edges: new Set(pick.edges), faces: new Set() });
         else { app.sel = { edges: new Set(pick.edges), faces: new Set() }; app.onSelectionChanged(); }
