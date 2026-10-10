@@ -305,15 +305,18 @@
       const stationForces = [wf.base, wf.top].filter(Boolean).map((st, si) => {
         const Pu = Math.abs(st.P);   // N — compression positive
         const Mx = Math.abs(st.M);   // N·mm — in-plane moment
+        // the curve is closed: a given M matches a tension leg and a
+        // compression leg — take the capacity on the demand's side
         let dcr = 0, Pcap = 0;
         for (let i = 0; i < pm.length - 1; i++) {
           if (Mx >= Math.min(pm[i].M, pm[i+1].M) && Mx <= Math.max(pm[i].M, pm[i+1].M)) {
             const t = Math.abs(pm[i+1].M - pm[i].M) > 1e-9 ? (Mx - pm[i].M) / (pm[i+1].M - pm[i].M) : 0;
-            Pcap = pm[i].P + t * (pm[i+1].P - pm[i].P);
-            dcr = Math.abs(Pu) / Math.abs(Pcap) || 0;
-            break;
+            const P = pm[i].P + t * (pm[i+1].P - pm[i].P);
+            if (!isFinite(P)) continue;
+            Pcap = Pcap === 0 ? P : Math.max(Pcap, P);
           }
         }
+        if (Pcap > 1) dcr = Pu / Pcap;
         return { station: si === 0 ? 'bottom' : 'top',
           Pu, Mx, Vu: Math.abs(st.V), dcr, Pcap };
       });

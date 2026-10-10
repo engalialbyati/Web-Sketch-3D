@@ -151,8 +151,24 @@
       // Mx·cos alone zeroed the 90° curve and broke the weak-axis check.
       const mComp = Math.abs(cos) >= Math.abs(sin) ? cos : sin;
 
-      raw.push({ P: Pcap, M: Math.abs(Mx * mComp), phi, et });
+      // design curves carry φPn–φMn (the φ per strain, ACI 21.2); expected-
+      // strength curves stay nominal with the overstrength fy
+      const phiF = capTypeDesign ? phi : 1;
+      raw.push({ P: Pcap * phiF, M: Math.abs(Mx * mComp) * phiF, phi, et });
     }
+
+    // pure-compression anchor at M = 0 — the sweep approaches but never
+    // reaches M = 0, and without this point small-moment demands fall in
+    // a bracket gap and read as 'outside curve'
+    const P0 = alphaConc * fc * (Ag - Ast) + Ast * fy;
+    raw.push({ P: 0.80 * P0 * (capTypeDesign ? 0.65 : 1), M: 0,
+      phi: phiFromStrain(0, esy), et: 0 });
+
+    // the sweep runs tension → compression; the ETABS-style repairs below
+    // assume compression-first ordering (P monotonically DECREASING from
+    // the pure-compression end) — reverse so the clamp enforces the real
+    // envelope instead of collapsing the curve onto the tension capacity
+    raw.reverse();
 
     // non-monotonic P repair (ETABS cPMSurfaceGenerator.cs:843-886):
     // replace points that break P-monotonicity with linear interpolation
@@ -173,17 +189,25 @@
   }
 
   // ===================================================== capacity ratio
+  // The interaction curve is closed: a given Mu matches many brackets, one
+  // per leg. Pick the capacity on the SAME side as the demand — compression
+  // Pu takes the largest compression capacity, tension Pu the smallest P.
   function capacityRatio(Pu, Mu, pmCurve) {
+    let best = null;
     for (let i = 0; i < pmCurve.length - 1; i++) {
       const p1 = pmCurve[i], p2 = pmCurve[i + 1];
       if ((Mu >= Math.min(p1.M, p2.M)) && (Mu <= Math.max(p1.M, p2.M))) {
         const t = Math.abs(p2.M - p1.M) > 1e-9 ? (Mu - p1.M) / (p2.M - p1.M) : 0;
         const Pcap = p1.P + t * (p2.P - p1.P);
-        if (Math.abs(Pcap) < 1) return { dcr: 99, Pcap: 0, status: 'ZERO CAPACITY' };
-        return { dcr: Math.abs(Pu) / Math.abs(Pcap), Pcap, status: 'ok' };
+        if (!isFinite(Pcap)) continue;
+        if (best == null) best = Pcap;
+        else if (Pu >= 0) best = Math.max(best, Pcap); // compression demand
+        else best = Math.min(best, Pcap);              // tension demand
       }
     }
-    return { dcr: 99, Pcap: 0, status: 'Mu exceeds interaction curve' };
+    if (best == null) return { dcr: 99, Pcap: 0, status: 'Mu exceeds interaction curve' };
+    if (Math.abs(best) < 1 || (Pu >= 0 && best <= 0)) return { dcr: 99, Pcap: best, status: 'ZERO CAPACITY' };
+    return { dcr: Math.abs(Pu) / Math.abs(best), Pcap: best, status: 'ok' };
   }
 
   // ============================================================ design all

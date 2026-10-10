@@ -406,7 +406,7 @@ const RIBBON_TABS = {
     { title: 'Slab Design', tools: ['dsbslab'] },
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
-    { title: 'Optimize', tools: ['dsopt'] },
+    { title: 'Optimize', tools: ['dsopt', 'dsinfo'] },
     { title: 'Report', tools: ['dsreport'] },
     { title: '3D View', tools: ['dsviz'] },
   ] },
@@ -500,6 +500,7 @@ const DEFINE_BUTTONS = {
   dsfoot: { label: 'Foundation', glyph: '⬛⊥', tip: 'Isolated footing design: bearing, one/two-way shear, flexure, development', cat: 'footingDesign' },
   defstoryrep: { label: 'Replicate Story', glyph: '⧉', tip: 'Clone the beams/columns/floors of one story onto selected levels (ETABS Similar Stories)', cat: 'storyReplicate' },
   dsopt: { label: 'Auto-Size', glyph: '⤢', tip: 'Iterate frame section sizes until every DCR meets the target — re-analyzes each round', cat: 'designOptimize' },
+  dsinfo: { label: 'Element Data', glyph: 'ⓘ', tip: 'Applied loads, analysis forces and design summary for the selected element (ETABS right-click data)', cat: 'elementInfo' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
@@ -5285,7 +5286,8 @@ class App {
             defBtn.tip, 'tbtn-def', '{}', () => {
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
-              const mod = isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
+              const isRCInfo = defBtn.cat === 'elementInfo';
+              const mod = isRCInfo ? window.RCInfo : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
               if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
             });
           continue;
@@ -6754,6 +6756,10 @@ class App {
       if (pent && !this._eip) {
         items.push([`Select All Instances — ${pent.type}${pent.params && pent.params.name ? ' "' + pent.params.name + '"' : ''}`, () => this.selectAllInstances(pent)]);
         items.push([`Create Similar — ${pent.type}`, () => this.createSimilar(pent)]);
+      }
+      // ETABS-style element data: applied loads + analysis + design on pick
+      if (pent && window.RCInfo && ['beam', 'column', 'wall', 'slab', 'roof'].includes(pent.type)) {
+        items.push(['RC Element Data — loads · analysis · design', () => RCInfo.openForEntity(this, pent.id)]);
       }
       // the whole body from one click: swept/extruded solids grabbed as one
       // (same as triple-clicking) — ready to group or convert to an element
