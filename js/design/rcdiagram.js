@@ -53,7 +53,7 @@
       const firstPat = R.patterns[0];
       for (let mi = 0; mi < firstPat.members.length; mi++) {
         const m0 = firstPat.members[mi];
-        if (!m0.stations) continue;
+        if (!m0 || !m0.stations) continue;
         const combined = m0.stations.map((st, si) => {
           let M = 0, V = 0;
           for (let p = 0; p < R.patterns.length; p++) {
@@ -100,18 +100,19 @@
       for (const st of m.stations)
         maxVal = Math.max(maxVal, Math.abs(mode === 'M3' ? st.M : st.V));
     if (maxVal < 1e-9) return;
-    const scaleLen = 500; // mm max perpendicular offset (adjust to model scale)
+    const scaleLen = 0.7; // meters of maximum perpendicular offset (scene is in meters)
 
     for (const md of stationData) {
       const ent = app.bim.getEntityById(md.id);
       if (!ent) continue;
       const ends = beamEnds(ent);
       if (!ends) continue;
-      const ax = mm(ends.a[0]), ay = mm(ends.a[1]), az = mm(ends.a[2]);
-      const bx = mm(ends.b[0]), by = mm(ends.b[1]), bz = mm(ends.b[2]);
+      // scene coordinates are METERS (same as the model geometry)
+      const ax = ends.a[0], ay = ends.a[1], az = ends.a[2];
+      const bx = ends.b[0], by = ends.b[1], bz = ends.b[2];
       // beam direction vector
       const dx = bx - ax, dy = by - ay, dz = bz - az;
-      const len = Math.hypot(dx, dy, dz) || 1;
+      const len = Math.hypot(dx, dy, dz) || 1; // meters
       const ux = dx / len, uy = dy / len, uz = dz / len;
       // perpendicular direction for the diagram (use global Z for horizontal beams)
       // for vertical members use global X
@@ -119,13 +120,13 @@
       if (Math.abs(uz) > 0.9) { px = 1; py = 0; pz = 0; } // vertical member → perpendicular in XY
       else { px = 0; py = 0; pz = 1; }                     // horizontal → perpendicular in Z
 
-      // draw the diagram as line segments
+      // draw the diagram as line segments (st.x is meters along the member)
       const pts = [];
       const stations = md.stations;
       const nSt = stations.length;
       for (let si = 0; si < nSt; si++) {
         const st = stations[si];
-        const t = st.x / (len || 1); // station position as fraction of length
+        const t = st.x / len; // station position as fraction of length
         const cx = ax + dx * t, cy = ay + dy * t, cz = az + dz * t;
         const val = mode === 'M3' ? st.M : st.V;
         const offset = (val / maxVal) * scaleLen;
@@ -142,13 +143,15 @@
       // diagram curve
       const curveGeo = new THREE.BufferGeometry().setFromPoints(pts.map(p => new THREE.Vector3(...p)));
       const curveMat = new THREE.LineBasicMaterial({ color: mode === 'M3' ? 0xff4444 : 0x2266ff });
-      diagramGroup.add(new THREE.Line(curveGeo, curveMat));
+      const curve = new THREE.Line(curveGeo, curveMat);
+      curve.renderOrder = 5;
+      diagramGroup.add(curve);
 
       // perpendicular fill lines from beam axis to diagram curve
       const fillGeo = [];
       for (let si = 0; si < nSt; si++) {
         const st = stations[si];
-        const t = st.x / (len || 1);
+        const t = st.x / len;
         const cx = ax + dx * t, cy = ay + dy * t, cz = az + dz * t;
         const val = mode === 'M3' ? st.M : st.V;
         const offset = (val / maxVal) * scaleLen;
@@ -164,10 +167,8 @@
 
     view.scene.add(diagramGroup);
     view.invalidate();
-    app.setStatus(`Showing ${mode === 'M3' ? 'Moment M3' : 'Shear V3'} diagrams — combo: ${comboName}`);
+    app.setStatus(`Showing ${mode === 'M3' ? 'Moment M3' : 'Shear V3'} diagrams — case: ${comboName}`);
   }
-
-  function mm(v) { return v * 1000; } // model meters → THREE mm-ish scale
 
   function hideDiagrams(app) {
     if (diagramGroup && app.view && app.view.scene) {
@@ -294,21 +295,29 @@
     ctx.fillText(`${xMax.toFixed(0)} mm`, padL + plotW - 30, H - 5);
   }
 
+  // pick the display case: first combination when any exist, else first pattern
+  function defaultCase(app) {
+    const R = app.rcResults;
+    if (!R) return null;
+    if (R.combos.length) return R.combos[0].name;
+    if (R.patterns.length) return R.patterns[0].name;
+    return null;
+  }
+
   // ============================================================ public API
   function open(app, cat) {
     if (cat === 'showDiagrams') {
       // cycle through modes: off → M3 → V3 → off
       const modes = [null, 'M3', 'V3'];
       const next = modes[(modes.indexOf(currentMode) + 1) % modes.length];
-      const comboName = app.rcResults && app.rcResults.patterns.length
-        ? app.rcResults.patterns[0].name : null;
+      const comboName = defaultCase(app);
+      if (!comboName) { app.toast('Run the analysis first', true); return; }
       if (next) showDiagrams(app, next, comboName);
       else hideDiagrams(app);
       return;
     }
     if (cat === 'showForceDialog') {
-      const comboName = app.rcResults && app.rcResults.patterns.length
-        ? app.rcResults.patterns[0].name : null;
+      const comboName = defaultCase(app);
       if (!comboName) { app.toast('Run the analysis first', true); return; }
       showForceDialog(app, comboName);
       return;
