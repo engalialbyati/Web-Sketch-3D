@@ -217,6 +217,141 @@
     return { results, comboName };
   }
 
+  // ==================================================== strip force integration
+  // ETABS design strip method: identify shell elements within the strip
+  // tributary width, sum their forces at stations along the strip, divide
+  // by strip width → averaged M per unit width for reinforcement design.
+  function integrateStripForces(app, model, stripName, forces) {
+    const d = root.RCDefine.ensure(app);
+    const strip = d.designStrips.find(s => s.name === stripName);
+    if (!strip) return null;
+    const width = strip.width * 1000; // mm
+    const dir = strip.direction; // 'X' or 'Y'
+
+    // find slab entities with this strip assigned
+    const slabEnts = app.bim.entities.filter(e =>
+      (e.type === 'slab' || e.type === 'roof') &&
+      (e.params.stripLabels || []).includes(stripName));
+    if (!slabEnts.length) return null;
+
+    // collect shell elements belonging to these slabs
+    const shellEntIds = new Set(slabEnts.map(e => e.id));
+    const stripShells = [];
+    for (const sh of model.shells || []) {
+      if (sh.entId && shellEntIds.has(sh.entId)) stripShells.push(sh);
+    }
+    if (!stripShells.length) return null;
+
+    // determine strip direction axis
+    // 'X' strips run along X → integrate forces across Y
+    // 'Y' strips run along Y → integrate forces across X
+    const alongAxis = dir === 'X' ? 'x' : 'y';
+    const acrossAxis = dir === 'X' ? 'y' : 'x';
+
+    // sort shells by their position along the strip
+    const withPos = stripShells.map(sh => {
+      const p1 = model.nodes[sh.n1], p2 = model.nodes[sh.n3];
+      const cx = (p1.x + p2.x) / 2, cy = (p1.y + p2.y) / 2;
+      const cz = (p1.z + p2.z) / 2;
+      return { sh, pos: alongAxis === 'x' ? cx : cy, across: acrossAxis === 'x' ? cx : cy };
+    }).sort((a, b) => a.pos - b.pos);
+
+    // group into stations (unique positions along the strip)
+    const posValues = [...new Set(withPos.map(x => +x.pos.toFixed(3)))].sort((a, b) => a - b);
+    const stations = posValues.map(pos => {
+      const shellsAtPos = withPos.filter(x => Math.abs(x.pos - pos) < 1);
+      let M11Sum = 0, M22Sum = 0;
+      for (const s of shellsAtPos) {
+        const sf = forces.find(f => f.n1 === s.sh.n1 && f.n2 === s.sh.n2);
+        if (sf && sf.forces) {
+          M11Sum += sf.forces.M11 || 0;
+          M22Sum += sf.forces.M22 || 0;
+        }
+      }
+      // divide by strip width → moment per unit width
+      const stripWidthM = width / 1000; // mm → m
+      return {
+        pos, M11: M11Sum / stripWidthM, M22: M22Sum / stripWidthM,
+        nShells: shellsAtPos.length,
+      };
+    });
+
+    return { strip, stations, width };
+  }
+
+  // ==================================================== per-strip reinforcement
+  // Design reinforcement at each strip station (top at supports, bottom at midspan)
+  function designStripReinforcement(stripData, thickness, cover, barDia, fc, fy, rebarDb) {
+    const d = thickness - cover - barDia / 2;
+    const stations = stripData.stations;
+    const results = [];
+
+    // envelope: find max positive and negative M22 (gravity bending)
+    let maxMPos = 0, maxMNeg = 0;
+    for (const st of stations) {
+      if (st.M22 > maxMPos) maxMPos = st.M22;
+      if (st.M22 < maxMNeg) maxMNeg = st.M22;
+    }
+
+    // design bottom (positive) and top (negative)
+    const botDesign = designSlabFlexure(Math.abs(maxMPos), thickness, cover, barDia, fc, fy);
+    const topDesign = designSlabFlexure(Math.abs(maxMNeg), thickness, cover, barDia, fc, fy);
+
+    // select bars
+    const botBars = selectSlabBars(rebarDb, botDesign.As, 1000, Math.min(3 * thickness, 450));
+    const topBars = selectSlabBars(rebarDb, topDesign.As, 1000, Math.min(3 * thickness, 450));
+
+    return {
+      maxMPos: maxMPos / 1e6, maxMNeg: maxMNeg / 1e6, // kN·m/m
+      botDesign, topDesign, botBars, topBars,
+      stations,
+    };
+  }
+
+  // ==================================================== punching shear at drop panel
+  // Critical perimeter at d/2 OUTSIDE the drop panel (not the column face).
+  // Uses drop panel total thickness for effective depth d.
+  function checkPunchingAtDropPanel(Pu, Mux, dpLen, dpWid, dpTotalT, slabT, cover, barDia, fc, bCol, hCol) {
+    const d = dpTotalT - cover - barDia / 2; // effective depth from drop panel
+    const phi = 0.75;
+
+    // critical perimeter at d/2 outside the DROP PANEL face (not column face)
+    const c1 = dpLen, c2 = dpWid;
+    const b1 = c1 + d, b2 = c2 + d;
+    const bo = 2 * (b1 + b2); // interior column/drop panel
+
+    // Ac for interior
+    const Ac = 2 * (b1 + b2) * d;
+
+    // Jc
+    const Jc = (b1 * b1 * d * (b1 + 4 * b2) + d * d * d * (b1 + b2)) / (6 * b1);
+
+    // γv
+    const gammaV = 1 - 1 / (1 + 0.677 * Math.sqrt(Math.max(b2 / b1, 0.1)));
+
+    // stresses
+    const v0 = Pu / Ac;
+    const vmax = v0 + gammaV * Math.abs(Mux) / Jc;
+    const vu = Math.max(Math.abs(vmax), Math.abs(vmin || 0));
+
+    // capacity: min of three ACI equations
+    const sqrtFc = Math.sqrt(fc);
+    const beta = Math.max(c1, c2) / Math.min(c1, c2);
+    const Vc1 = (2 + 4 / beta) * sqrtFc * bo * d;
+    const Vc2 = (40 * d / bo + 2) * sqrtFc * bo * d;
+    const Vc3 = 4 * sqrtFc * bo * d;
+    const Vc = Math.min(Vc1, Vc2, Vc3);
+    const phiVc = phi * Vc;
+
+    return {
+      ok: Vu <= phiVc, phi, d: Math.round(d),
+      bo: Math.round(bo), Ac: Math.round(Ac),
+      gammaV: +gammaV.toFixed(3),
+      dcr: +(Vu / phiVc).toFixed(3),
+      note: 'Critical perimeter at drop panel edge, not column face',
+    };
+  }
+
   // ============================================================ design dialog
   function open(app, cat) {
     if (cat !== 'slabDesign') return;

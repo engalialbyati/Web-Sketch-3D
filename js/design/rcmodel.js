@@ -166,6 +166,34 @@
       } else {
         const zLvl = ent.params.baseLevel ? (app.levelManager.levels.find(l => l.id === ent.params.baseLevel)?.elevation ?? 0) : 0;
         const regions = ent.params.regions || [];
+
+        // collect drop panel regions from this slab's stripLabels or standalone DP entities
+        const dropPanels = [];
+        for (const dpEnt of app.bim.entities) {
+          if (dpEnt.type !== 'slab') continue;
+          if (!dpEnt.params.designSection) continue;
+          const dpSec = d.areaSections.find(a => a.name === dpEnt.params.designSection);
+          if (!dpSec || dpSec.type !== 'droppanel') continue;
+          // drop panel entity stores its plan center + dims
+          const dpBase = dpEnt.params.base || [0, 0, zLvl];
+          dropPanels.push({
+            x: dpBase[0], y: dpBase[1], z: zLvl,
+            planL: (dpSec.dpDims ? dpSec.dpDims.planL : 2) / 1,
+            planW: (dpSec.dpDims ? dpSec.dpDims.planW : 2),
+            totalT: (dpSec.dpDims ? dpSec.dpDims.totalT : 0.35) * 1000,
+          });
+        }
+        // also check for standalone DP1-type areaSections assigned via designSection
+        const dpSections = d.areaSections.filter(a => a.type === 'droppanel');
+        for (const dps of dpSections) {
+          if (!dps.dpDims) continue;
+          dropPanels.push({
+            x: 0, y: 0, z: zLvl,
+            planL: dps.dpDims.planL || 2,
+            planW: dps.dpDims.planW || 2,
+            totalT: dps.dpDims.totalT * 1000 || 350,
+          });
+        }
         for (const reg of regions) {
           const outer = reg.outer || [];
           if (outer.length < 3) continue;
@@ -196,7 +224,15 @@
             for (let j2 = 0; j2 < ny; j2++) {
               const a = grid[i2][j2], b2 = grid[i2 + 1][j2], c2 = grid[i2 + 1][j2 + 1], dd = grid[i2][j2 + 1];
               if (a == null || b2 == null || c2 == null || dd == null) continue;
-              shellEls.push({ n1: a, n2: b2, n3: c2, n4: dd, E: Ec, nu, t, rho, entId: ent.id });
+              // drop panel thickness override: check if cell center is inside a drop panel
+              let cellT = t;
+              const cellCx = (a.x + c2.x) / 2, cellCy = (a.y + c2.y) / 2;
+              for (const dp of dropPanels) {
+                const inDP = Math.abs(cellCx - dp.x) <= dp.planL / 2 && Math.abs(cellCy - dp.y) <= dp.planW / 2;
+                if (inDP) { cellT = dp.totalT; break; }
+              }
+              shellEls.push({ n1: a, n2: b2, n3: c2, n4: dd, E: Ec, nu, t: cellT, rho,
+                entId: ent.id, dp: cellT > t });
             }
         }
       }

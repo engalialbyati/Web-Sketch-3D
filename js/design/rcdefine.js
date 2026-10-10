@@ -116,6 +116,8 @@
       areaSections: [
         { name: 'SLAB1', type: 'slab', material: 'CONC25', thickness: 0.2, ribs: null },
         { name: 'WALL1', type: 'wall', material: 'CONC25', thickness: 0.2, ribs: null },
+        { name: 'DP1', type: 'droppanel', material: 'CONC25', thickness: 0.35,
+          dpDims: { planL: 2.0, planW: 2.0, totalT: 0.35, slabT: 0.2 }, ribs: null },
       ],
       solidSections: [{ name: 'SOLID1', material: 'CONC25' }],
       cableSections: [{ name: 'CABLE1', material: 'STEEL_A992', area: 1e-3 }],
@@ -711,7 +713,7 @@
     s.ribs = s.ribs || { spacing: 0.9, ribWidth: 0.15, ribDepth: 0.35, topping: 0.06 };
     const html = [
       row('Name', inp('a-name', s.name)),
-      row('Type', sel('a-type', ['slab', 'deck', 'wall', 'plate', 'ribbedslab', 'waffleslab'], s.type)),
+      row('Type', sel('a-type', ['slab', 'deck', 'wall', 'plate', 'ribbedslab', 'waffleslab', 'droppanel'], s.type)),
       row('Material', sel('a-mat', concMats, s.material)),
       row('Thickness (m)', inp('a-t', s.thickness, 'number', 'any')),
       isRib ? secTitle('Rib Data') +
@@ -719,6 +721,13 @@
         row('Rib width (m)', inp('a-rw', s.ribs.ribWidth, 'number', 'any')) +
         row('Rib depth (m)', inp('a-rd', s.ribs.ribDepth, 'number', 'any')) +
         row('Topping thickness (m)', inp('a-rt', s.ribs.topping, 'number', 'any')) : '',
+      s.type === 'droppanel' ? secTitle('Drop Panel Dimensions') +
+        row('Plan length (m)', inp('a-dpl', (s.dpDims && s.dpDims.planL) || 2.0, 'number', 'any')) +
+        row('Plan width (m)', inp('a-dpw', (s.dpDims && s.dpDims.planW) || 2.0, 'number', 'any')) +
+        row('Total thickness (m)', inp('a-dpt', (s.dpDims && s.dpDims.totalT) || 0.35, 'number', 'any')) +
+        '<p style="font-size:11px;opacity:.7;margin:4px 0 0">Drop panel thickness = slab thickness + drop depth. Total thickness is used for effective depth d and punching shear.</p>' : '',
+      s.type === 'droppanel' ? secTitle('Slab Below Drop Panel') +
+        row('Slab thickness (m)', inp('a-dps', (s.dpDims && s.dpDims.slabT) || 0.2, 'number', 'any')) : '',
     ].join('');
     app.dialog((isNew ? 'Add ' : 'Edit ') + 'Area Section', html, [
       ['OK', () => {
@@ -729,6 +738,13 @@
         s.thickness = num('a-t', s.thickness);
         if (s.type === 'ribbedslab' || s.type === 'waffleslab') {
           s.ribs = { spacing: num('a-rs', 0.9), ribWidth: num('a-rw', 0.15), ribDepth: num('a-rd', 0.35), topping: num('a-rt', 0.06) };
+        }
+        if (s.type === 'droppanel') {
+          s.dpDims = {
+            planL: num('a-dpl', 2.0), planW: num('a-dpw', 2.0),
+            totalT: num('a-dpt', 0.35), slabT: num('a-dps', 0.2)
+          };
+          s.thickness = s.dpDims.totalT;
         }
         if (isNew) d.areaSections.push(s); else d.areaSections[idx] = s;
         renderAreaSections(app);
