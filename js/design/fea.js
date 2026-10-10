@@ -1284,7 +1284,10 @@
       const Db = [[d0*t3/12, d0*sh.nu*t3/12, 0], [d0*sh.nu*t3/12, d0*t3/12, 0], [0, 0, d0*(1-sh.nu)*t3/24]];
       const Dm = [[d0, d0*sh.nu, 0], [d0*sh.nu, d0, 0], [0, 0, d0*(1-sh.nu)/2]];
       const dnC = dNs(0, 0);
+      // center shape values (SRI 1-point, same as the stiffness's shear part)
+      const nC = shape(0, 0).N;
       let kxx = 0, kyy = 0, kxy = 0, nxx = 0, nyy = 0, nxy = 0;
+      let gamX = 0, gamY = 0;
       for (let n = 0; n < 4; n++) {
         const o = n * 5;
         kxx += -dnC[0][n] * uLoc[o + 4];
@@ -1293,6 +1296,10 @@
         nxx += +dnC[0][n] * uLoc[o];
         nyy += +dnC[1][n] * uLoc[o + 1];
         nxy += +dnC[1][n] * uLoc[o] + dnC[0][n] * uLoc[o + 1];
+        // transverse shear strains — identical interpolation to the
+        // stiffness's Bs (γx = Σ dN/dx·w − Σ N·θy, γy = Σ dN/dy·w + Σ N·θx)
+        gamX += dnC[0][n] * uLoc[o + 2] - nC[n] * uLoc[o + 4];
+        gamY += dnC[1][n] * uLoc[o + 2] + nC[n] * uLoc[o + 3];
       }
       const M11 = Db[0][0] * kxx + Db[0][1] * kyy;
       const M22 = Db[1][1] * kyy + Db[1][0] * kxx;
@@ -1300,8 +1307,11 @@
       const N11 = Dm[0][0] * nxx + Dm[0][1] * nyy;
       const N22 = Dm[1][1] * nyy + Dm[1][0] * nxx;
       const N12 = Dm[2][2] * nxy;
+      const Gc = sh.E / (2 * (1 + sh.nu));
+      const Q11 = Gc * sh.t * 5 / 6 * gamX; // N/mm
+      const Q22 = Gc * sh.t * 5 / 6 * gamY;
       return { n1: sh.n1, n2: sh.n2, n3: sh.n3, n4: sh.n4, entId: sh.entId,
-        forces: { M11, M22, M12, N11, N22, N12 } };
+        forces: { M11, M22, M12, Q11, Q22, N11, N22, N12 } };
     });
   }
 

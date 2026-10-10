@@ -535,7 +535,7 @@
           return mix(type, vals);
         };
         const f = {};
-        for (const k of ['M11', 'M22', 'M12', 'N11', 'N22', 'N12']) f[k] = pick(k);
+        for (const k of ['M11', 'M22', 'M12', 'Q11', 'Q22', 'N11', 'N22', 'N12']) f[k] = pick(k);
         return { n1: s0.n1, n2: s0.n2, n3: s0.n3, n4: s0.n4, entId: s0.entId, forces: f };
       });
       // reactions combine linearly like forces — wall base resultants read them
@@ -878,6 +878,33 @@
     }
   }
 
+  // superposed displacement field for a case (mm) — shared by story results
+  // and the SBE drift check
+  function caseU(app, caseName) {
+    const R = app.rcResults;
+    if (!R || !R.patterns.length) return null;
+    const w = new Array(R.patterns.length).fill(0);
+    const cb = R.combos.find(c => c.name === caseName);
+    if (cb) {
+      for (const item of cb.cases) {
+        const pi = R.patterns.findIndex(p => p.name === item.name);
+        if (pi >= 0) w[pi] += item.scale || 1;
+      }
+    } else {
+      const pi = R.patterns.findIndex(p => p.name === caseName);
+      if (pi < 0) return null;
+      w[pi] = 1;
+    }
+    if (!w.some(v => v)) return null;
+    const U = new Float64Array(R.nDof);
+    for (let p = 0; p < R.patterns.length; p++) {
+      if (!w[p] || !R.patterns[p].U) continue;
+      const Up = R.patterns[p].U;
+      for (let i = 0; i < R.nDof; i++) U[i] += w[p] * Up[i];
+    }
+    return U;
+  }
+
   // ==========================================================================
   // STORY RESULTS — per-story inter-story drift and story shear (ASCE 7
   // §12.8 / Table 12.12-1 workflow). Drift from the superposed displacement
@@ -891,29 +918,20 @@
     const model = R.model;
     if (!model || !model.nodes || !model.nodes.length) return { error: 'No model — re-run the analysis.' };
 
-    // superposition weights for the selected combination/pattern
-    let w = null;
-    const cb = R.combos.find(c => c.name === caseName);
+    // superposed displacement field (mm) + case weights for force superposition
+    const U = caseU(app, caseName);
+    if (!U) return { error: `Case "${caseName}" not found or has no load components.` };
+    const R2 = app.rcResults;
+    const cb = R2.combos.find(c => c.name === caseName);
+    const w = new Array(R2.patterns.length).fill(0);
     if (cb) {
-      w = new Array(R.patterns.length).fill(0);
       for (const item of cb.cases) {
-        const pi = R.patterns.findIndex(p => p.name === item.name);
+        const pi = R2.patterns.findIndex(p => p.name === item.name);
         if (pi >= 0) w[pi] += item.scale || 1;
       }
     } else {
-      const pi = R.patterns.findIndex(p => p.name === caseName);
-      if (pi < 0) return { error: `Case "${caseName}" not found.` };
-      w = new Array(R.patterns.length).fill(0);
-      w[pi] = 1;
-    }
-    if (!w.some(v => v)) return { error: 'The selected case has no load components.' };
-
-    // superposed displacement field (m): U[i] = Σ wp · Up[i]
-    const U = new Float64Array(R.nDof);
-    for (let p = 0; p < R.patterns.length; p++) {
-      if (!w[p] || !R.patterns[p].U) continue;
-      const Up = R.patterns[p].U;
-      for (let i = 0; i < R.nDof; i++) U[i] += w[p] * Up[i];
+      const pi = R2.patterns.findIndex(p => p.name === caseName);
+      if (pi >= 0) w[pi] = 1;
     }
     const nodes = model.nodes;
     // story levels: column base + top elevations (mesh nodes of walls/slabs
@@ -1178,7 +1196,7 @@
     const tgtChecks = lvs.slice(1).map(l =>
       `<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0"><input type="checkbox" class="rp-tgt" value="${l.elevation}"> ${l.name || l.id} (${(+l.elevation).toFixed(2)} m)</label>`).join('');
     const html = [
-      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Clone the beams, columns and floors of the source story onto the selected target levels (ETABS Similar Stories). Sections and loads are shared; walls are not included yet.</p>',
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Clone the beams, columns, walls and floors of the source story onto the selected target levels (ETABS Similar Stories). Sections and loads are shared; each clone rebuilds its geometry through the element\'s own edit path.</p>',
       `<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Source story</span><select id="rp-src" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${srcOpts}</select></div>`,
       '<div style="margin:6px 0 2px;font-size:12px;opacity:.75">Target levels</div>' + tgtChecks,
       '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0 0"><input type="checkbox" id="rp-sel"> Selection only (otherwise the whole story)</label>',
@@ -1335,6 +1353,6 @@
     return { maxU: Array.from(maxU), nSteps, dt };
   }
   root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, forceTable, open, openAssign,
-    responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign };
+    responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign, caseU };
 })(window);
 

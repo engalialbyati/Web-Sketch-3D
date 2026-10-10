@@ -182,10 +182,16 @@
       const botBarsD2 = selectSlabBars(rebarDb, botDir2.As, 1000, sMax);
       const topBarsD2 = selectSlabBars(rebarDb, topDir2.As, 1000, sMax);
 
-      // one-way shear: transverse (Q) resultants are not recovered by the
-      // current shell force pass — reported as not evaluated rather than
-      // from an unrelated in-plane membrane force
-      const owShear = null;
+      // one-way shear (ACI 22.5): the widest transverse shear resultant among
+      // the slab's cells, per meter width — Q11/Q22 come from the Mindlin
+      // shear strains, the same interpolation the element stiffness uses
+      const maxQ = forces.reduce((m, f) => Math.max(m, Math.abs(f.Q11 || 0), Math.abs(f.Q22 || 0)), 0);
+      const Vu = maxQ * 1000; // N/mm → N per meter width
+      const phiVc = 0.75 * 0.17 * Math.sqrt(fc) * 1000 * dEff; // N per meter
+      const owShear = maxQ > 0 ? {
+        ok: Vu <= phiVc,
+        Vu, Vc: phiVc, dcr: +(Vu / phiVc).toFixed(2),
+      } : null;
 
       results.push({
         id: ent.id, type: ent.type, thickness,
@@ -398,7 +404,7 @@
       '<th style="padding:3px 5px;border-bottom:1px solid #d7dde3">D2 Top</th>' +
       '<th style="padding:3px 5px;border-bottom:1px solid #d7dde3">O.W. Shear</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table>' +
-      '<p style="font-size:11px;opacity:.7;margin:8px 0 0">D1/D2 = reinforcement directions from shell M11/M22 · Min ρ = 0.0018 · Max s = min(3h, 450mm)</p>' +
+      '<p style="font-size:11px;opacity:.7;margin:8px 0 0">D1/D2 = reinforcement directions from shell M11/M22 · Min ρ = 0.0018 · Max s = min(3h, 450mm) · O.W. shear = peak cell Q vs φVc per meter (conservative — strip averaging pending)</p>' +
       '</div>';
     app.dialog('RC Slab Design Results — ' + comboName, html, [['Close', null]]);
   }

@@ -110,15 +110,14 @@
   // ======================================================== WALL SBE
   // ACI 318-19 §18.10.6: special boundary elements at wall ends when
   //  (a) 18.10.6.2 — extreme-fibre stress > 0.15·f'c under service load, or
-  //  (b) 18.10.6.3 — the neutral-axis depth required at the design
-  //      displacement exceeds the section's strain-limited c.
-  // Method (b) follows the displacement-based derivation the clause
-  // formalizes (Paulay–Priestley plastic hinge):
-  //   κy = 2εy/lw · lp = 0.5lw + 0.1hw · θp = (δu − δy)/(hw − lp/2)
-  //   κu = κy + θp/lp · c_limit = εcu/κu  (εcu = 0.003)
-  // c is screened with concrete-only equilibrium (steel reduces c, so the
-  // screen is conservative — noted on the result).
-  function checkSBE(app, comboName, driftRatio) {
+  //  (b) 18.10.6.3 — the neutral-axis depth at the design condition exceeds
+  //      the strain-limited depth. Following the compiled programs, c comes
+  //      from the section's fiber P-M sweep at the design axial (the "C
+  //      Depth"), and the displacement δu is the wall's own amplified drift
+  //      from the analysis displacements (εy from the rebar fy):
+  //      κy = 2εy/lw · lp = 0.5lw + 0.1hw · θp = (δu − δy)·hw/(hw − lp/2)
+  //      κu = κy + θp/lp · c_limit = εcu/κu  (εcu = 0.003)
+  function checkSBE(app, comboName, driftAmp) {
     const { R, src, error } = srcForces(app, comboName);
     if (error) return { error };
     if (!src) return { error: `Combination "${comboName}" not found.` };
@@ -127,6 +126,8 @@
       return { error: 'No shell model — re-run the analysis.' };
     const d = root.RCDefine.ensure(app);
     const srcShells = (src.shells || []).filter(s => s && s.forces);
+    const U = root.RCModel.caseU ? root.RCModel.caseU(app, comboName) : null;
+    const nd = model.nodes;
     const results = [];
 
     for (const ent of app.bim.entities) {
@@ -144,7 +145,7 @@
         ? Math.hypot(p.end[0] - p.base[0], p.end[1] - p.base[1]) * 1000 : 3000;
       const height = (+p.height || 3) * 1000;
 
-      // governing station = larger Pu·M product; service screen at 0.6× factored
+      // governing station = larger P·M product; service screen at 0.6× factored
       const cuts = [wf.base, wf.top].filter(Boolean);
       const gov = cuts.reduce((a, b) => (Math.abs(b.P * b.M) > Math.abs(a.P * a.M) ? b : a), cuts[0]);
       const PuS = Math.abs(gov.P) * 0.6;   // N, service estimate
@@ -157,19 +158,48 @@
       const stressLimit = 0.15 * fc;
       const stressExceeds = sigma > stressLimit;
 
-      // (b) NA depth — demand vs strain limit
+      // (b) NA depth — fiber sweep c at the design axial + strain limit
       const fy = d.materials.find(x => x.type === 'rebar')?.rebar?.fy || 500;
-      const beta1 = root.RCWall.beta1(fc);
-      const PuFactored = Math.abs(gov.P);
-      const cActual = beta1 > 0 ? PuFactored / (0.85 * fc * thickness * beta1) : Infinity; // screen
-      const du = driftRatio || 0.015;                       // design drift (1.5% default)
-      const ey = fy / 200000;                               // yield strain
-      const lp = 0.5 * length + 0.1 * height;               // plastic hinge, mm
-      const ky = 2 * ey / length;                           // yield curvature, 1/mm
-      const dy = ky * height / 3;                           // yield drift (dimensionless)
-      const thP = Math.max(du - dy, 0) * height / Math.max(height - lp / 2, 1); // plastic rotation
-      const ku = ky + thP / lp;                             // curvature demand, 1/mm
-      const cLimit = 0.003 / ku;                            // NA depth at εcu = 0.003
+      const cover = 40, vertDia = 12, vertSpacing = 300;
+      const nVertPerFace = Math.max(2, Math.floor(length / vertSpacing) - 1);
+      const bars = root.RCWall.wallBars(length, thickness, cover, vertDia, nVertPerFace, 2, 16);
+      const pm = root.RCWall.wallPM(length, thickness, fc, fy, bars, 30);
+      const cActual = root.RCWall.wallNAatP(pm, Math.abs(gov.P));
+
+      // δu: the wall's own drift from the analysis displacements, amplified
+      let du = 0.015, driftSource = 'default';
+      if (U) {
+        const b = Array.isArray(p.base) ? p.base : [0, 0, 0];
+        const e = Array.isArray(p.end) ? p.end : [0, 0, 0];
+        const L2 = Math.hypot(e[0] - b[0], e[1] - b[1]) || 1;
+        const tx = (e[0] - b[0]) / L2, ty = (e[1] - b[1]) / L2; // in-plane direction
+        const meanIn = z => {
+          let s = 0, n = 0;
+          for (const sf of model.shells) {
+            if (sf.entId !== ent.id) continue;
+            for (const ni of [sf.n1, sf.n2, sf.n3, sf.n4]) {
+              const node = nd[ni];
+              if (Math.abs(node.z - z) > 1e-4) continue;
+              s += U[ni * 6] * tx + U[ni * 6 + 1] * ty; n++;
+            }
+          }
+          return n ? s / n : null;
+        };
+        const uTop = meanIn(b[2] + height / 1000), uBot = meanIn(b[2]);
+        if (uTop != null && uBot != null && height > 1) {
+          du = Math.abs(uTop - uBot) / height; // mm/mm
+          driftSource = 'analysis';
+        }
+      }
+      du *= (driftAmp || 1.0);
+
+      const ey = fy / 200000;
+      const lp = 0.5 * length + 0.1 * height;
+      const ky = 2 * ey / length;
+      const dy = ky * height / 3;
+      const thP = Math.max(du - dy, 0) * height / Math.max(height - lp / 2, 1);
+      const ku = ky + thP / lp;
+      const cLimit = 0.003 / ku;
       const naExceeds = cActual > cLimit;
 
       const sbeRequired = stressExceeds || naExceeds;
@@ -181,11 +211,12 @@
         sigma: +sigma.toFixed(2), stressLimit: +stressLimit.toFixed(2),
         stressExceeds,
         cActual: Math.round(cActual), cLimit: Math.round(cLimit), naExceeds,
+        du: +du.toFixed(4), driftSource,
         sbeRequired,
         method: stressExceeds ? 'ACI 18.10.6.2 (stress)' :
           naExceeds ? 'ACI 18.10.6.3 (NA depth)' : 'Not required',
         status: sbeRequired ? 'SBE REQUIRED' : 'SBE NOT REQUIRED',
-        note: 'c screened with concrete-only equilibrium — boundary confinement reduces c',
+        note: 'c from the fiber P-M sweep at the design axial; steel included',
       });
     }
     return { results, comboName };
@@ -327,10 +358,10 @@
   function sbeDialog(app) {
     if (!app.rcResults) { app.toast('Run the analysis first', true); return; }
     const html = [
-      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">ACI 318-19 §18.10.6 — special boundary elements required when the wall-end compressive stress exceeds 0.15·f\'c (service) or the neutral axis exceeds lw/(600·(δu/εy+1)).</p>',
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">ACI 318-19 §18.10.6 — special boundary elements required when the wall-end compressive stress exceeds 0.15·f\'c (service) or the fiber-sweep neutral axis exceeds the strain-limited depth at the wall\'s amplified drift.</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' + comboSelect(app, 'sb-combo') + '</div>',
-      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Design drift δu</span>' +
-      '<input id="sb-drift" type="number" value="0.015" step="0.005" style="width:80px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px" title="amplified design drift ratio — feeds the 18.10.6.3 strain check"></div>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Drift amplification</span>' +
+      '<input id="sb-drift" type="number" value="1.0" step="0.1" min="1" style="width:80px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px" title="multiplier on the analysis drift — ACI amplified displacement δue·Cd/R as a factor"></div>',
     ].join('');
     app.dialog('Wall SBE Check — ACI 18.10.6', html, [
       ['Check', () => {
@@ -344,13 +375,14 @@
           `<td>${x.Pu.toFixed(0)}</td><td>${x.Mu.toFixed(0)}</td>` +
           `<td>${x.sigma.toFixed(2)} / ${x.stressLimit.toFixed(2)}</td><td>${badge(!x.stressExceeds)}</td>` +
           `<td>${x.cActual} / ${x.cLimit}</td><td>${badge(!x.naExceeds)}</td>` +
+          `<td>${(x.du * 100).toFixed(2)}% (${x.driftSource})</td>` +
           `<td style="font-weight:bold;color:${x.sbeRequired ? '#c62828' : '#2e7d32'}">${x.status}</td></tr>`).join('');
         const html2 = '<div style="max-height:65vh;overflow:auto">' +
-          `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Combination: <b>${esc2(r.comboName)}</b> · stresses at 0.6× factored (service screen)</p>` +
+          `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Combination: <b>${esc2(r.comboName)}</b> · stresses at 0.6× factored (service screen) · c from the fiber P-M sweep</p>` +
           '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;opacity:.7">' +
           '<th style="padding:3px 5px;border-bottom:1px solid #d7dde3">Wall</th><th>lw×t (mm)</th><th>Pu (kN)</th><th>Mu (kN·m)</th>' +
-          '<th>σ / 0.15f\'c (MPa)</th><th>18.10.6.2</th><th>c / limit (mm)</th><th>18.10.6.3</th><th>Result</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-          `<p style="font-size:11px;opacity:.7;margin:8px 0 0">${r.results.length ? 'c screened with concrete-only equilibrium — boundary confinement reduces c' : 'No walls with shell forces — draw walls and re-run.'}</p></div>`;
+          '<th>σ / 0.15f\'c (MPa)</th><th>18.10.6.2</th><th>c / limit (mm)</th><th>18.10.6.3</th><th>δu</th><th>Result</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          `<p style="font-size:11px;opacity:.7;margin:8px 0 0">${r.results.length ? 'δu = wall drift from the analysis displacements × amplification · limit per Paulay–Priestley plastic hinge (εcu = 0.003)' : 'No walls with shell forces — draw walls and re-run.'}</p></div>`;
         app.dialog('SBE Check Results', html2, [['Close', null]]);
         return false;
       }],

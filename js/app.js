@@ -2573,11 +2573,11 @@ class BimEntityManager {
   // column rebuilds whole from base/width/depth/height).
   // ==========================================================================
   // STORY REPLICATION (ETABS Edit ▸ Story: replicate framing up a level).
-  // Clones the structural entities of one story — beams, columns, floors —
-  // with a Z offset, rebuilds each clone's geometry from its params, and
-  // keeps the section/load references so stories share definitions
-  // (ETABS "Similar Stories" behavior). Walls need their own rebuild pass
-  // and are skipped in v1.
+  // Clones the structural entities of one story — beams, columns, walls,
+  // floors — with a Z offset, rebuilds each clone's geometry from its
+  // params (the same rebuild paths the edit tools use), and keeps the
+  // section/load references so stories share definitions (ETABS "Similar
+  // Stories" behavior).
   // ==========================================================================
   replicateStory(sourceZ, targetZs, onlySelected) {
     const picked = [];
@@ -2596,19 +2596,28 @@ class BimEntityManager {
         Math.abs(p.baseline[0][2] - sourceZ) < 1e-4) picked.push(ent);
       else if (ent.type === 'column' && Array.isArray(p.base) &&
         Math.abs(p.base[2] - sourceZ) < 1e-4) picked.push(ent);
+      else if (ent.type === 'wall' && Array.isArray(p.base) &&
+        Math.abs(p.base[2] - sourceZ) < 1e-4) picked.push(ent);
       else if ((ent.type === 'floor' || ent.type === 'slab' || ent.type === 'roof') && p.regions) {
         const zRing = (p.regions[0] && p.regions[0].outer && p.regions[0].outer[0]) ? (p.regions[0].outer[0][2] || 0) : null;
         const zL = p.baseLevel != null ? window.app.levelManager.getElevation(p.baseLevel) : zRing;
         if (zL != null && Math.abs(zL - sourceZ) < 1e-4) picked.push(ent);
       }
     }
-    if (!picked.length) return { made: 0, picked: 0, skippedWalls: 0, error: 'No beams/columns/floors found on the source story.' };
+    if (!picked.length) return { made: 0, picked: 0, skippedWalls: 0, error: 'No beams/columns/walls/floors found on the source story.' };
     const lvAt = z => window.app.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-4);
     let made = 0, paramsOnly = 0, skippedWalls = 0;
     for (const dz of targetZs) {
       for (const src of picked) {
-        if (src.type === 'wall') { skippedWalls++; continue; }
         const P = JSON.parse(JSON.stringify(src.params)); // deep clone — loads ride along
+        if (src.type === 'wall') {
+          P.base[2] += dz; P.end[2] += dz;
+          const w = this._createInner('wall', P, {}, []);
+          // the wall's own rebuild path re-extrudes and re-joins from params
+          const ok = this.rebuildWallWithHosts(w.id);
+          if (ok) made++; else paramsOnly++;
+          continue;
+        }
         if (src.type === 'beam') { for (const pt of P.baseline) pt[2] += dz; }
         else if (src.type === 'column') { P.base[2] += dz; }
         else if (P.regions) {

@@ -41,6 +41,9 @@
   // ============================================================ P-M interaction
   // Same fiber method as column: sweep NA depth, compute P and M.
   // For a wall: bending is about the weak axis (the length axis is in-plane).
+  // Sweeps from pure tension to pure compression; each point carries the
+  // neutral-axis depth c of its strain profile (used by the SBE check to
+  // read the design c at a given axial — the ETABS C Depth approach).
   function wallPM(length, thickness, fc, fy, bars, nPoints = 40) {
     const b1 = beta1(fc);
     const Ag = length * thickness;
@@ -53,12 +56,12 @@
 
       if (t === 0) {
         for (const bar of bars) P -= bar.area * fy;
-        results.push({ P, M: 0 });
+        results.push({ P, M: 0, c: 0 });
         continue;
       }
       if (t === 1) {
         P = 0.85 * fc * (Ag - Ast) + Ast * fy;
-        results.push({ P, M: 0 });
+        results.push({ P, M: 0, c: Infinity });
         continue;
       }
 
@@ -81,9 +84,25 @@
         M += Fi * bar.x;
       }
 
-      results.push({ P, M: Math.abs(M) });
+      results.push({ P, M: Math.abs(M), c });
     }
     return results;
+  }
+
+  // neutral-axis depth at a given axial load from the P-M sweep (mm):
+  // P is monotone from tension to compression, c monotone decreasing
+  function wallNAatP(pm, Pu) {
+    if (!pm || pm.length < 2) return Infinity;
+    if (Pu <= pm[0].P) return 0;               // pure tension side
+    const last = pm[pm.length - 1];
+    if (Pu >= last.P) return last.c;           // pure compression cap
+    for (let i = 0; i < pm.length - 1; i++) {
+      if (Pu >= pm[i].P && Pu <= pm[i + 1].P) {
+        const t = (Pu - pm[i].P) / (pm[i + 1].P - pm[i].P || 1);
+        return pm[i].c + t * (pm[i + 1].c - pm[i].c);
+      }
+    }
+    return Infinity;
   }
 
   function beta1(fc) {
@@ -399,5 +418,5 @@
     app.dialog('RC Wall Design Results — ' + comboName, html, [['Close', null]]);
   }
 
-  root.RCWall = { designAllWalls, wallPM, wallShear, wallBars, wallBaseForces, open, beta1 };
+  root.RCWall = { designAllWalls, wallPM, wallNAatP, wallShear, wallBars, wallBaseForces, open, beta1 };
 })(window);
