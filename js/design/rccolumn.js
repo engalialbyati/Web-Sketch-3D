@@ -50,12 +50,16 @@
   // ==================================================== P-M curve (v2)
   // Balance-anchored strain sweep, φ per point, 0.80P₀ cap,
   // displaced-concrete deduction, non-monotonic repair.
-  function generatePMCurve(sec, mat, angle, nPoints = 40) {
+  function generatePMCurve(sec, mat, angle, nPoints = 40, capType = 'design') {
     const dims = sec.dims || {};
     const b = (dims.b || 300);
     const h = (dims.h || 500);
     const fc = mat.conc ? mat.conc.fc : 25;
-    const fy = 500; // capped at 80 ksi = 550 MPa per ACI 318-19; we use 500
+    // capacity type: 'design' = φ applied + 0.80P₀ cap
+    //                'expected' = no φ, overstrength Ω = 1.25 on fy
+    const capTypeDesign = capType === 'design';
+    const fyCap = capTypeDesign ? 500 : Math.min(500 * 1.25, 550); // expected: Ω=1.25
+    const fy = fyCap;
     const b1 = beta1(fc);
     const cover = (sec.rebar && sec.rebar.colCover) || 0.04;
     const bars = rebarLayout(b, h, cover * 1000, sec.rebar || {});
@@ -168,7 +172,7 @@
   }
 
   // ============================================================ design all
-  function designAllColumns(app, comboName) {
+  function designAllColumns(app, comboName, capType, minEcc) {
     const R = app.rcResults;
     if (!R) return { error: 'Run the analysis first (Analyze ▸ Run Analysis).' };
     const d = root.RCDefine.ensure(app);
@@ -196,13 +200,17 @@
       const fc = mat.conc.fc;
 
       const Pu = Math.abs(m.Fi || 0);
-      const Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0)); // N·mm
-      // biaxial: use both end shears × half height for approximate My
-      const My = Math.max(Math.abs(m.Vi2 || 0) * h / 2 || 0, Math.abs(m.Vj2 || 0) * h / 2 || 0);
+      let Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0)); // N·mm
+      let My = Math.max(Math.abs(m.Vi2 || 0) * h / 2 || 0, Math.abs(m.Vj2 || 0) * h / 2 || 0);
+      // minimum eccentricity preference (ACI 6.2.5): e_min = h/30 (or 20mm)
+      const eMinH = h / 30, eMinB = b / 30;
+      const eMin = Math.max(20, Math.min(eMinH, eMinB));
+      if (minEcc && Mx < Pu * eMin) Mx = Pu * eMin;
+      if (minEcc && My < Pu * eMin) My = Pu * eMin;
 
       // P-M curves at 0° and 90°
-      const pm0 = generatePMCurve(sec, mat, 0, 30);
-      const pm90 = generatePMCurve(sec, mat, 90, 30);
+      const pm0 = generatePMCurve(sec, mat, 0, 30, capType);
+      const pm90 = generatePMCurve(sec, mat, 90, 30, capType);
 
       const cr0 = capacityRatio(Pu, Mx, pm0);
       const cr90 = capacityRatio(Pu, My, pm90);
@@ -234,11 +242,19 @@
       '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Biaxial P-M interaction check per ACI 318-19 (fiber method, φ per point, 0.80P₀ cap).</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +
       `<select id="cd-combo" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${patOpts}</select></div>`,
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Capacity Type</span>' +
+      '<select id="cd-captype" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">' +
+      '<option value="design">Design (φ applied, 0.80P₀ cap)</option>' +
+      '<option value="expected">Expected (no φ, Ω=1.25 overstrength)</option></select></div>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Min Eccentricity</span>' +
+      '<input type="checkbox" id="cd-minecc" checked style="width:20px;height:20px"> <span style="font-size:11px;opacity:.7">ACI 6.2.5: e_min = h/30</span></div>',
     ].join('');
     app.dialog('RC Column Design — ACI 318-19', html, [
       ['Design', () => {
         const combo = document.getElementById('cd-combo').value;
-        const result = designAllColumns(app, combo);
+        const capType = document.getElementById('cd-captype').value;
+        const minEcc = document.getElementById('cd-minecc').checked;
+        const result = designAllColumns(app, combo, capType, minEcc);
         if (result.error) { app.toast(result.error, true); return false; }
         showColumnResults(app, result, combo);
         return false;

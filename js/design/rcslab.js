@@ -164,12 +164,28 @@
       }
 
       // envelope: max |M11| and |M22| across all elements in this slab
+      // if design strips exist, average forces across the strip width (ETABS approach)
+      const stripLabels = ent.params.stripLabels || [];
+      const useStripAveraging = stripLabels.length > 0 && (model.designStrips || d.designStrips || []).length > 0;
       let maxM11 = 0, maxM22 = 0, minM11 = 0, minM22 = 0;
-      for (const f of forces) {
-        maxM11 = Math.max(maxM11, f.M11 || 0);
-        minM11 = Math.min(minM11, f.M11 || 0);
-        maxM22 = Math.max(maxM22, f.M22 || 0);
-        minM22 = Math.min(minM22, f.M22 || 0);
+      if (useStripAveraging) {
+        // design strip: average forces across all elements in the strip
+        // (simplified: average all shell forces — the strip defines which elements are included)
+        let sumM11 = 0, sumM22 = 0, count = 0;
+        for (const f of forces) { sumM11 += Math.abs(f.M11 || 0); sumM22 += Math.abs(f.M22 || 0); count++; }
+        if (count > 0) {
+          maxM11 = sumM11 / count; // averaged strip moment
+          minM11 = -sumM11 / count;
+          maxM22 = sumM22 / count;
+          minM22 = -sumM22 / count;
+        }
+      } else {
+        for (const f of forces) {
+          maxM11 = Math.max(maxM11, f.M11 || 0);
+          minM11 = Math.min(minM11, f.M11 || 0);
+          maxM22 = Math.max(maxM22, f.M22 || 0);
+          minM22 = Math.min(minM22, f.M22 || 0);
+        }
       }
 
       // design bottom (positive) and top (negative) in both directions

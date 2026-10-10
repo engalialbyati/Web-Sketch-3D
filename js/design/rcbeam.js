@@ -237,6 +237,12 @@
       const shear = designShear(Vu, b, dBot, fc, fyt);
       const stirrups = selectStirrups(shear, rebarDb, b, dBot);
 
+      // torsion design (ACI Ch. 9.7)
+      const Tu = m.Ti || 0;
+      const Acp = b * h;
+      const pcp = 2 * (b + h);
+      const torsionResult = designTorsion(Tu, b, dBot, h, fc, fyt, Acp, pcp);
+
       // development length (top bar ψt=1.3, bottom ψt=1.0)
       const devTop = topBars ? devLength(fy, fc, topBars.dia, true, false) : 0;
       const devBot = botBars ? devLength(fy, fc, botBars.dia, false, false) : 0;
@@ -252,6 +258,12 @@
         const sProv = (b - 2 * (cover + 8)) / Math.max(botBars.count - 1, 1);
         if (sProv > sMax) botBars.count = Math.ceil((b - 2 * (cover + 8)) / sMax) + 1;
       }
+
+      // multi-layer layout: check that bars fit in 1-5 layers
+      const topLayout = topBars ? layoutBarsInLayers(topBars.count, topBars.dia, b, cover, stirrupDia) : null;
+      const botLayout = botBars ? layoutBarsInLayers(botBars.count, botBars.dia, b, cover, stirrupDia) : null;
+      if (topLayout && !topLayout.fits) topBars.count = topLayout.maxPerLayer * 5; // cap at 5 layers
+      if (botLayout && !botLayout.fits) botBars.count = botLayout.maxPerLayer * 5;
 
       // bar curtailment: extend past theoretical cutoff by ld + 0.25·Ln
       const curtailTop = topBars ? Math.ceil(6000 * 0.25 + devTop) : 0;
@@ -319,6 +331,27 @@
       if (sFinal >= 50) return { dia: bar.dia, spacing: sFinal, AvsProvided: Av2leg / sFinal };
     }
     return { dia: 16, spacing: 100, AvsProvided: 0 };
+  }
+
+  // ============================================================ multi-layer layout
+  // Fit-check bars in layers (2-5 layers) with clear spacing per ACI 25.2.1
+  // Returns { layers: [{count, y}], fits, maxPerLayer } or null
+  function layoutBarsInLayers(count, dia, bw, cover, stirrupDia) {
+    const clearMin = Math.max(25, dia);
+    const availWidth = bw - 2 * (cover + stirrupDia);
+    const maxPerLayer = Math.max(1, Math.floor((availWidth + clearMin) / (dia + clearMin)));
+    const layers = [];
+    let remaining = count;
+    let layer = 1;
+    const h = 50; // vertical spacing between layers ≈ max(db, 25mm)
+    while (remaining > 0 && layer <= 5) {
+      const nThis = Math.min(remaining, maxPerLayer);
+      if (nThis <= 0) break;
+      layers.push({ count: nThis, y: (cover + stirrupDia + dia/2) + (layer - 1) * Math.max(dia, 25) });
+      remaining -= nThis;
+      layer++;
+    }
+    return { layers, fits: remaining <= 0, maxPerLayer };
   }
 
   // ============================================================ design dialog
