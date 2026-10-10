@@ -419,6 +419,23 @@
       }
   }
 
+  // Rigid end zones: the 12×12 kinematic map T (node DOFs → flexible-span
+  // end DOFs) for rigid blocks aI/aJ long in LOCAL coordinates. A rigid arm
+  // d = (±a, 0, 0) from the node carries translations u' = u + θ×d and the
+  // same rotations, so only the bending coupling terms are non-unitary.
+  function rigidEndT(aI, aJ) {
+    const T = [];
+    for (let i = 0; i < 12; i++) T.push(new Float64Array(12));
+    for (let k = 0; k < 6; k++) { T[k][k] = 1; T[6 + k][6 + k] = 1; }
+    // end i: face at local +aI
+    T[1][5] += aI;    // face uy ← node θz
+    T[2][4] -= aI;    // face uz ← node θy
+    // end j: face at local −aJ
+    T[7][11] -= aJ;   // face uy ← node θz
+    T[8][10] += aJ;   // face uz ← node θy
+    return T;
+  }
+
   function assembleAndSolve(nodesIn, frames, shells, loads, opts = {}) {
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
@@ -432,12 +449,38 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      let Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
-      // P-delta: soften/stiffen the transverse terms with the axial force
-      if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
-        const Kg = frameKg(opts.geo[elIdx], L);
+      // rigid end zones (ETABS End Length Offsets × Rigid Zone Factor):
+      // the element stiffness is built over the FLEXIBLE span between the
+      // rigid blocks and mapped to the node DOFs by rigid-body kinematics —
+      // K = Tᵀ·K(Lf)·T (exact, no extra nodes, no penalty stiffness)
+      const eoI = el.eoI || 0, eoJ = el.eoJ || 0;
+      let Kl, Lf = L;
+      if (eoI > 0.5 || eoJ > 0.5) {
+        Lf = Math.max(L - eoI - eoJ, L * 0.1);
+        const Kf = frameK(el.E, el.A, el.Iy, el.Iz, el.J, Lf, el.G, el.As2, el.As3);
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const KgF = frameKg(opts.geo[elIdx], Lf);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kf[i][j] += KgF[i][j];
+        }
+        const Tr = rigidEndT(eoI, eoJ);
+        Kl = [];
+        for (let i = 0; i < 12; i++) Kl.push(new Float64Array(12));
         for (let i = 0; i < 12; i++)
-          for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+          for (let j = 0; j < 12; j++) {
+            let s = 0;
+            for (let k = 0; k < 12; k++)
+              for (let k2 = 0; k2 < 12; k2++) s += Tr[k][i] * Kf[k][k2] * Tr[k2][j];
+            Kl[i][j] = s;
+          }
+      } else {
+        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
+        // P-delta: soften/stiffen the transverse terms with the axial force
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const Kg = frameKg(opts.geo[elIdx], L);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+        }
       }
       const R = rotationMatrix(a, b);
       const Kg = transformFrame(Kl, R);
@@ -448,7 +491,23 @@
         for (let j = 0; j < 12; j++)
           K[dofs[i]][dofs[j]] += Kg[i][j];
       const ml = (opts.memberLoads && opts.memberLoads[elIdx]) || null;
-      let feq0 = ml ? consistentUDL(ml.wy || 0, ml.wz || 0, L, ml.points) : null;
+      // UDL acts on the flexible span when rigid ends are present; point
+      // loads shift into flexible-span coordinates
+      let feq0 = null;
+      if (ml) {
+        if (Lf < L - 0.5) {
+          const pts = (ml.points || []).map(p => ({ P: p.P, a: p.a - eoI }))
+            .filter(p => p.a > 0 && p.a < Lf);
+          feq0 = consistentUDL(ml.wy || 0, ml.wz || 0, Lf, pts);
+          const Tr = rigidEndT(eoI, eoJ);
+          const feq2 = new Float64Array(12);
+          for (let i = 0; i < 12; i++)
+            for (let k = 0; k < 12; k++) feq2[i] += Tr[k][i] * feq0[k];
+          feq0 = feq2;
+        } else {
+          feq0 = consistentUDL(ml.wy || 0, ml.wz || 0, L, ml.points);
+        }
+      }
       // end releases (ETABS Assign > Frame > Releases): condense the local
       // stiffness and the member-load vector together
       if (el.releases && el.releases.length) {
@@ -548,11 +607,34 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      let Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
-      if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
-        const Kg = frameKg(opts.geo[elIdx], L);
+      const eoI = el.eoI || 0, eoJ = el.eoJ || 0;
+      let Kl, Lf = L;
+      if (eoI > 0.5 || eoJ > 0.5) {
+        // rigid end zones — the identical mapping the solve used
+        Lf = Math.max(L - eoI - eoJ, L * 0.1);
+        const Kf = frameK(el.E, el.A, el.Iy, el.Iz, el.J, Lf, el.G, el.As2, el.As3);
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const KgF = frameKg(opts.geo[elIdx], Lf);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kf[i][j] += KgF[i][j];
+        }
+        const Tr = rigidEndT(eoI, eoJ);
+        Kl = [];
+        for (let i = 0; i < 12; i++) Kl.push(new Float64Array(12));
         for (let i = 0; i < 12; i++)
-          for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+          for (let j = 0; j < 12; j++) {
+            let s = 0;
+            for (let k = 0; k < 12; k++)
+              for (let k2 = 0; k2 < 12; k2++) s += Tr[k][i] * Kf[k][k2] * Tr[k2][j];
+            Kl[i][j] = s;
+          }
+      } else {
+        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const Kg = frameKg(opts.geo[elIdx], L);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+        }
       }
       if (el.releases && el.releases.length) Kl = applyReleases(Kl, null, el.releases).K;
       const R = rotationMatrix(a, b);
@@ -576,7 +658,20 @@
         const a = nodes[el.ni], b = nodes[el.nj];
         const L = G.dist(a, b);
         if (L < 1e-6) return;
-        let feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
+        const eoI = el.eoI || 0, eoJ = el.eoJ || 0;
+        let feq;
+        if (eoI > 0.5 || eoJ > 0.5) {
+          // same flexible-span UDL + Tᵀ map the solve used
+          const Lf = Math.max(L - eoI - eoJ, L * 0.1);
+          feq = consistentUDL(ml.wy || 0, ml.wz || 0, Lf);
+          const Tr = rigidEndT(eoI, eoJ);
+          const feq2 = new Float64Array(12);
+          for (let i = 0; i < 12; i++)
+            for (let k = 0; k < 12; k++) feq2[i] += Tr[k][i] * feq[k];
+          feq = feq2;
+        } else {
+          feq = consistentUDL(ml.wy || 0, ml.wz || 0, L);
+        }
         // released members contribute their CONDENSED equivalent loads
         if (el.releases && el.releases.length) {
           const Kl2 = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);

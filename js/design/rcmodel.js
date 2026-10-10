@@ -283,7 +283,20 @@
           }
           offs[e] = Math.min(off, L * 0.45);
         }
-        m.offI = offs[0]; m.offJ = offs[1]; // meters
+        m.offI = offs[0]; m.offJ = offs[1]; // meters — auto from connectivity
+        // USER-SPECIFIED offsets (Assign ▸ End Length Offsets) override the
+        // auto values per end; the RIGID ZONE FACTOR (frame section, 0–1)
+        // scales how much of the offset is rigid — ETABS semantics
+        const eo = m.ent.params.endOffsets;
+        if (eo && !eo.auto) {
+          if (eo.i != null) m.offI = Math.min(Math.max(+eo.i || 0, 0), L * 0.45);
+          if (eo.j != null) m.offJ = Math.min(Math.max(+eo.j || 0, 0), L * 0.45);
+        }
+        const secRz = sectionOf(app, m.ent);
+        const rz = Math.max(0, Math.min(1, (secRz && secRz.rigidZone) || 0));
+        // effective rigid length per end (mm) on the analysis frame
+        frames[m.idx].eoI = m.offI * rz * 1000;
+        frames[m.idx].eoJ = m.offJ * rz * 1000;
       }
     }
 
@@ -499,16 +512,31 @@
         const ml = (memberLoads[p] || [])[i] || {};
         const L = f.L;
         const wy = ml.wy || 0, pts = ml.points || [];
+        // rigid end zones: UDL and point loads physically act on the
+        // FLEXIBLE span only — the statics window starts at eoI and the
+        // exact face points join the station list (no interpolation kink)
+        const eoI = model.frames[i].eoI || 0, eoJ = model.frames[i].eoJ || 0;
+        const rigid = eoI > 0.5 || eoJ > 0.5;
+        const Lf = rigid ? Math.max(L - eoI - eoJ, L * 0.1) : L;
+        const xs = [];
+        for (let k = 0; k < nStations; k++) xs.push(L * k / (nStations - 1));
+        if (rigid) { xs.push(eoI, L - eoJ); }
+        xs.sort((p, q) => p - q);
         const stations = [];
-        for (let k = 0; k < nStations; k++) {
-          const x = L * k / (nStations - 1);
-          // local statics: M(x) = Mi + Vi·x − wy·x²/2 − Σ P⟨x−a⟩ ; shear likewise
+        for (const x of xs) {
+          // local statics: M(x) = Mi + Vi·x − wy·(loaded lever) − Σ P⟨x−a⟩
           let M = f.forces[5] + (-f.forces[1]) * x;  // Mi(end force) + shear rising
           let V = -f.forces[1];
-          M += -wy * x * x / 2; V += -wy * x;
+          if (rigid) {
+            const lu = Math.max(0, Math.min(x - eoI, Lf)); // loaded length before x
+            M += -wy * (lu * lu / 2 + lu * (x - eoI - lu));
+            V += -wy * lu;
+          } else {
+            M += -wy * x * x / 2; V += -wy * x;
+          }
           for (const pt of pts) {
-            const a = pt.a;
-            if (x >= a) { M -= pt.P * (x - a); V -= pt.P; }
+            const a = rigid ? pt.a - eoI : pt.a;
+            if (a > 0 && x >= a) { M -= pt.P * (x - a); V -= pt.P; }
           }
           stations.push({ x: x / 1000, M: -M / 1e6, V: V / 1e3 }); // kN·m, kN
         }

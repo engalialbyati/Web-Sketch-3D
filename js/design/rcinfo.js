@@ -26,17 +26,19 @@
   // ---------------------------------------------------------- data gather
   function identity(app, ent) {
     const d = root.RCDefine.ensure(app);
-    let sec = null, dims = '';
+    let sec = null, dims = '', rz = 0;
     if (ent.type === 'beam' || ent.type === 'column') {
       sec = d.frameSections.find(s => s.name === ent.params.designSection);
       const g = sec && sec.dims || {};
       dims = sec ? `${((g.b || g.bf || g.dia || 0) * 1000).toFixed(0)}×${((g.h || g.dia || 0) * 1000).toFixed(0)} mm` : '—';
+      rz = (sec && sec.rigidZone) || 0;
     } else {
       sec = d.areaSections.find(s => s.name === ent.params.designSection);
       dims = sec ? `t = ${((sec.thickness || 0) * 1000).toFixed(0)} mm` : '—';
     }
     const mat = ent.params.materialOverwrite || (sec && sec.material) || 'default';
-    return { type: ent.type, id: ent.id, section: sec ? sec.name : '(auto)', dims, material: mat };
+    return { type: ent.type, id: ent.id, section: sec ? sec.name : '(auto)', dims, material: mat,
+      rigidZone: rz, offsetSrc: ent.params.endOffsets && ent.params.endOffsets.auto === false ? 'user' : 'auto' };
   }
 
   function appliedLoads(app, ent) {
@@ -153,7 +155,7 @@
         td(f.Mmax == null ? '—' : `${f.Mmax.toFixed(1)} / ${f.Mmin.toFixed(1)}`) + '</tr>' ]);
     }
     const offNote = (f.offI != null || f.offJ != null)
-      ? `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">Auto end offsets: I ${Math.round(f.offI || 0)} mm · J ${Math.round(f.offJ || 0)} mm — design forces taken at the adjoining member faces (ETABS auto from connectivity)</p>`
+      ? `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">End offsets (${id.offsetSrc}): I ${Math.round(f.offI || 0)} mm · J ${Math.round(f.offJ || 0)} mm · rigid zone factor ${id.rigidZone} — design forces at the adjoining member faces</p>`
       : '';
     const row = (k) => td(`${f[k][0].toFixed(2)} / ${f[k][1].toFixed(2)}`);
     return offNote + `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">${f.nCells} shell cell(s) — max/min:</p>` +

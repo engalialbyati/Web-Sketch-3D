@@ -624,6 +624,9 @@
       row('A / As2 / As3 / J ×', inp('mo-a', mod.a, 'number', 'any') + ' ' + inp('mo-as2', mod.as2, 'number', 'any') + ' ' + inp('mo-as3', mod.as3, 'number', 'any') + ' ' + inp('mo-torsion', mod.torsion, 'number', 'any')),
       row('I22 × / I33 ×', inp('mo-i22', mod.i22, 'number', 'any') + ' ' + inp('mo-i33', mod.i33, 'number', 'any')),
       row('Mass × / Weight ×', inp('mo-m', mod.mass, 'number', 'any') + ' ' + inp('mo-w', mod.weight, 'number', 'any')),
+      secTitle('End Offset Rigid Zone'),
+      row('Rigid Zone Factor (0–1)', inp('s-rz', s.rigidZone != null ? s.rigidZone : 0, 'number', 'any')),
+      '<div style="font-size:11px;opacity:.6;margin:2px 0 0">Fraction of the auto end offset (half the adjoining member) modeled as fully rigid. 0 = ETABS default (flexible), 1 = fully rigid joint (ACI 352 seismic practice).</div>',
       secTitle('Rebar (beam overlay)'),
       row('Longitudinal mat.', sel('s-rmat', d.materials.filter(m => m.type === 'rebar').map(m => m.name), r.longMat)),
       row('Cover top / bot (m)', inp('s-ct', r.coverTop, 'number', 'any') + ' ' + inp('s-cb', r.coverBot, 'number', 'any')),
@@ -652,6 +655,7 @@
         mod.torsion = num('mo-torsion', 1);
         mod.i22 = num('mo-i22', 1); mod.i33 = num('mo-i33', 1);
         mod.mass = num('mo-m', 1); mod.weight = num('mo-w', 1);
+        s.rigidZone = Math.max(0, Math.min(1, num('s-rz', 0)));
         r.longMat = txt('s-rmat', r.longMat);
         r.coverTop = num('s-ct', r.coverTop);
         r.coverBot = num('s-cb', r.coverBot);
@@ -1508,6 +1512,41 @@
 
   // beam end releases (ETABS Assign ▸ Frame ▸ Releases, simplified to the
   // RC-relevant major-axis moment + torsion release per end)
+  // Assign ▸ End Length Offsets (ETABS): Auto from Connectivity, or
+  // user-specified lengths per end for the selected beams/columns
+  function renderAssignOffsets(app) {
+    const ents = selectedStructuralEnts(app, ['beam', 'column']);
+    if (!ents.length) { app.toast('Select beam or column elements first', true); return; }
+    const cur = ents[0].params.endOffsets || { auto: true };
+    const dis = cur.auto ? ' disabled' : '';
+    const html = [
+      `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected — applied to all.</p>`,
+      row('Auto from Connectivity', chk('eo-auto', cur.auto !== false)),
+      row('I-End offset (m)', `<input id="eo-i" type="number" step="any" value="${cur.i != null ? cur.i : ''}" placeholder="auto"${dis} style="width:100px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px">`),
+      row('J-End offset (m)', `<input id="eo-j" type="number" step="any" value="${cur.j != null ? cur.j : ''}" placeholder="auto"${dis} style="width:100px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px">`),
+      '<p style="font-size:11px;opacity:.7;margin:6px 0 0">Auto = half the adjoining member\'s dimension (node to face). The offset region\'s rigidity comes from the section\'s Rigid Zone Factor. Blank + Auto off = 0 at that end.</p>',
+    ].join('');
+    app.dialog('Assign End Length Offsets', html, [
+      ['Assign', () => {
+        const auto = document.getElementById('eo-auto').checked;
+        let n = 0;
+        for (const ent of ents) {
+          if (auto) { ent.params.endOffsets = { auto: true }; n++; continue; }
+          const i = document.getElementById('eo-i').value;
+          const j = document.getElementById('eo-j').value;
+          ent.params.endOffsets = { auto: false, i: i === '' ? 0 : +i, j: j === '' ? 0 : +j };
+          n++;
+        }
+        app.toast(`End offsets assigned to ${n} element(s)` + (auto ? ' (auto)' : ''));
+      }],
+      ['Clear', () => {
+        for (const ent of ents) delete ent.params.endOffsets;
+        app.toast(`End offsets cleared on ${ents.length} element(s)`);
+      }],
+      ['Close', null],
+    ]);
+  }
+
   function renderAssignReleases(app) {
     const ents = selectedStructuralEnts(app, ['beam']);
     if (!ents.length) { app.toast('Select beam elements first', true); return; }
@@ -1718,6 +1757,7 @@
       },
     };
     if (ASSIGN_PICKS[cat]) { renderAssignPick(app, ASSIGN_PICKS[cat]); return; }
+    if (cat === 'assignOffsets') { renderAssignOffsets(app); return; }
     if (cat === 'assignReleases') { renderAssignReleases(app); return; }
     if (cat === 'assignStrips') {
       renderAssignPick(app, {
