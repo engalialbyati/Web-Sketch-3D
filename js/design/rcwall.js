@@ -92,39 +92,47 @@
 
   // ============================================================ in-plane shear
   // ACI 318-19 §11.5 in-plane shear design for walls
-  function wallShear(Vu, length, thickness, fc, fyh) {
+  function wallShear(Vu, length, thickness, fc, fyh, Pu, height) {
     const phi = 0.75;
-    const hw = length; // wall length (for hwc ratio)
+    const lw = length; // wall length
+    const hw = height || lw; // wall height
     const Aw = length * thickness; // wall cross-sectional area
 
-    // hwc/lw ratio effect (ACI 11.5.4): αc = max(3.0 for hw/lw ≤ 1.5, 2.0 for hw/lw ≥ 2.0, interpolated)
-    // v1: use αc = 2.0 (conservative for typical walls)
-    const alphaC = 2.0;
+    // αc per ACI Table 11.5.4.1(a): interpolated by hw/lw ratio
+    const hwLw = hw / lw;
+    const alphaC = hwLw <= 1.5 ? 3.0 : hwLw >= 2.0 ? 2.0 :
+      3.0 - (hwLw - 1.5) * (3.0 - 2.0) / 0.5;
 
-    // Vc (ACI 11.5.4.2, SI simplified)
-    let Vc = alphaC * 0.17 * Math.sqrt(fc) * Aw; // N
+    // axial effect on Vc (ACI 11.5.4.2): compression improves Vc, tension reduces it
+    let axialFactor = 1.0;
+    if (Pu > 0) axialFactor = 1.0 + Math.min(Pu / (500 * Aw), 1.0); // compression helps
+    else if (Pu < 0) axialFactor = Math.max(0, 1 + Pu / (500 * Aw)); // tension hurts
 
-    // Vc upper limit (ACI 11.5.4.3)
-    const VcMax = 0.83 * Math.sqrt(fc) * Aw;
+    // Vc (ACI Table 11.5.4.1(a), SI)
+    let Vc = alphaC * 0.17 * Math.sqrt(fc) * Aw * axialFactor; // N
+
+    // Vc upper limit (ACI 11.5.4.3): Vc ≤ 0.66·λ√f'c·Aw (conservative cap, not 0.83)
+    const VcMax = 0.66 * Math.sqrt(fc) * Aw;
     Vc = Math.min(Vc, VcMax);
+    Vc = Math.max(Vc, 0);
 
     const phiVc = phi * Vc;
-    // Vs upper limit (ACI 11.5.4.4): Vn ≤ 0.83·√f'c·Aw
-    const phiVnMax = phi * 0.83 * Math.sqrt(fc) * Aw;
+    // Vs upper limit (ACI 11.5.4.4): Vn ≤ 0.66·λ√f'c·Aw (ACI 318-19 conservative)
+    const phiVnMax = phi * 0.66 * Math.sqrt(fc) * Aw;
 
     if (Vu > phiVnMax) {
-      return { ok: false, phiVc, phiVnMax, reason: `Vu exceeds φVn_max — increase wall thickness or f'c (ACI 11.5.4.4).` };
+      return { ok: false, phiVc, phiVnMax, reason: "Vu exceeds φVn_max — increase wall thickness or f'c (ACI 11.5.4.4)." };
     }
 
     // required horizontal reinforcement Avh/s (ACI 11.5.5.1)
+    // NOTE: divided by lw (effective length), NOT thickness — ETABS atg.cs:3880
     let Avhs = 0;
     if (Vu > phiVc) {
-      Avhs = (Vu / phi - Vc) / (fyh * thickness); // mm²/mm² (Avh per unit height per unit thickness)
+      Avhs = (Vu / phi - Vc) / (lw * fyh); // mm²/mm along wall length
     }
 
-    // minimum horizontal reinforcement (ACI 11.6.2)
-    const rhoMin = 0.0020; // for fy ≥ 420 MPa (ACI Table 11.6.2)
-    const AvhsMin = rhoMin * thickness; // mm²/mm²
+    // minimum horizontal reinforcement (ACI 318-19 Table 11.6.2)
+    const AvhsMin = 0.0025 * thickness; // ρh = 0.0025 for fy ≥ 420 MPa
 
     return {
       ok: true, phi, Vc: phiVc, Avhs: Math.max(Avhs, AvhsMin),
@@ -176,7 +184,7 @@
       const bars = wallBars(length, thickness, cover, vertDia, nVertPerFace, endZoneBars, endZoneDia);
       const Ast = bars.reduce((s, b) => s + b.area, 0);
       const rhoVert = Ast / (length * thickness);
-      const rhoMinVert = 0.0025; // ACI 11.6.2 for walls
+      const rhoMinVert = 0.0015; // ACI 318-19 Table 11.6.2 (ρℓ base)
 
       // P-M interaction
       const pm = wallPM(length, thickness, fc, fy, bars, 30);
@@ -196,7 +204,7 @@
 
       // in-plane shear (use the larger end shear)
       const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0));
-      const shear = wallShear(Vu, length, thickness, fc, fyh);
+      const shear = wallShear(Vu, length, thickness, fc, fyh, Pu, height);
 
       // min horizontal reinforcement
       const horizDia = 10;
@@ -206,6 +214,12 @@
       const status = dcr > 1 ? 'OVERSTRESSED' :
         !shear.ok ? 'SHEAR FAILURE' :
         dcr > 0.9 ? 'NEAR LIMIT' : 'OK';
+
+      // Vu > 0.5·φVc → escalate vertical reinforcement (ACI 11.6.3)
+      let rhoVertFinal = rhoVert;
+      if (Vu > 0.5 * shear.phiVc && shear.ok) {
+        rhoVertFinal = Math.max(rhoVert, 0.0025 + 0.5 * (2.5 - Math.min(height / length, 2.5)) * (0.0025 - 0.0015));
+      }
 
       results.push({
         id: m.id, length, thickness, height, fc, fy,

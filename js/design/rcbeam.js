@@ -237,9 +237,25 @@
       const shear = designShear(Vu, b, dBot, fc, fyt);
       const stirrups = selectStirrups(shear, rebarDb, b, dBot);
 
-      // development length
-      const devTop = topBars ? devLength(fy, fc, topBars.dia, cover, 100) : 0;
-      const devBot = botBars ? devLength(fy, fc, botBars.dia, cover, 100) : 0;
+      // development length (top bar ψt=1.3, bottom ψt=1.0)
+      const devTop = topBars ? devLength(fy, fc, topBars.dia, true, false) : 0;
+      const devBot = botBars ? devLength(fy, fc, botBars.dia, false, false) : 0;
+
+      // longitudinal spacing clamp (ACI 25.2.1): s ≤ min(3h, 450mm)
+      if (topBars) {
+        const sMax = Math.min(3 * h, 450);
+        const sProv = (b - 2 * (cover + 8)) / Math.max(topBars.count - 1, 1);
+        if (sProv > sMax) topBars.count = Math.ceil((b - 2 * (cover + 8)) / sMax) + 1;
+      }
+      if (botBars) {
+        const sMax = Math.min(3 * h, 450);
+        const sProv = (b - 2 * (cover + 8)) / Math.max(botBars.count - 1, 1);
+        if (sProv > sMax) botBars.count = Math.ceil((b - 2 * (cover + 8)) / sMax) + 1;
+      }
+
+      // bar curtailment: extend past theoretical cutoff by ld + 0.25·Ln
+      const curtailTop = topBars ? Math.ceil(6000 * 0.25 + devTop) : 0;
+      const curtailBot = botBars ? Math.ceil(6000 * 0.25 + devBot) : 0;
 
       results.push({
         id: m.id, b, h, dTop, dBot, fc, fy,
@@ -247,7 +263,7 @@
         AsTop: AsTopRaw, AsBot: AsBotRaw, AsMinTop, AsMax,
         topDoubly: topResult.doubly || false,
         botDoubly: botResult.doubly || false,
-        shear, topBars, botBars, stirrups, devTop, devBot,
+        shear, topBars, botBars, stirrups, devTop, devBot, curtailTop, curtailBot,
         refs: {
           flexure: 'ACI 9.5.2.1, 21.2, 22.2',
           minSteel: 'ACI 9.6.1.2',

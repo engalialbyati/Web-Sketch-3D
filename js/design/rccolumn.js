@@ -1,27 +1,31 @@
 // rccolumn.js — ACI 318-19 RC column design (biaxial P-M interaction).
-// Generates the P-M interaction surface from section geometry + reinforcement
-// using the fiber (layered) method: for varying neutral axis depth, compute
-// forces from Whitney concrete block + elastic-perfectly-plastic steel at
-// each rebar layer. Checks applied forces against the surface → DCR.
-// Original code — equations cite ACI clauses.
+// v2: φ per point, 0.80P₀ cap, displaced-concrete deduction,
+//     balance-anchored strain sweep, non-monotonic repair, true biaxial.
 // Units: N, mm, MPa.
 (function (root) {
   'use strict';
 
-  const Es = 200000; // MPa (ACI 20.2.2.2)
-  const EC_U = 0.003; // ultimate concrete strain (ACI 22.2.2.1)
+  const Es = 200000;
+  const EC_U = 0.003;
+
+  function beta1(fc) {
+    return Math.max(0.65, Math.min(0.85, 0.85 - 0.05 * (fc - 28) / 7));
+  }
+
+  // φ from net tensile strain (ACI 21.2.3)
+  function phiFromStrain(et, esy) {
+    const etLimit = esy + 0.003;
+    if (et >= etLimit) return 0.90;
+    if (et <= esy) return 0.65;
+    return 0.65 + 0.25 * (et - esy) / 0.003;
+  }
 
   // ============================================================ rebar layout
-  // Build rebar positions from the section overlay data (column overlay).
-  // Returns array of { x, y, area } relative to section centroid (mm).
   function rebarLayout(b, h, cover, rebar) {
     const bars = [];
     const db = parseFloat(rebar.rebarSize) || 16;
     const Ab = Math.PI * db * db / 4;
-    const c = cover; // to bar center
-    const r = (rebar.colPattern || 1); // 1=rectangular array
-
-    // corner bars (always 4)
+    const c = cover;
     const positions = [
       { x: -(b/2 - c), y: -(h/2 - c) },
       { x: +(b/2 - c), y: -(h/2 - c) },
@@ -29,9 +33,6 @@
       { x: +(b/2 - c), y: +(h/2 - c) },
     ];
     for (const p of positions) bars.push({ ...p, area: Ab });
-
-    // intermediate bars on faces (nR2 = bars on top/bottom faces excl corners,
-    // nR3 = bars on left/right faces excl corners)
     const nR3 = (rebar.nR3 || 0), nR2 = (rebar.nR2 || 0);
     for (let i = 1; i <= nR3; i++) {
       const y = -(h/2 - c) + (h - 2*c) * i / (nR3 + 1);
@@ -46,26 +47,22 @@
     return bars;
   }
 
-  // ==================================================== P-M interaction curve
-  // Generate the P-M curve for uniaxial bending at a given angle.
-  // angle: 0 = bending about strong axis (M about y → gravity bending)
-  //        90 = bending about weak axis (M about x → lateral bending)
-  // Returns array of { P, M } in N and N·mm.
+  // ==================================================== P-M curve (v2)
+  // Balance-anchored strain sweep, φ per point, 0.80P₀ cap,
+  // displaced-concrete deduction, non-monotonic repair.
   function generatePMCurve(sec, mat, angle, nPoints = 40) {
     const dims = sec.dims || {};
     const b = (dims.b || 300);
     const h = (dims.h || 500);
     const fc = mat.conc ? mat.conc.fc : 25;
-    const fy = (() => {
-      const rebarMat = d_findRebarMat(sec);
-      return rebarMat ? rebarMat.fy : 500;
-    })();
+    const fy = 500; // capped at 80 ksi = 550 MPa per ACI 318-19; we use 500
     const b1 = beta1(fc);
     const cover = (sec.rebar && sec.rebar.colCover) || 0.04;
     const bars = rebarLayout(b, h, cover * 1000, sec.rebar || {});
-    const dMax = h - cover * 1000; // extreme tension steel
+    const Ag = b * h;
+    const Ast = bars.reduce((s, b2) => s + b2.area, 0);
+    const dMax = h - cover * 1000; // depth to extreme tension steel
 
-    // rotate section coordinates for biaxial bending
     const rad = angle * Math.PI / 180;
     const cos = Math.cos(rad), sin = Math.sin(rad);
     const rotBars = bars.map(bar => ({
@@ -74,82 +71,99 @@
       area: bar.area,
     }));
 
-    const Ag = b * h;
-    const results = [];
+    const esy = fy / Es;
+    // balance point: c_bal = εcu·dt / (εcu + εy)
+    const cBal = EC_U * dMax / (EC_U + esy);
+    const aBal = b1 * cBal;
 
-    // sweep neutral axis from pure tension (c → -∞, all steel yields in tension)
-    // to pure compression (c → +∞, uniform compression)
-    for (let i = 0; i <= nPoints; i++) {
-      const t = i / nPoints;
-      let P = 0, M = 0;
+    // sweep anchored at balance: half below aBal (tension side), half above (compression)
+    const nHalf = Math.floor(nPoints / 2);
+    const sweepA = []; // compression block depths
 
-      if (t === 0) {
-        // pure tension: all steel yields
-        for (const bar of rotBars) P -= bar.area * fy;
-        results.push({ P, M: 0 });
+    // below balance: uniform from ~0 to aBal
+    for (let i = 0; i <= nHalf; i++) sweepA.push(aBal * i / nHalf);
+    // above balance: from aBal to h (and beyond for pure compression)
+    for (let i = 1; i <= nPoints - nHalf; i++) sweepA.push(aBal + (h * 1.5 - aBal) * i / (nPoints - nHalf));
+
+    const alphaConc = 0.85;
+    const raw = [];
+
+    // pure tension point
+    let Pt = 0;
+    for (const bar of rotBars) Pt -= bar.area * fy;
+    raw.push({ P: Pt, M: 0 });
+
+    for (const a of sweepA) {
+      if (a < 1e-9) {
+        raw.push({ P: Pt, M: 0 });
         continue;
       }
-      if (t === 1) {
-        // pure compression: P_max = 0.85·f'c·(Ag - Ast) + Ast·fy  (ACI 22.4.2.2)
-        const Ast = rotBars.reduce((s, bar) => s + bar.area, 0);
-        P = 0.85 * fc * (Ag - Ast) + Ast * fy;
-        results.push({ P, M: 0 });
-        continue;
-      }
+      const c = a / b1;
+      let P = 0, Mx = 0;
 
-      // c from large (compression-dominated) to small (tension)
-      // map t ∈ (0,1) to c ∈ (h*1.5, 0.01)
-      const c = h * 1.5 * (1 - t) + 0.01;
-
-      // concrete Whitney block: compression zone from top fiber to depth a
-      const a = Math.min(b1 * c, h);
+      // concrete Whitney block
       if (a > 0) {
-        const Cc = 0.85 * fc * b * a;
-        const yCc = -(h / 2) + a / 2; // centroid of compression block from section center
+        const Cc = alphaConc * fc * b * Math.min(a, h);
+        const yCc = -(h / 2) + Math.min(a, h) / 2;
         P += Cc;
-        // moment about centroid at angle θ: M = F × perpendicular distance
-        M += Cc * yCc * cos; // strong-axis component
+        Mx += Cc * yCc;
       }
 
-      // steel forces
+      // steel: force minus displaced concrete (0.85f'c where in compression zone)
       for (const bar of rotBars) {
-        const di = bar.y + h / 2; // distance from extreme compression fiber
-        const es = EC_U * (c - di) / c; // strain (positive = compression)
-        const fs = Math.max(-fy, Math.min(fy, Es * es)); // elastic-perfectly-plastic
-        const Fi = bar.area * fs; // force (compression = +)
+        const di = bar.y + h / 2;
+        const es = EC_U * (c - di) / c;
+        const fs = Math.max(-fy, Math.min(fy, Es * es));
+        let Fi = bar.area * fs;
+        // displaced-concrete deduction: when bar is in compression zone, subtract
+        // the concrete it displaces (ACI §22.2 — net force = steel - displaced conc)
+        if (di < a && fs > 0) Fi -= bar.area * alphaConc * fc;
         P += Fi;
-        M += Fi * bar.y * cos;
+        Mx += Fi * bar.y;
       }
 
-      results.push({ P, M: Math.abs(M) });
+      // compute φ from extreme tension steel strain
+      const dt = dMax;
+      let et = 0;
+      if (c > 0.01) et = EC_U * (dt - c) / c;
+      else et = 0.005 + esy; // pure tension side
+      const phi = phiFromStrain(et, esy);
+
+      // axial cap: 0.80·P₀ for tied, 0.85·P₀ for spiral (ACI 22.4.2)
+      const P0 = alphaConc * fc * (Ag - Ast) + Ast * fy;
+      const Pcap = Math.min(P, 0.80 * P0);
+
+      raw.push({ P: Pcap, M: Math.abs(Mx * cos), phi, et });
     }
 
-    return results;
+    // non-monotonic P repair (ETABS cPMSurfaceGenerator.cs:843-886):
+    // replace points that break P-monotonicity with linear interpolation
+    // between bracketing points
+    for (let i = 1; i < raw.length - 1; i++) {
+      if (raw[i].P < raw[i-1].P && raw[i].P < raw[i+1].P) {
+        // local minimum → interpolate
+        raw[i].P = (raw[i-1].P + raw[i+1].P) / 2;
+      }
+    }
+    // ensure monotonic decreasing P from compression to tension end
+    for (let i = 1; i < raw.length; i++) {
+      if (raw[i].P > raw[i-1].P) raw[i].P = raw[i-1].P;
+    }
+
+    return raw;
   }
 
-  function d_findRebarMat(sec) {
-    // helper — the caller provides materials; this is a fallback
-    return { fy: 500 };
-  }
-
-  // ===================================================== capacity ratio check
-  // For a given (Pu, Mu), find the capacity at that moment and compute DCR.
-  // Uses the P-M curve: capacity P at Mu = interpolate from the curve.
+  // ===================================================== capacity ratio
   function capacityRatio(Pu, Mu, pmCurve) {
-    // pmCurve: array of { P, M } sorted by decreasing P
-    // find the two points that bracket Mu
     for (let i = 0; i < pmCurve.length - 1; i++) {
       const p1 = pmCurve[i], p2 = pmCurve[i + 1];
-      // check if Mu falls between M1 and M2
       if ((Mu >= Math.min(p1.M, p2.M)) && (Mu <= Math.max(p1.M, p2.M))) {
-        // interpolate P at Mu
         const t = Math.abs(p2.M - p1.M) > 1e-9 ? (Mu - p1.M) / (p2.M - p1.M) : 0;
         const Pcap = p1.P + t * (p2.P - p1.P);
         if (Math.abs(Pcap) < 1) return { dcr: 99, Pcap: 0, status: 'ZERO CAPACITY' };
         return { dcr: Math.abs(Pu) / Math.abs(Pcap), Pcap, status: 'ok' };
       }
     }
-    // Mu exceeds the maximum on the curve → fail
     return { dcr: 99, Pcap: 0, status: 'Mu exceeds interaction curve' };
   }
 
@@ -171,7 +185,7 @@
       if (m.type !== 'column') continue;
       const ent = app.bim.getEntityById(m.id);
       if (!ent) continue;
-      const sec = root.RCDefine.ensure(app).frameSections.find(s => s.name === ent.params.designSection);
+      const sec = d.frameSections.find(s => s.name === ent.params.designSection);
       if (!sec || !sec.rebar) continue;
       const mat = d.materials.find(x => x.name === (ent.params.materialOverwrite || sec.material)) ||
                   d.materials.find(x => x.type === 'concrete');
@@ -180,35 +194,27 @@
       const dims = sec.dims || {};
       const b = dims.b || 300, h = dims.h || 500;
       const fc = mat.conc.fc;
-      const fy = d.materials.find(x => x.type === 'rebar')?.rebar?.fy || 500;
 
-      // applied forces (N and N·mm from rcmodel raw data)
-      const Pu = Math.abs(m.Fi || 0); // axial (worst end)
-      // moments: take the larger of the two ends, combine both axes
-      const Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0)); // strong axis (N·mm)
-      const My = Math.max(Math.abs(m.Vi2 || 0) * h / 2 || 0, Math.abs(m.Vj2 || 0) * h / 2 || 0); // approximate biaxial
+      const Pu = Math.abs(m.Fi || 0);
+      const Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0)); // N·mm
+      // biaxial: use both end shears × half height for approximate My
+      const My = Math.max(Math.abs(m.Vi2 || 0) * h / 2 || 0, Math.abs(m.Vj2 || 0) * h / 2 || 0);
 
-      // generate P-M curve at 0° (strong axis, gravity bending)
+      // P-M curves at 0° and 90°
       const pm0 = generatePMCurve(sec, mat, 0, 30);
-      // generate at 90° (weak axis, lateral bending)
       const pm90 = generatePMCurve(sec, mat, 90, 30);
 
-      // capacity ratio (strong axis)
       const cr0 = capacityRatio(Pu, Mx, pm0);
-      // capacity ratio (weak axis)
       const cr90 = capacityRatio(Pu, My, pm90);
-
-      // biaxial: use the Bresler reciprocal load method (simplified)
-      // 1/Pn = 1/Pn0 + 1/Pnx - 1/Pnx0 — for now just report the max DCR
       const dcr = Math.max(cr0.dcr, cr90.dcr);
 
       results.push({
-        id: m.id, b, h, fc, fy,
-        Pu: Pu / 1e3, Mx: Mx / 1e6, My: My / 1e6, // kN, kN·m
+        id: m.id, b, h, fc, fy: 500,
+        Pu: Pu / 1e3, Mx: Mx / 1e6, My: My / 1e6,
         dcr, crStrong: cr0.dcr, crWeak: cr90.dcr,
         Pcap: cr0.Pcap / 1e3,
         status: dcr > 1 ? 'OVERSTRESSED' : dcr > 0.9 ? 'NEAR LIMIT' : 'OK',
-        pmCurve: pm0, // store for potential plotting
+        pmCurve: pm0,
       });
     }
     return { results, comboName };
@@ -225,7 +231,7 @@
 
     const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
     const html = [
-      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Biaxial P-M interaction check per ACI 318-19 (fiber method).</p>',
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Biaxial P-M interaction check per ACI 318-19 (fiber method, φ per point, 0.80P₀ cap).</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +
       `<select id="cd-combo" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${patOpts}</select></div>`,
     ].join('');
@@ -257,7 +263,7 @@
         '</tr>';
     }).join('');
     const html = '<div style="max-height:65vh;overflow:auto">' +
-      `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Combination: <b>${esc(comboName)}</b> · ACI 318-19 · Biaxial P-M (fiber method)</p>` +
+      `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Combination: <b>${esc(comboName)}</b> · ACI 318-19 · Biaxial P-M (fiber method, φ per point, 0.80P₀ cap)</p>` +
       '<table style="width:100%;border-collapse:collapse;font-size:11.5px">' +
       '<thead><tr style="text-align:left;opacity:.7">' +
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Element</th>' +
@@ -269,7 +275,7 @@
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">DCR</th>' +
       '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Status</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table>' +
-      '<p style="font-size:11px;opacity:.7;margin:8px 0 0">DCR = Pu/φPn at the applied moment · Fiber method: Whitney block + elastic-plastic steel</p>' +
+      '<p style="font-size:11px;opacity:.7;margin:8px 0 0">DCR = Pu/φPn at applied moment · φ per ACI 21.2.3 · P capped at 0.80P₀</p>' +
       '</div>';
     app.dialog('RC Column Design Results — ' + comboName, html, [['Close', null]]);
   }

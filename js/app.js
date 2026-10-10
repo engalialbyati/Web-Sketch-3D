@@ -401,6 +401,7 @@ const RIBBON_TABS = {
     { title: 'Beam Design', tools: ['dsbbeam'] },
     { title: 'Column Design', tools: ['dscbcol'] },
     { title: 'Wall Design', tools: ['dswwall'] },
+    { title: 'Slab Design', tools: ['dsbslab'] },
   ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -480,6 +481,7 @@ const DEFINE_BUTTONS = {
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
   dscbcol: { label: 'Column Design', glyph: '▣', tip: 'ACI 318-19 column design: biaxial P-M interaction, DCR', cat: 'columnDesign' },
+  dsbslab: { label: 'Slab Design', glyph: '▦■', tip: 'ACI 318-19 Ch.7 slab design: flexure from shell forces + punching shear', cat: 'slabDesign' },
   dswwall: { label: 'Wall Design', glyph: '◫', tip: 'ACI 318-19 Ch.11 wall design: P-M interaction + in-plane shear', cat: 'wallDesign' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
