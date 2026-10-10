@@ -238,6 +238,55 @@
       }
     }
 
+    // ---- auto end offsets (ETABS End Length Offsets, Auto from
+    // Connectivity): the distance from the joint centerline to the FACE of
+    // the adjoining member — half the column's extent along the beam axis
+    // for beam ends, half the beam depth for column ends. Members stay
+    // full-length centerline elements (ETABS rigid-zone factor 0 default);
+    // the offsets define where DESIGN forces are extracted — at the faces,
+    // so the hogging peak over the column centerline is never designed.
+    {
+      const atNode = new Map(); // node index → members sharing it
+      for (const m of map) {
+        const f = frames[m.idx];
+        for (const ni of [f.ni, f.nj]) {
+          if (!atNode.has(ni)) atNode.set(ni, []);
+          atNode.get(ni).push({ idx: m.idx, ent: m.ent });
+        }
+      }
+      for (const m of map) {
+        const f = frames[m.idx];
+        const a = nodes[f.ni], b = nodes[f.nj];
+        const L = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+        const ux = (b.x - a.x) / (L || 1), uy = (b.y - a.y) / (L || 1);
+        const ends = [[f.ni, ux, uy], [f.nj, -ux, -uy]];
+        const offs = [0, 0];
+        for (let e = 0; e < 2; e++) {
+          const [n, ex, ey] = ends[e];
+          let off = 0;
+          if (m.ent.type === 'beam') {
+            for (const o of atNode.get(n) || []) {
+              if (o.idx === m.idx || o.ent.type !== 'column') continue;
+              const s = sectionOf(app, o.ent);
+              const g = (s && s.dims) || {};
+              const cb = (g.b ?? g.dia ?? 0.4), ch = (g.h ?? g.dia ?? 0.4);
+              // column extent from its axis along the beam direction
+              off = Math.max(off, cb / 2 * Math.abs(ex) + ch / 2 * Math.abs(ey));
+            }
+          } else { // column: half the deepest adjoining beam
+            for (const o of atNode.get(n) || []) {
+              if (o.idx === m.idx || o.ent.type !== 'beam') continue;
+              const s = sectionOf(app, o.ent);
+              const g = (s && s.dims) || {};
+              off = Math.max(off, (g.h ?? g.dia ?? 0.5) / 2);
+            }
+          }
+          offs[e] = Math.min(off, L * 0.45);
+        }
+        m.offI = offs[0]; m.offJ = offs[1]; // meters
+      }
+    }
+
     // drilling constraint: nodes used only by shells (not by any frame) have
     // no rz stiffness from shell elements — pin rz to avoid a singular solve
     const usedByFrame = new Set();
@@ -472,6 +521,8 @@
           Vj2: f.forces[8], Mj2: f.forces[10],
           id: model.map[i].ent ? model.map[i].ent.id : `f${i}`,
           type: model.map[i].ent ? model.map[i].ent.type : '?',
+          offI: (model.map[i].offI || 0) * 1000, // mm — auto end offsets
+          offJ: (model.map[i].offJ || 0) * 1000,
           stations,
         };
       });
@@ -520,7 +571,7 @@
             return { x: st.x, M: mix(type, Mvals), V: mix(type, Vvals) };
           });
         }
-        members.push({ id: m0.id, type: m0.type, ...m1 });
+        members.push({ id: m0.id, type: m0.type, offI: m0.offI, offJ: m0.offJ, ...m1 });
       });
       // shell resultants combine the same way (M11/M22/M12, N11/N22/N12);
       // null forces (degenerate cells) map to zeros so the mix stays defined

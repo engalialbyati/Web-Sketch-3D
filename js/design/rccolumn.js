@@ -238,8 +238,18 @@
       const b = (dims.b || 0.3) * 1000, h = (dims.h || 0.5) * 1000; // m → mm
       const fc = mat.conc.fc;
 
+      // moments AT THE BEAM FACES (ETABS auto end offsets): interpolate the
+      // station table at the offsets — the joint-centerline moment never
+      // designs the column. Minor-axis has no station table; stays at node.
+      const offI = m.offI || 0, offJ = m.offJ || 0; // mm
+      const Lst = m.stations && m.stations.length ? m.stations[m.stations.length - 1].x * 1000 : 0;
+      const stI = offI > 1 ? root.RCBeam.stationAt(m, offI) : null;
+      const stJ = offJ > 1 && Lst ? root.RCBeam.stationAt(m, Lst - offJ) : null;
+      const MxI = stI ? Math.abs(stI.M) * 1e6 : Math.abs(m.Mi || 0); // N·mm
+      const MxJ = stJ ? Math.abs(stJ.M) * 1e6 : Math.abs(m.Mj || 0);
+
       const Pu = Math.abs(m.Fi || 0);
-      let Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0)); // N·mm
+      let Mx = Math.max(MxI, MxJ); // N·mm
       let My = Math.max(Math.abs(m.Vi2 || 0) * h / 2 || 0, Math.abs(m.Vj2 || 0) * h / 2 || 0);
       // minimum eccentricity preference (ACI 6.2.5): e_min = h/30 (or 20mm)
       const eMinH = h / 30, eMinB = b / 30;

@@ -77,6 +77,7 @@
       M3i: kNm(m.Mi || 0), M3j: kNm(m.Mj || 0),
       M2i: kNm(m.Mi2 || 0), M2j: kNm(m.Mj2 || 0),
       Mmax: sMax, Mmin: sMin,
+      offI: m.offI || 0, offJ: m.offJ || 0,
     };
   }
 
@@ -149,10 +150,13 @@
       return table(['P (kN)', 'V2 (kN)', 'V3 (kN)', 'T (kN·m)', 'M2 i/j (kN·m)', 'M3 i/j (kN·m)', 'M span max/min'],
         ['<tr>' + td(f.P.toFixed(1)) + td(f.V2.toFixed(1)) + td(f.V3.toFixed(1)) + td(f.T.toFixed(1)) +
         td(`${f.M2i.toFixed(1)} / ${f.M2j.toFixed(1)}`) + td(`${f.M3i.toFixed(1)} / ${f.M3j.toFixed(1)}`) +
-        td(f.Mmax == null ? '—' : `${f.Mmax.toFixed(1)} / ${f.Mmin.toFixed(1)}`) + '</tr>']);
+        td(f.Mmax == null ? '—' : `${f.Mmax.toFixed(1)} / ${f.Mmin.toFixed(1)}`) + '</tr>' ]);
     }
+    const offNote = (f.offI != null || f.offJ != null)
+      ? `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">Auto end offsets: I ${Math.round(f.offI || 0)} mm · J ${Math.round(f.offJ || 0)} mm — design forces taken at the adjoining member faces (ETABS auto from connectivity)</p>`
+      : '';
     const row = (k) => td(`${f[k][0].toFixed(2)} / ${f[k][1].toFixed(2)}`);
-    return `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">${f.nCells} shell cell(s) — max/min:</p>` +
+    return offNote + `<p style="font-size:11px;opacity:.7;margin:2px 0 2px">${f.nCells} shell cell(s) — max/min:</p>` +
       table(['M11', 'M22', 'M12 (kN·m/m)', 'Q11', 'Q22', 'N11', 'N22', 'N12 (kN/m)'],
         ['<tr>' + ['M11', 'M22', 'M12', 'Q11', 'Q22', 'N11', 'N22', 'N12'].map(k => row(k)).join('') + '</tr>']);
   }
@@ -165,8 +169,9 @@
       : '<span style="padding:1px 6px;border-radius:3px;font-size:10px;font-weight:bold;background:#ffebee;color:#c62828">FAIL</span>';
     const bars = b => b ? `${b.count}Ø${b.dia}${b.spacing ? '@' + b.spacing : ''}` : '—';
     if (ent.type === 'beam') {
-      return table(['M u top/bot (kN·m)', 'As req top/bot (mm²)', 'Top bars', 'Bot bars', 'Stirrups', 'Torsion'],
+      return table(['Mu top/bot at faces (kN·m)', 'Vu at face (kN)', 'As req top/bot (mm²)', 'Top bars', 'Bot bars', 'Stirrups', 'Torsion'],
         ['<tr>' + td(`${(d.MuTop / 1e6).toFixed(1)} / ${(d.MuBot / 1e6).toFixed(1)}`) +
+        td((d.Vu / 1e3).toFixed(1)) +
         td(`${Math.round(d.AsTop)} / ${Math.round(d.AsBot)}`) +
         td(bars(d.topBars)) + td(bars(d.botBars)) + td(d.stirrups ? `Ø${d.stirrups.dia}@${d.stirrups.spacing}` : '—') +
         td(d.torsion ? (d.torsion.needed ? (d.torsion.ok === false ? 'SECTION TOO SMALL' : `At/s=${d.torsion.AtOverS}`) : 'below threshold') : '—') + '</tr>']);

@@ -206,6 +206,24 @@
     };
   }
 
+  // ============================================================ station interp
+  // Linear interpolation of the 11-station table at an absolute x (mm).
+  // Stations carry the internal moment M (kN·m, sagging positive) and shear
+  // V (kN) from the analysis statics.
+  function stationAt(m, xmm) {
+    const st = m && m.stations;
+    if (!st || st.length < 2) return null;
+    const L = st[st.length - 1].x * 1000;
+    const x = Math.max(0, Math.min(xmm, L));
+    const t = x / Math.max(L, 1) * (st.length - 1);
+    const i = Math.min(Math.floor(t), st.length - 2);
+    const f = t - i;
+    return {
+      M: st[i].M + f * (st[i + 1].M - st[i].M),   // kN·m
+      V: st[i].V + f * (st[i + 1].V - st[i].V),   // kN
+    };
+  }
+
   // ============================================================ full design
   // Design all beams for a given combination.
   // Returns per-member, per-station design results with clause references.
@@ -250,11 +268,23 @@
       const dPrime = cover + stirrupDia + assumedBar / 2;
       const fyt = fy;
 
-      // design moments from the combo/pattern end forces (N·mm)
-      const Mi = m.Mi || 0, Mj = m.Mj || 0;
-      const MuTop = Math.max(-Mi, -Mj, 0);
-      const MuBot = Math.max(Mi, Mj, 0);
-      const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0));
+      // design moments AT THE FACES of the supporting members (ETABS End
+      // Length Offsets, auto from connectivity): the hogging peak sits over
+      // the column centerline and is never designed — steel follows the
+      // face moments, bottom steel follows the span envelope
+      const offI = m.offI || 0, offJ = m.offJ || 0; // mm
+      const Lst = m.stations && m.stations.length ? m.stations[m.stations.length - 1].x * 1000 : 0;
+      const fi = offI > 1 ? stationAt(m, offI) : (m.stations ? m.stations[0] : null);
+      const fj = offJ > 1 ? stationAt(m, Lst - offJ) : (m.stations ? m.stations[m.stations.length - 1] : null);
+      const MfI = fi ? fi.M : -(m.Mi || 0) / 1e6;   // kN·m at face I
+      const MfJ = fj ? fj.M : -(m.Mj || 0) / 1e6;   // kN·m at face J
+      const Mi = m.Mi || 0, Mj = m.Mj || 0;         // node values (reference)
+      const MuTop = Math.max(-MfI, -MfJ, 0) * 1e6;  // N·mm — hogging at faces
+      const spanMax = m.stations ? Math.max(...m.stations.map(s => s.M)) : Math.max(MfI, MfJ);
+      const MuBot = Math.max(spanMax, MfI, MfJ, 0) * 1e6;
+      const VfI = fi ? fi.V : -(m.Vi || 0) / 1e3;   // kN at face I
+      const VfJ = fj ? fj.V : (m.Vj || 0) / 1e3;
+      const Vu = Math.max(Math.abs(VfI), Math.abs(VfJ)) * 1e3; // N — shear at face
 
       // design flexure
       let topResult = { As: 0 };
@@ -311,6 +341,7 @@
       results.push({
         id: m.id, b, h, dTop, dBot, fc, fy,
         MuTop, MuBot, Vu,
+        offI, offJ, MfI, MfJ,
         AsTop: AsTopRaw, AsBot: AsBotRaw, AsMinTop, AsMax,
         topDoubly: topResult.doubly || false,
         botDoubly: botResult.doubly || false,
@@ -463,5 +494,5 @@
     app.dialog('RC Beam Design Results — ' + comboName, html, [['Close', null]]);
   }
 
-  root.RCBeam = { designAllBeams, designRectFlexure, designTBeamFlange, designShear, devLength, open, phiFlexure, beta1 };
+  root.RCBeam = { designAllBeams, designRectFlexure, designTBeamFlange, designShear, devLength, stationAt, open, phiFlexure, beta1 };
 })(window);
