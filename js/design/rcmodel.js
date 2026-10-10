@@ -815,6 +815,89 @@
     }
   }
 
-  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, forceTable, open, openAssign };
+    // ============================================== response spectrum
+  function responseSpectrumAnalysis(app, rsFuncName) {
+    const d = root.RCDefine.ensure(app);
+    const model = buildModel(app);
+    if (!model.frames.length && !model.shells.length) return { error: 'No elements.' };
+    const modalCase = d.loadCases.find(c => c.type === 'modal');
+    const nModes = (modalCase && modalCase.data && modalCase.data.numModes) || 6;
+    const mmNodes = model.nodes.map(n => ({ x: n.x*1000, y: n.y*1000, z: n.z*1000, fixed: n.fixed }));
+    const mmFrames = model.frames.map(f => ({ ...f, rho: f.rho || 2.4e-9 }));
+    const modal = FE().modalAnalysis(mmNodes, mmFrames, [], nModes);
+    if (!modal.modes || !modal.modes.length) return { error: 'No modes.' };
+    const rsFn = d.rsFunctions.find(f => f.name === rsFuncName);
+    if (!rsFn) return { error: 'RS function not found.' };
+    const damping = 0.05;
+    const modalResults = modal.modes.slice(0, nModes).map(mode => {
+      const Sa = root.RCDefine && root.RCDefine.rsValue
+        ? root.RCDefine.rsValue(rsFn, mode.T) : 0.4 * 9.81;
+      return { T: mode.T, Sa, freq: mode.T > 0 ? 1/mode.T : 0 };
+    });
+    return { modal: modalResults, nModes: modal.modes.length, damping };
+  }
+  // ============================================== time history
+  function timeHistoryAnalysis(app, thCaseName) {
+    const d = root.RCDefine.ensure(app);
+    const model = buildModel(app);
+    if (!model.frames.length) return { error: 'No frames.' };
+    const thCase = d.loadCases.find(c => c.name === thCaseName && c.type === 'time history');
+    if (!thCase) return { error: 'TH case not found.' };
+    const thFn = d.thFunctions.find(f => f.name === (thCase.data && thCase.data.fn));
+    if (!thFn || !thFn.points || !thFn.points.length) return { error: 'TH function has no points.' };
+    const nodes = model.nodes.map(n => ({ x: n.x*1000, y: n.y*1000, z: n.z*1000, fixed: n.fixed }));
+    const nDof = nodes.length * 6;
+    const K = []; for (let i = 0; i < nDof; i++) K.push(new Float64Array(nDof));
+    for (const f of model.frames) {
+      const a = nodes[f.ni], b = nodes[f.nj];
+      const L = G.dist(a, b); if (L < 1e-6) continue;
+      const Kl = FE().frameK(f.E, f.A, f.Iy, f.Iz, f.J, L, f.G);
+      const R = FE().rotationMatrix(a, b);
+      const Kg = FE().transformFrame(Kl, R);
+      const dofs = []; for (const ni of [f.ni, f.nj]) for (let dd = 0; dd < 6; dd++) dofs.push(ni*6+dd);
+      for (let ii = 0; ii < 12; ii++) for (let jj = 0; jj < 12; jj++) K[dofs[ii]][dofs[jj]] += Kg[ii][jj];
+    }
+    const Mvec = FE().lumpedMass(nodes, model.frames.map(f => ({ ...f, rho: f.rho || 2.4e-9 })), [], null);
+    const xi = 0.05, T1 = 0.2, T2 = 1.5;
+    const w1 = 2*Math.PI/T1, w2 = 2*Math.PI/T2;
+    const a0 = 2*xi*w1*w2/(w1+w2), a1 = 2*xi/(w1+w2);
+    const gamma = 0.5, beta = 0.25, dt = 0.01;
+    const nSteps = Math.min(500, (thFn.points.length || 200));
+    const u = new Float64Array(nDof), v = new Float64Array(nDof), acc = new Float64Array(nDof);
+    const Keff = []; for (let i = 0; i < nDof; i++) { Keff.push(new Float64Array(nDof));
+      for (let j = 0; j < nDof; j++) Keff[i][j] = K[i][j]*(1 + a1/(beta*dt)) + (Mvec[i]/(beta*dt*dt))*(i%6<3?1:0);
+    }
+    const maxU = new Float64Array(nDof);
+    const pts = thFn.points;
+    for (let step = 0; step < nSteps; step++) {
+      const t = step * dt;
+      let Fg = 0;
+      for (let i = 0; i < pts.length-1; i++) {
+        if (t >= pts[i].t && t <= pts[i+1].t) { Fg = pts[i].v + (t-pts[i].t)/Math.max(pts[i+1].t-pts[i].t,1e-9)*(pts[i+1].v-pts[i].v); break; }
+      }
+      const F = new Float64Array(nDof);
+      for (let i = 0; i < nDof; i++) {
+        F[i] = Mvec[i] * Fg * (thFn.scale || 1);
+        F[i] += Mvec[i] * (u[i]/(beta*dt*dt) + v[i]/(beta*dt) + (0.5/beta-1)*acc[i]);
+      }
+      for (const n of nodes) { if (!n.fixed) continue;
+        for (let dd = 0; dd < 6; dd++) { if (!n.fixed[dd]) continue;
+          const dof = nodes.indexOf(n)*6+dd;
+          for (let j = 0; j < nDof; j++) { Keff[dof][j] = 0; Keff[j][dof] = 0; }
+          Keff[dof][dof] = 1; F[dof] = 0;
+        }
+      }
+      const du = FE().solveLDLT(Keff.map(r => Float64Array.from(r)), [F])[0];
+      for (let i = 0; i < nDof; i++) {
+        u[i] += du[i];
+        v[i] = gamma/(beta*dt)*du[i] - (gamma/beta-1)*v[i];
+        acc[i] = 1/(beta*dt*dt)*du[i] - v[i]/(beta*dt) - (0.5/beta-1)*acc[i];
+        if (Math.abs(u[i]) > Math.abs(maxU[i])) maxU[i] = u[i];
+      }
+    }
+    return { maxU: Array.from(maxU), nSteps, dt };
+  }
+  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, forceTable, open, openAssign,
+    responseSpectrumAnalysis, timeHistoryAnalysis };
 })(window);
 
