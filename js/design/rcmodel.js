@@ -265,6 +265,14 @@
       const fixity = ent && ent.ent.params.baseFixity;
       n.fixed = fixity === 'pinned' ? fixPin : fixAll;
     }
+    // ground-level wall bases: a wall standing on the lowest level is
+    // supported along its bottom edge (ETABS wall support line)
+    for (const ni of usedByShell) {
+      const n = nodes[ni];
+      if (Math.abs(n.z - zMin) > 1e-6) continue;
+      if (n.fixed && n.fixed[0] && n.fixed[2]) continue; // already a column base
+      n.fixed = n.fixed ? n.fixed.map((v, k) => (k === 5 ? v : v || 1)) : [1, 1, 1, 0, 1, 1];
+    }
 
     return { nodes, frames, shells: shellEls, map, skipped, patternsData: d, mesh: dMesh };
   }
@@ -302,11 +310,28 @@
           if (m.ent.type === 'beam') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - w };
           else {
             const a = model.nodes[model.frames[i].ni], b = model.nodes[model.frames[i].nj];
-            const lenM = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-            const half = w * lenM / 2;
+            const lenMM = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) * 1000;
+            const half = w * lenMM / 2; // N — line load × length in mm
             addNodal(model.frames[i].ni, 0, 0, -half);
             addNodal(model.frames[i].nj, 0, 0, -half);
           }
+        }
+        // shells (slabs/roofs/walls): tributary area × thickness × unit weight
+        for (const sh of model.shells) {
+          const owner = app.bim.getEntityById(sh.entId);
+          if (!owner) continue;
+          const sec = sectionOf(app, owner);
+          const mat = materialOf(app, sec, owner);
+          if (!mat) continue;
+          const gamma = (mat.weight ? mat.weight.value : 25) * 1000; // N/m³
+          const p1 = model.nodes[sh.n1], p2 = model.nodes[sh.n2], p3 = model.nodes[sh.n3], p4 = model.nodes[sh.n4];
+          // true 3D quad area from its two edges (works for slabs AND walls)
+          const ax = p2.x - p1.x, ay = p2.y - p1.y, az = p2.z - p1.z;
+          const bx = p4.x - p1.x, by = p4.y - p1.y, bz = p4.z - p1.z;
+          const Acell = Math.hypot(ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx); // m²
+          const t = sh.t / 1000;                                       // m
+          const F = Acell * t * gamma * pat.selfWtMult;                // N
+          for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) addNodal(ni, 0, 0, -F / 4);
         }
       }
 
@@ -407,6 +432,9 @@
         // update member axial forces for the next geometric pass
         geo = forces.map(f => (f.forces[0] + f.forces[6]) / 2);
       }
+      // shell element forces (walls + slabs) from the converged displacement field
+      const shellRes = model.shells.length ? FE().shellForces(model.nodes, model.shells, U) : [];
+
       // support reactions: R = K·u − f at fixed dofs (re-assemble w/o destroy)
       reactions = FE().computeReactions(model.nodes, model.frames, model.shells, [loads[p]],
         [U], { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
@@ -442,11 +470,12 @@
           Ti: f.forces[3],
           Vi2: -f.forces[2], Mi2: -f.forces[4],
           Vj2: f.forces[8], Mj2: f.forces[10],
-          id: m.ent ? m.ent.id : `f${i}`, type: m.ent ? m.ent.type : '?',
+          id: model.map[i].ent ? model.map[i].ent.id : `f${i}`,
+          type: model.map[i].ent ? model.map[i].ent.type : '?',
           stations,
         };
       });
-      results.patterns.push({ name: patternNames[p], members, reactions });
+      results.patterns.push({ name: patternNames[p], members, reactions, shells: shellRes });
     }
 
     // combinations over pattern end-forces — add / absolute / SRSS / envelope
@@ -465,7 +494,9 @@
       }
       if (!used) continue;
       const type = cb.type || 'add';
-      const members = results.patterns[0].members.map((m0, mi) => {
+      const members = [];
+      results.patterns[0].members.forEach((m0, mi) => {
+        if (!m0) return; // dummy links / shells produce null member rows
         const pick = k => {
           const vals = [];
           for (let p = 0; p < loads.length; p++) {
@@ -489,9 +520,35 @@
             return { x: st.x, M: mix(type, Mvals), V: mix(type, Vvals) };
           });
         }
-        return { id: m0.id, type: m0.type, ...m1 };
+        members.push({ id: m0.id, type: m0.type, ...m1 });
       });
-      results.combos.push({ name: cb.name, members });
+      // shell resultants combine the same way (M11/M22/M12, N11/N22/N12);
+      // null forces (degenerate cells) map to zeros so the mix stays defined
+      const shells = (results.patterns[0].shells || []).map((s0, si) => {
+        const pick = k => {
+          const vals = [];
+          for (let p = 0; p < loads.length; p++) {
+            const sf = results.patterns[p].shells[si];
+            if (w[p]) vals.push(w[p] * ((sf && sf.forces && sf.forces[k]) || 0));
+          }
+          if (type === 'envelope') return { min: Math.min(...vals, 0), max: Math.max(...vals, 0) };
+          return mix(type, vals);
+        };
+        const f = {};
+        for (const k of ['M11', 'M22', 'M12', 'N11', 'N22', 'N12']) f[k] = pick(k);
+        return { n1: s0.n1, n2: s0.n2, n3: s0.n3, n4: s0.n4, entId: s0.entId, forces: f };
+      });
+      // reactions combine linearly like forces — wall base resultants read them
+      const reactions = (results.patterns[0].reactions || []).map((r0, ri) => {
+        const R = [0, 0, 0, 0, 0, 0];
+        for (let p = 0; p < loads.length; p++) {
+          if (!w[p]) continue;
+          const rp = results.patterns[p].reactions[ri];
+          if (rp) for (let k = 0; k < 6; k++) R[k] += w[p] * rp.R[k];
+        }
+        return { node: r0.node, R };
+      });
+      results.combos.push({ name: cb.name, members, shells, reactions });
     }
 
     // modal: run when a modal load case is defined (numModes honored)
@@ -504,6 +561,7 @@
     }
 
     results.ms = performance.now() - t0;
+    results.model = model; // shell nodes + connectivity for design force recovery
     app.rcResults = results;
     return results;
   }
@@ -537,6 +595,8 @@
         r.patterns.length + ' pattern(s), ' + r.combos.length + ' combo(s), ' + r.ms.toFixed(0) + ' ms');
       return;
     }
+    if (cat === 'rsAnalysis') { rsDialog(app); return; }
+    if (cat === 'thAnalysis') { thDialog(app); return; }
     if (cat === 'forceTable') {
       const table = forceTable(app);
       if (!table) { app.toast('Run the analysis first', true); return; }
@@ -816,6 +876,60 @@
   }
 
     // ============================================== response spectrum
+  function rsDialog(app) {
+    const d = root.RCDefine.ensure(app);
+    const fns = d.rsFunctions || [];
+    if (!fns.length) { app.toast('Define an RS function first (Define ▸ Functions)', true); return; }
+    const opts = fns.map(f => `<option value="${f.name}">${f.name}</option>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Modal superposition on the selected response-spectrum function — period, frequency and spectral acceleration per mode (5% damping).</p>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">RS Function</span>' +
+      `<select id="rs-fn" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${opts}</select></div>`,
+    ].join('');
+    app.dialog('Response Spectrum Analysis', html, [
+      ['Run', () => {
+        const r = responseSpectrumAnalysis(app, document.getElementById('rs-fn').value);
+        if (r.error) { app.toast(r.error, true); return false; }
+        const rows = r.modal.map((m, i) =>
+          `<tr><td style="padding:3px 8px">${i + 1}</td><td>${m.T.toFixed(4)}</td><td>${m.freq.toFixed(3)}</td><td>${(m.Sa / 9.81).toFixed(4)}</td></tr>`).join('');
+        const html2 = '<div style="max-height:60vh;overflow:auto">' +
+          `<p style="font-size:12px;margin:0 0 6px"><b>${r.nModes}</b> mode(s) · ζ = ${r.damping * 100}% · Sa in g</p>` +
+          '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;opacity:.7">' +
+          '<th style="padding:2px 8px">Mode</th><th>T (s)</th><th>f (Hz)</th><th>Sa (g)</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+        app.dialog('Response Spectrum — Modal Results', html2, [['Close', null]]);
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
+  function thDialog(app) {
+    const d = root.RCDefine.ensure(app);
+    const cases = (d.loadCases || []).filter(c => c.type === 'time history');
+    if (!cases.length) { app.toast('Define a time-history load case first (Define ▸ Load Cases)', true); return; }
+    const opts = cases.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Newmark-β direct integration (γ=½, β=¼, Δt=10 ms, Rayleigh ζ=5%) — reports peak displacement per node.</p>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">TH Case</span>' +
+      `<select id="th-case" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${opts}</select></div>`,
+    ].join('');
+    app.dialog('Time History Analysis', html, [
+      ['Run', () => {
+        const r = timeHistoryAnalysis(app, document.getElementById('th-case').value);
+        if (r.error) { app.toast(r.error, true); return false; }
+        const mm = r.maxU.reduce((a, v, i) => Math.abs(v) > Math.abs(r.maxU[a]) ? i : a, 0);
+        const maxMM = Math.abs(r.maxU[mm]) * 1000;
+        const html2 = `<div style="font-size:12px;line-height:1.7">` +
+          `<p style="margin:0 0 4px"><b>Peak displacement:</b> ${maxMM.toFixed(2)} mm at DOF ${mm} (node ${Math.floor(mm / 6) + 1})</p>` +
+          `<p style="margin:0 0 4px">Steps: ${r.nSteps} × Δt = ${r.dt} s</p>` +
+          `<p style="margin:0;opacity:.7">Full per-node history is stored on the model (app.rcResults.th).</p></div>`;
+        app.dialog('Time History — Peak Response', html2, [['Close', null]]);
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
   function responseSpectrumAnalysis(app, rsFuncName) {
     const d = root.RCDefine.ensure(app);
     const model = buildModel(app);
@@ -868,6 +982,11 @@
       for (let j = 0; j < nDof; j++) Keff[i][j] = K[i][j]*(1 + a1/(beta*dt)) + (Mvec[i]/(beta*dt*dt))*(i%6<3?1:0);
     }
     const maxU = new Float64Array(nDof);
+    // fixed-dof list computed once — zeroing per step was O(steps·nodes·nDof)
+    const fixedDofs = [];
+    for (const n of nodes) { if (!n.fixed) continue;
+      for (let dd = 0; dd < 6; dd++) if (n.fixed[dd]) fixedDofs.push(nodes.indexOf(n) * 6 + dd);
+    }
     const pts = thFn.points;
     for (let step = 0; step < nSteps; step++) {
       const t = step * dt;
@@ -880,13 +999,7 @@
         F[i] = Mvec[i] * Fg * (thFn.scale || 1);
         F[i] += Mvec[i] * (u[i]/(beta*dt*dt) + v[i]/(beta*dt) + (0.5/beta-1)*acc[i]);
       }
-      for (const n of nodes) { if (!n.fixed) continue;
-        for (let dd = 0; dd < 6; dd++) { if (!n.fixed[dd]) continue;
-          const dof = nodes.indexOf(n)*6+dd;
-          for (let j = 0; j < nDof; j++) { Keff[dof][j] = 0; Keff[j][dof] = 0; }
-          Keff[dof][dof] = 1; F[dof] = 0;
-        }
-      }
+      for (const dof of fixedDofs) { Keff[dof][dof] = 1; F[dof] = 0; }
       const du = FE().solveLDLT(Keff.map(r => Float64Array.from(r)), [F])[0];
       for (let i = 0; i < nDof; i++) {
         u[i] += du[i];

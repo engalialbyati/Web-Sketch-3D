@@ -52,8 +52,9 @@
   // displaced-concrete deduction, non-monotonic repair.
   function generatePMCurve(sec, mat, angle, nPoints = 40, capType = 'design') {
     const dims = sec.dims || {};
-    const b = (dims.b || 300);
-    const h = (dims.h || 500);
+    // section dims are stored in meters (BIM units); the design math runs in mm
+    const b = (dims.b || 0.3) * 1000;
+    const h = (dims.h || 0.5) * 1000;
     const fc = mat.conc ? mat.conc.fc : 25;
     // capacity type: 'design' = φ applied + 0.80P₀ cap
     //                'expected' = no φ, overstrength Ω = 1.25 on fy
@@ -137,7 +138,12 @@
       const P0 = alphaConc * fc * (Ag - Ast) + Ast * fy;
       const Pcap = Math.min(P, 0.80 * P0);
 
-      raw.push({ P: Pcap, M: Math.abs(Mx * cos), phi, et });
+      // moment resolved on the DOMINANT global axis of the sweep angle:
+      // 0° → strong-axis (X) moment, 90° → weak-axis (Y) moment. Storing
+      // Mx·cos alone zeroed the 90° curve and broke the weak-axis check.
+      const mComp = Math.abs(cos) >= Math.abs(sin) ? cos : sin;
+
+      raw.push({ P: Pcap, M: Math.abs(Mx * mComp), phi, et });
     }
 
     // non-monotonic P repair (ETABS cPMSurfaceGenerator.cs:843-886):
@@ -196,7 +202,7 @@
       if (!mat || !mat.conc) continue;
 
       const dims = sec.dims || {};
-      const b = dims.b || 300, h = dims.h || 500;
+      const b = (dims.b || 0.3) * 1000, h = (dims.h || 0.5) * 1000; // m → mm
       const fc = mat.conc.fc;
 
       const Pu = Math.abs(m.Fi || 0);

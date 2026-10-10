@@ -394,6 +394,7 @@ const RIBBON_TABS = {
   ] },
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['anlrun'] },
+    { title: 'Dynamics', tools: ['anlrs', 'anlth'] },
     { title: 'Diagrams', tools: ['anldiagram', 'anlforce'] },
     { title: 'Results', tools: ['anlforces'] },
   ] },
@@ -402,6 +403,8 @@ const RIBBON_TABS = {
     { title: 'Column Design', tools: ['dscbcol'] },
     { title: 'Wall Design', tools: ['dswwall'] },
     { title: 'Slab Design', tools: ['dsbslab'] },
+    { title: 'Connections', tools: ['dspunch', 'dssbe'] },
+    { title: 'Foundation', tools: ['dsfoot'] },
     { title: 'Report', tools: ['dsreport'] },
     { title: '3D View', tools: ['dsviz'] },
   ] },
@@ -478,6 +481,8 @@ const RC_TABS = ['define', 'assign', 'analyze', 'rcdesign'];
 // ribbon stays readable; the long form lives in the hover tooltip
 const DEFINE_BUTTONS = {
   anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
+  anlrs: { label: 'Response Spectrum', glyph: '∿', tip: 'Modal superposition on an RS function — period, frequency, Sa per mode (5% damping)', cat: 'rsAnalysis' },
+  anlth: { label: 'Time History', glyph: '〰', tip: 'Newmark-β direct integration of a time-history case — peak node displacements', cat: 'thAnalysis' },
   anldiagram: { label: 'Show Diagrams', glyph: '∠', tip: 'Toggle moment/shear diagrams on beams in the 3D viewport (cycles: off → M3 → V3 → off)', cat: 'showDiagrams' },
   anlforce: { label: 'Force Dialog', glyph: '≡', tip: 'Per-member BMD/SFD canvas with values', cat: 'showForceDialog' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
@@ -487,6 +492,9 @@ const DEFINE_BUTTONS = {
   dsreport: { label: 'Design Report', glyph: '═', tip: 'Generate printable design summary report (all members, ACI refs, DCRs)', cat: 'designReport' },
   dsbslab: { label: 'Slab Design', glyph: '▦■', tip: 'ACI 318-19 Ch.7 slab design: flexure from shell forces + punching shear', cat: 'slabDesign' },
   dswwall: { label: 'Wall Design', glyph: '◫', tip: 'ACI 318-19 Ch.11 wall design: P-M interaction + in-plane shear', cat: 'wallDesign' },
+  dspunch: { label: 'Punching Check', glyph: '⊙▪', tip: 'Two-way punching at column tops from combo forces — drop-panel aware (ACI 22.6)', cat: 'punchingDesign' },
+  dssbe: { label: 'SBE Check', glyph: '◫▪', tip: 'ACI 18.10.6 special boundary elements: stress-limit + NA-depth methods', cat: 'sbeCheck' },
+  dsfoot: { label: 'Foundation', glyph: '⬛⊥', tip: 'Isolated footing design: bearing, one/two-way shear, flexure, development', cat: 'footingDesign' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
@@ -5201,8 +5209,9 @@ class App {
           const defBtn = DEFINE_BUTTONS[id];
           mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
             defBtn.tip, 'tbtn-def', '{}', () => {
-              const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring'].includes(defBtn.cat);
-              const mod = isRCModel ? window.RCModel : window.RCDefine;
+              const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis'].includes(defBtn.cat);
+              const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
+              const mod = isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
               if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
             });
           continue;

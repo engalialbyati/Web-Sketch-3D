@@ -140,6 +140,95 @@
     };
   }
 
+  // ============================================================ wall forces
+  // Walls are meshed into flat-shell quads (local x along the wall length,
+  // local y vertical, local z the wall normal). Design forces come from
+  // integrating the membrane resultants over a horizontal cut — ETABS pier
+  // integration: top AND bottom stations of each pier:
+  //   P = Σ(−N22)·w   (N22 tension-positive → compression stored positive)
+  //   V = Σ(N12)·w    (in-plane horizontal shear across the cut)
+  //   M = Σ(−N22)·(x−x̄)·w   (in-plane moment about the wall normal)
+  function wallCut(model, cells, nd, zTarget) {
+    let row = cells.filter(s => {
+      const zMid = (nd[s.n1].z + nd[s.n4].z) / 2;
+      return Math.abs(zMid - zTarget) < 1e-4 || zMid < zTarget;
+    });
+    if (!row.length) return null;
+    // keep only the cells of the row closest to the target elevation
+    const zMax = Math.max(...row.map(s => (nd[s.n1].z + nd[s.n4].z) / 2));
+    row = row.filter(s => Math.abs((nd[s.n1].z + nd[s.n4].z) / 2 - zMax) < 1e-4);
+    let P = 0, V = 0, xw = 0, wTot = 0;
+    const seg = [];
+    for (const s of row) {
+      const a = nd[s.n1], b = nd[s.n2];
+      const wmm = Math.hypot(b.x - a.x, b.y - a.y) * 1000; // cell width, mm
+      if (wmm < 1e-6) continue;
+      const n22 = -(typeof s.forces.N22 === 'number' ? s.forces.N22 : 0);
+      const n12 = (typeof s.forces.N12 === 'number' ? s.forces.N12 : 0);
+      const cx = (a.x + b.x) / 2 * 1000;
+      P += n22 * wmm;   // N
+      V += n12 * wmm;   // N
+      seg.push({ cx, w: wmm, n22 });
+      xw += cx * wmm; wTot += wmm;
+    }
+    if (!wTot) return null;
+    const xBar = xw / wTot;
+    let M = 0;
+    for (const g of seg) M += g.n22 * (g.cx - xBar) * g.w; // N·mm
+    return { P, V, M, nCells: row.length };
+  }
+
+  function wallBaseForces(model, srcShells, ent, reactions) {
+    const nd = model.nodes;
+    const cells = srcShells.filter(s => s && s.forces && s.entId === ent.id);
+    if (!cells.length) return null;
+    // wall base elevation: the lowest cell row of this wall
+    const zBase = Math.min(...cells.map(s => (nd[s.n1].z + nd[s.n4].z) / 2));
+    const zTop = Math.max(...cells.map(s => (nd[s.n1].z + nd[s.n4].z) / 2));
+    const base = wallCut(model, cells, nd, zBase);
+    const top = zTop > zBase + 1e-6 ? wallCut(model, cells, nd, zTop) : null;
+    if (!base) return null;
+
+    // Supported base cut: loads entering the structure AT supported nodes
+    // never create interior stress, so center-point integration under-reads
+    // the axial. The support reactions ARE the exact base resultants for a
+    // ground-level wall — use them whenever the bottom row is supported.
+    if (reactions && reactions.length) {
+      const byNode = new Map(reactions.map(r => [r.node, r]));
+      const rowCells = cells.filter(s => Math.abs((nd[s.n1].z + nd[s.n4].z) / 2 - zBase) < 1e-4);
+      const supported = new Map(); // node → {R, x}
+      for (const s of rowCells) {
+        for (const ni of [s.n1, s.n2]) {
+          const rec = byNode.get(ni);
+          if (!rec || !nd[ni].fixed || !nd[ni].fixed[2]) continue; // not a support
+          supported.set(ni, { R: rec.R, x: nd[ni].x, y: nd[ni].y });
+        }
+      }
+      if (supported.size >= 2) {
+        // in-plane direction = along the wall length (bottom edge)
+        const arr = [...supported.values()];
+        const dx = arr[arr.length - 1].x - arr[0].x, dy = arr[arr.length - 1].y - arr[0].y;
+        const len = Math.hypot(dx, dy) || 1;
+        const tx = dx / len, ty = dy / len;
+        let xw = 0, P = 0, V = 0;
+        for (const s of arr) {
+          P += s.R[2];                    // N — vertical support force = compression
+          V += s.R[0] * tx + s.R[1] * ty; // in-plane horizontal = shear
+          xw += s.x * s.R[2];
+        }
+        if (Math.abs(P) > 1e-6) {
+          const xBar = xw / P;            // m — reaction centroid
+          let M = 0;
+          for (const s of arr) M += s.R[2] * (s.x - xBar) * 1000; // N·mm
+          base.P = P; base.V = V; base.M = M; base.fromReactions = true;
+          base.nCells = supported.size;
+        }
+      }
+    }
+
+    return { base, top };
+  }
+
   // ============================================================ full design
   function designAllWalls(app, comboName) {
     const R = app.rcResults;
@@ -153,12 +242,17 @@
       if (!pat) return { error: `Combination "${comboName}" not found.` };
     }
 
+    const model = R.model;
+    if (!model || !model.shells || !model.shells.length)
+      return { error: 'No shell model — re-run the analysis.' };
+    const src = combo || pat;
+    const srcShells = (src.shells || []).filter(s => s && s.forces);
+
     const results = [];
-    const members = combo ? combo.members : pat.members;
-    for (const m of members) {
-      if (m.type !== 'wall') continue;
-      const ent = app.bim.getEntityById(m.id);
-      if (!ent) continue;
+    for (const ent of app.bim.entities) {
+      if (ent.type !== 'wall') continue;
+      const wf = wallBaseForces(model, srcShells, ent, src.reactions);
+      if (!wf) continue;
       const matName = ent.params.materialOverwrite || 'CONC25';
       const mat = d.materials.find(x => x.name === matName) || d.materials.find(x => x.type === 'concrete');
       if (!mat || !mat.conc) continue;
@@ -186,24 +280,29 @@
       const rhoVert = Ast / (length * thickness);
       const rhoMinVert = 0.0015; // ACI 318-19 Table 11.6.2 (ρℓ base)
 
-      // P-M interaction
+      // P-M interaction — evaluated at BOTH pier stations (ETABS designs
+      // Section Bottom and Section Top); the governing DCR station reports
       const pm = wallPM(length, thickness, fc, fy, bars, 30);
-      const Pu = Math.abs(m.Fi || 0);
-      const Mx = Math.max(Math.abs(m.Mi || 0), Math.abs(m.Mj || 0));
-
-      // capacity check
-      let dcr = 0, Pcap = 0;
-      for (let i = 0; i < pm.length - 1; i++) {
-        if (Mx >= Math.min(pm[i].M, pm[i+1].M) && Mx <= Math.max(pm[i].M, pm[i+1].M)) {
-          const t = Math.abs(pm[i+1].M - pm[i].M) > 1e-9 ? (Mx - pm[i].M) / (pm[i+1].M - pm[i].M) : 0;
-          Pcap = pm[i].P + t * (pm[i+1].P - pm[i].P);
-          dcr = Math.abs(Pu) / Math.abs(Pcap) || 0;
-          break;
+      const stationForces = [wf.base, wf.top].filter(Boolean).map((st, si) => {
+        const Pu = Math.abs(st.P);   // N — compression positive
+        const Mx = Math.abs(st.M);   // N·mm — in-plane moment
+        let dcr = 0, Pcap = 0;
+        for (let i = 0; i < pm.length - 1; i++) {
+          if (Mx >= Math.min(pm[i].M, pm[i+1].M) && Mx <= Math.max(pm[i].M, pm[i+1].M)) {
+            const t = Math.abs(pm[i+1].M - pm[i].M) > 1e-9 ? (Mx - pm[i].M) / (pm[i+1].M - pm[i].M) : 0;
+            Pcap = pm[i].P + t * (pm[i+1].P - pm[i].P);
+            dcr = Math.abs(Pu) / Math.abs(Pcap) || 0;
+            break;
+          }
         }
-      }
+        return { station: si === 0 ? 'bottom' : 'top',
+          Pu, Mx, Vu: Math.abs(st.V), dcr, Pcap };
+      });
+      const gov = stationForces.reduce((a, b) => (b.dcr > a.dcr ? b : a), stationForces[0]);
+      const Pu = gov.Pu, Mx = gov.Mx;
 
-      // in-plane shear (use the larger end shear)
-      const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0));
+      // in-plane shear at the governing station
+      const Vu = gov.Vu;
       const shear = wallShear(Vu, length, thickness, fc, fyh, Pu, height);
 
       // min horizontal reinforcement
@@ -211,9 +310,9 @@
       const horizArea = Math.PI * horizDia * horizDia / 4;
       const horizSpacing = Math.min(350, (horizArea * 2) / (shear.Avhs * thickness || rhoMinVert * thickness));
 
-      const status = dcr > 1 ? 'OVERSTRESSED' :
+      const status = gov.dcr > 1 ? 'OVERSTRESSED' :
         !shear.ok ? 'SHEAR FAILURE' :
-        dcr > 0.9 ? 'NEAR LIMIT' : 'OK';
+        gov.dcr > 0.9 ? 'NEAR LIMIT' : 'OK';
 
       // Vu > 0.5·φVc → escalate vertical reinforcement (ACI 11.6.3)
       let rhoVertFinal = rhoVert;
@@ -222,10 +321,12 @@
       }
 
       results.push({
-        id: m.id, length, thickness, height, fc, fy,
+        id: ent.id, length, thickness, height, fc, fy,
+        station: gov.station,
         Pu: Pu / 1e3, Mx: Mx / 1e6, Vu: Vu / 1e3, // kN, kN·m
         Ast, rhoVert, rhoMinVert,
-        dcr, Pcap: Pcap / 1e3, status,
+        dcr: gov.dcr, Pcap: gov.Pcap / 1e3, status,
+        stations: stationForces.map(s => ({ station: s.station, Pu: s.Pu / 1e3, Mx: s.Mx / 1e6, dcr: +s.dcr.toFixed(2) })),
         shear, horizDia, horizSpacing,
         nVertPerFace, vertDia, vertSpacing,
         endZoneBars, endZoneDia,
@@ -298,5 +399,5 @@
     app.dialog('RC Wall Design Results — ' + comboName, html, [['Close', null]]);
   }
 
-  root.RCWall = { designAllWalls, wallPM, wallShear, wallBars, open, beta1 };
+  root.RCWall = { designAllWalls, wallPM, wallShear, wallBars, wallBaseForces, open, beta1 };
 })(window);

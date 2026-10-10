@@ -167,13 +167,52 @@
     return ld;
   }
 
+  // ============================================================ torsion
+  // ACI 318-19 Ch. 9.7 / 22.7 — solid rectangular section, θ = 45°,
+  // thin-walled equivalent Ao ≈ 0.85·Aoh (ACI 22.7.6.1). SI unit forms.
+  function designTorsion(Tu, b, d, h, fc, fyt, Acp, pcp) {
+    const phi = 0.75;
+    const lambda = 1.0; // normal-weight concrete
+    // threshold below which torsion may be ignored (ACI 22.7.4.1, SI)
+    const Tth = 0.061 * lambda * Math.sqrt(fc) * Acp * Acp / pcp;
+    if (Tu <= phi * Tth)
+      return { needed: false, Tth: Math.round(Tth / 1e6 * 100) / 100, phi };
+    // section size cap (ACI 22.7.7.1, SI)
+    const Tmax = 0.083 * lambda * Math.sqrt(fc) * Acp * Acp / pcp;
+    if (Tu > phi * Tmax)
+      return { needed: true, ok: false, Tth, Tmax,
+        reason: 'Tu exceeds φ·Tmax — enlarge the section (ACI 22.7.7.1).' };
+    // closed stirrup geometry (centerline ≈ cover + tie radius)
+    const coverC = 40;
+    const Aoh = Math.max((b - 2 * coverC) * (h - 2 * coverC), 1e3); // mm²
+    const Ao = 0.85 * Aoh;
+    const cotTheta = 1; // θ = 45°
+    // transverse: Tn = 2·Ao·(At/s)·fyt·cotθ (ACI 22.7.6.1)
+    const AtOverS = (Tu / phi) / (2 * Ao * fyt * cotTheta);   // mm²/mm
+    // longitudinal (ACI 9.7.5.1): Al = (At/s)·pcp·(fyt/fyl)·cot²θ
+    const Al = AtOverS * pcp * cotTheta * cotTheta;           // mm² (fyt = fyl)
+    // Al,min (ACI 9.7.5.2, SI)
+    const AlMin = 0.42 * Math.sqrt(fc) * Acp / fyt;
+    // stirrup spacing cap (ACI 9.7.6.4): s ≤ min(ph/8, 300)
+    const ph = 2 * ((b - 2 * coverC) + (h - 2 * coverC));
+    const sMax = Math.min(ph / 8, 300);
+    return {
+      needed: true, ok: true, phi,
+      Tth: Math.round(Tth / 1e6 * 100) / 100,
+      AtOverS: +AtOverS.toFixed(4),           // mm²/mm one leg
+      Al: Math.round(Math.max(Al, AlMin)),    // mm² total longitudinal
+      AlMin: Math.round(AlMin),
+      sMax: Math.round(sMax),
+    };
+  }
+
   // ============================================================ full design
   // Design all beams for a given combination.
   // Returns per-member, per-station design results with clause references.
   function designAllBeams(app, comboName) {
     const R = app.rcResults;
     if (!R) return { error: 'Run the analysis first (Analyze ▸ Run Analysis).' };
-    const d = RD().ensure(app);
+    const d = (RD || root.RCDefine).ensure(app);
 
     // find the combo (or use a pattern if no combos)
     let combo = R.combos.find(c => c.name === comboName);
@@ -201,8 +240,8 @@
       const fy = (mat.rebar || mat.steel || { fy: 500 }).fy;
       const esy = fy / Es200;
       const dims = sec.dims || {};
-      const b = dims.b || 300;
-      const h = dims.h || 500;
+      const b = (dims.b || 0.3) * 1000; // m → mm
+      const h = (dims.h || 0.5) * 1000;
       const cover = ((sec.rebar && sec.rebar.coverTop) || 0.04) * 1000;
       const stirrupDia = 8;
       const assumedBar = 20;
@@ -276,12 +315,14 @@
         topDoubly: topResult.doubly || false,
         botDoubly: botResult.doubly || false,
         shear, topBars, botBars, stirrups, devTop, devBot, curtailTop, curtailBot,
+        torsion: torsionResult,
         refs: {
           flexure: 'ACI 9.5.2.1, 21.2, 22.2',
           minSteel: 'ACI 9.6.1.2',
           maxSteel: 'ACI 9.3.3.1',
           shear: 'ACI 22.5',
           shearMin: 'ACI 9.6.3.4',
+          torsion: 'ACI 9.7, 22.7',
         },
       });
     }
@@ -357,7 +398,7 @@
   // ============================================================ design dialog
   function open(app, cat) {
     if (cat !== 'beamDesign') return;
-    const d = RD().ensure(app);
+    const d = (RD || root.RCDefine).ensure(app);
     const R = app.rcResults;
     const comboNames = R.combos.map(c => c.name);
     if (!comboNames.length) {

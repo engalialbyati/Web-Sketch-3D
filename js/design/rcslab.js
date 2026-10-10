@@ -90,11 +90,11 @@
     const Vc1 = (2 + 4 / beta) * sqrtFc * bo * d;
     const Vc2 = (alphaS * d / bo + 2) * sqrtFc * bo * d;
     const Vc3 = 4 * sqrtFc * bo * d;
-    const Vc = Math.min(Vc1, Vc2, Vc3) * d / 1; // N (bo and d in mm → N)
+    const Vc = Math.min(Vc1, Vc2, Vc3); // N (bo and d in mm)
     const phiVc = phi * Vc;
     // Vu (total force at critical section, not stress)
     // Note: Vu here is the total punching force at the column
-    const dcr = Vu / phiVc;
+    const dcr = Pu / phiVc;
 
     return {
       ok: dcr <= 1, phi, bo: Math.round(bo), Ac: Math.round(Ac),
@@ -116,24 +116,17 @@
   function designAllSlabs(app, comboName) {
     const R = app.rcResults;
     if (!R) return { error: 'Run the analysis first.' };
+    const model = R.model;
+    if (!model || !model.shells || !model.shells.length)
+      return { error: 'No shell model — re-run the analysis.' };
     const d = root.RCDefine.ensure(app);
 
-    let combo = R.combos.find(c => c.name === comboName);
-    let pat = null;
-    if (!combo) {
-      pat = R.patterns.find(p => p.name === comboName);
-      if (!pat) return { error: `Combination "${comboName}" not found.` };
-    }
+    const src = R.combos.find(c => c.name === comboName) || R.patterns.find(p => p.name === comboName);
+    if (!src) return { error: `Combination "${comboName}" not found.` };
+    const srcShells = (src.shells || []).filter(sf => sf && sf.forces);
 
     const rebarDb = d.rebarDb || [];
     const results = [];
-
-    // group shells by entity (slab)
-    const shellByEnt = {};
-    for (const sh of model.shells || []) {
-      if (!shellByEnt[sh.entId]) shellByEnt[sh.entId] = [];
-      shellByEnt[sh.entId].push(sh);
-    }
 
     // for each slab entity, get shell forces and design
     for (const ent of app.bim.entities) {
@@ -149,24 +142,14 @@
       const dEff = thickness - cover - barDia / 2;
       const sMax = Math.min(3 * thickness, 450);
 
-      // get combo/pattern result for this entity's shells
-      const shellsForEnt = (model.shells || []).filter(sh => sh.entId === ent.id);
-      if (!shellsForEnt.length) continue;
-
-      // get forces from the analysis (use combo or first pattern)
-      const forces = [];
-      if (app.rcResults && app.rcResults.shellForces) {
-        for (const sf of app.rcResults.shellForces) {
-          if (shellsForEnt.some(sh => sh.n1 === sf.n1 && sh.n2 === sf.n2)) {
-            forces.push(sf.forces);
-          }
-        }
-      }
+      const entShells = srcShells.filter(sf => sf.entId === ent.id);
+      if (!entShells.length) continue;
+      const forces = entShells.map(sf => sf.forces);
 
       // envelope: max |M11| and |M22| across all elements in this slab
       // if design strips exist, average forces across the strip width (ETABS approach)
       const stripLabels = ent.params.stripLabels || [];
-      const useStripAveraging = stripLabels.length > 0 && (model.designStrips || d.designStrips || []).length > 0;
+      const useStripAveraging = stripLabels.length > 0 && (d.designStrips || []).length > 0;
       let maxM11 = 0, maxM22 = 0, minM11 = 0, minM22 = 0;
       if (useStripAveraging) {
         // design strip: average forces across all elements in the strip
@@ -199,9 +182,10 @@
       const botBarsD2 = selectSlabBars(rebarDb, botDir2.As, 1000, sMax);
       const topBarsD2 = selectSlabBars(rebarDb, topDir2.As, 1000, sMax);
 
-      // one-way shear check
-      const Vu = Math.max(Math.abs(forces.length ? forces[0].N11 || 0 : 0), 1); // approximate
-      const owShear = oneWayShear(Vu, 1000, dEff, fc);
+      // one-way shear: transverse (Q) resultants are not recovered by the
+      // current shell force pass — reported as not evaluated rather than
+      // from an unrelated in-plane membrane force
+      const owShear = null;
 
       results.push({
         id: ent.id, type: ent.type, thickness,
@@ -211,7 +195,7 @@
         botDir1, topDir1, botDir2, topDir2,
         botBarsD1, topBarsD1, botBarsD2, topBarsD2,
         owShear,
-        nElements: shellsForEnt.length,
+        nElements: entShells.length,
       });
     }
     return { results, comboName };
@@ -332,7 +316,8 @@
     // stresses
     const v0 = Pu / Ac;
     const vmax = v0 + gammaV * Math.abs(Mux) / Jc;
-    const vu = Math.max(Math.abs(vmax), Math.abs(vmin || 0));
+    const vmin = v0 - gammaV * Math.abs(Mux) / Jc;
+    const vu = Math.max(Math.abs(vmax), Math.abs(vmin));
 
     // capacity: min of three ACI equations
     const sqrtFc = Math.sqrt(fc);
@@ -344,10 +329,10 @@
     const phiVc = phi * Vc;
 
     return {
-      ok: Vu <= phiVc, phi, d: Math.round(d),
+      ok: Pu <= phiVc, phi, d: Math.round(d),
       bo: Math.round(bo), Ac: Math.round(Ac),
       gammaV: +gammaV.toFixed(3),
-      dcr: +(Vu / phiVc).toFixed(3),
+      dcr: +(Pu / phiVc).toFixed(3),
       note: 'Critical perimeter at drop panel edge, not column face',
     };
   }
@@ -382,7 +367,9 @@
   function showSlabResults(app, result, comboName) {
     const esc = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const rows = result.results.map(r => {
-      const shearColor = r.owShear.ok ? '#2e7d32' : '#c62828';
+      const shearCell = r.owShear
+        ? `<td style="color:${r.owShear.ok ? '#2e7d32' : '#c62828'}">${r.owShear.ok ? 'OK' : 'FAIL'}</td>`
+        : '<td style="opacity:.55">n/a</td>';
       return '<tr>' +
         `<td style="padding:3px 6px">${esc(r.id)}</td>` +
         `<td>${esc(r.type)}</td>` +
@@ -393,7 +380,7 @@
         `<td>${r.topBarsD1 ? `${r.topBarsD1.count}Ø${r.topBarsD1.dia}@${r.topBarsD1.spacing}` : '—'}</td>` +
         `<td>${r.botBarsD2 ? `${r.botBarsD2.count}Ø${r.botBarsD2.dia}@${r.botBarsD2.spacing}` : '—'}</td>` +
         `<td>${r.topBarsD2 ? `${r.topBarsD2.count}Ø${r.topBarsD2.dia}@${r.topBarsD2.spacing}` : '—'}</td>` +
-        `<td style="color:${shearColor}">${r.owShear.ok ? 'OK' : 'FAIL'}</td>` +
+        shearCell +
         '</tr>';
     }).join('');
     const html = '<div style="max-height:65vh;overflow:auto">' +
@@ -416,5 +403,5 @@
     app.dialog('RC Slab Design Results — ' + comboName, html, [['Close', null]]);
   }
 
-  root.RCSlab = { designSlabFlexure, punchingShear, oneWayShear, designAllSlabs, open, selectSlabBars };
+  root.RCSlab = { designSlabFlexure, punchingShear, oneWayShear, checkPunchingAtDropPanel, designAllSlabs, open, selectSlabBars };
 })(window);

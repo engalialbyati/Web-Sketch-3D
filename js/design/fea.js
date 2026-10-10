@@ -381,6 +381,44 @@
   // Geometry is scaled to mm internally so the section units stay ETABS-
   // style (MPa/mm²/mm⁴); displacements U are returned in mm, forces in N.
   // Returns { U (array of displacement vectors), frames (end forces), nodes }
+  // Shell quads: 4-node flat shells, 5 local dofs/node transformed to the
+  // 6-dof global set — shared by assembleAndSolve and computeReactions so
+  // both assemble the IDENTICAL stiffness (reaction equilibrium depends on it)
+  function scatterShellK(K, sh, nodes) {
+    const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
+    if (!p4) return;
+    const q = shellQ4(sh.E, sh.nu, sh.t, p1, p2, p3, p4);
+    if (!q) return;
+    const Rg = [[q.ex.x, q.ex.y, q.ex.z], [q.ey.x, q.ey.y, q.ey.z], [q.ez.x, q.ez.y, q.ez.z]]; // local x,y,z as rows
+    const ns = [sh.n1, sh.n2, sh.n3, sh.n4];
+    // local 20 -> global scatter with per-node 6x5 transform
+    // T: LOCAL(20) x GLOBAL(24) — u_local = T . u_global
+    const T = [];
+    for (let i = 0; i < 20; i++) T.push(new Float64Array(24));
+    for (let n = 0; n < 4; n++) {
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) T[n * 5 + c][n * 6 + r] = Rg[r][c];
+        for (let c = 0; c < 2; c++) T[n * 5 + 3 + c][n * 6 + 3 + r] = Rg[r][c];
+      }
+    }
+    const Kt = [];
+    for (let i = 0; i < 20; i++) Kt.push(new Float64Array(24));
+    for (let i = 0; i < 20; i++)
+      for (let j = 0; j < 24; j++) {
+        let s2 = 0;
+        for (let k = 0; k < 20; k++) s2 += q.K[i][k] * T[k][j];
+        Kt[i][j] = s2;
+      }
+    for (let i = 0; i < 24; i++)
+      for (let j = 0; j < 24; j++) {
+        let s2 = 0;
+        for (let k = 0; k < 20; k++) s2 += T[k][i] * Kt[k][j];
+        const gn = Math.floor(i / 6), gd = i % 6;
+        const gn2 = Math.floor(j / 6), gd2 = j % 6;
+        K[ns[gn] * 6 + gd][ns[gn2] * 6 + gd2] += s2;
+      }
+  }
+
   function assembleAndSolve(nodesIn, frames, shells, loads, opts = {}) {
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
@@ -420,42 +458,8 @@
       }
       frameInfo.push({ el, dofs, Kl, R, L, feq: feq0, wlWy: ml ? (ml.wy || 0) : 0, wlWz: ml ? (ml.wz || 0) : 0 });
     });
-    // shell quads: 4-node flat shells, 5 local dofs/node transformed to the
-    // 6-dof global set (u via the 3x3 rotation, rotations via rx, ry)
-    for (const sh of shells) {
-      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
-      if (!p4) continue; // legacy triangle shells unsupported
-      const q = shellQ4(sh.E, sh.nu, sh.t, p1, p2, p3, p4);
-      if (!q) continue;
-      const Rg = [[q.ex.x, q.ex.y, q.ex.z], [q.ey.x, q.ey.y, q.ey.z], [q.ez.x, q.ez.y, q.ez.z]]; // local x,y,z as rows
-      const ns = [sh.n1, sh.n2, sh.n3, sh.n4];
-      // local 20 -> global scatter with per-node 6x5 transform
-      // T: LOCAL(20) x GLOBAL(24) — u_local = T . u_global
-      const T = [];
-      for (let i = 0; i < 20; i++) T.push(new Float64Array(24));
-      for (let n = 0; n < 4; n++) {
-        for (let r = 0; r < 3; r++) {
-          for (let c = 0; c < 3; c++) T[n * 5 + c][n * 6 + r] = Rg[r][c];
-          for (let c = 0; c < 2; c++) T[n * 5 + 3 + c][n * 6 + 3 + r] = Rg[r][c];
-        }
-      }
-      const Kt = [];
-      for (let i = 0; i < 20; i++) { Kt.push(new Float64Array(24)); }
-      for (let i = 0; i < 20; i++)
-        for (let j = 0; j < 24; j++) {
-          let s2 = 0;
-          for (let k = 0; k < 20; k++) s2 += q.K[i][k] * T[k][j];
-          Kt[i][j] = s2;
-        }
-      for (let i = 0; i < 24; i++)
-        for (let j = 0; j < 24; j++) {
-          let s2 = 0;
-          for (let k = 0; k < 20; k++) s2 += T[k][i] * Kt[k][j];
-          const gn = Math.floor(i / 6), gd = i % 6;
-          const gn2 = Math.floor(j / 6), gd2 = j % 6;
-          K[ns[gn] * 6 + gd][ns[gn2] * 6 + gd2] += s2;
-        }
-    }
+    // shell quads via the shared scatter (identical stiffness in every pass)
+    for (const sh of shells) scatterShellK(K, sh, nodes);
     // loads → dense RHS vectors (nodal maps + member-load equivalents)
     const F = loads.map(lv => {
       const f = new Float64Array(nDof);
@@ -558,16 +562,9 @@
       for (let i = 0; i < 12; i++)
         for (let j = 0; j < 12; j++) K[dofs[i]][dofs[j]] += Kg[i][j];
     });
-    for (const sh of shells) {
-      const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3];
-      const r = shellK(sh.E, sh.nu, sh.t, p1, p2, p3);
-      if (!r) continue;
-      const ns = [sh.n1, sh.n2, sh.n3];
-      const kb = r.Kplate[2][2];
-      for (let i = 0; i < 3; i++)
-        for (let j = 0; j < 3; j++)
-          K[ns[i] * 6 + 2][ns[j] * 6 + 2] += (i === j ? kb : -kb / 2);
-    }
+    // shells: the true assembled stiffness — the old fake triangle coupling
+    // made reactions at frame/shell shared nodes diverge by orders of magnitude
+    for (const sh of shells) scatterShellK(K, sh, nodes);
     const f = new Float64Array(nDof);
     for (const [ni, vals] of (loads[0] || new Map()))
       for (let d = 0; d < 6; d++) f[ni * 6 + d] += (vals[d] || 0);
