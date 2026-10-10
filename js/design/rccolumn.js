@@ -50,12 +50,20 @@
   // ==================================================== P-M curve (v2)
   // Balance-anchored strain sweep, φ per point, 0.80P₀ cap,
   // displaced-concrete deduction, non-monotonic repair.
+  // Memoized: identical (section, material, angle, capType) sweeps return
+  // the cached curve — the optimizer re-designs every column per iteration.
+  const pmCache = new Map();
   function generatePMCurve(sec, mat, angle, nPoints = 40, capType = 'design') {
     const dims = sec.dims || {};
+    const fc0 = mat.conc ? mat.conc.fc : 25;
+    const cov0 = (sec.rebar && sec.rebar.colCover) || 0.04;
+    const key = [sec.name || '?', dims.b, dims.h, dims.dia, fc0, cov0,
+      JSON.stringify(sec.rebar || {}), angle, nPoints, capType].join('|');
+    if (pmCache.has(key)) return pmCache.get(key);
     // section dims are stored in meters (BIM units); the design math runs in mm
     const b = (dims.b || 0.3) * 1000;
     const h = (dims.h || 0.5) * 1000;
-    const fc = mat.conc ? mat.conc.fc : 25;
+    const fc = fc0;
     // capacity type: 'design' = φ applied + 0.80P₀ cap
     //                'expected' = no φ, overstrength Ω = 1.25 on fy
     const capTypeDesign = capType === 'design';
@@ -160,6 +168,7 @@
       if (raw[i].P > raw[i-1].P) raw[i].P = raw[i-1].P;
     }
 
+    pmCache.set(key, raw);
     return raw;
   }
 

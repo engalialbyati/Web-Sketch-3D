@@ -475,7 +475,7 @@
           stations,
         };
       });
-      results.patterns.push({ name: patternNames[p], members, reactions, shells: shellRes });
+      results.patterns.push({ name: patternNames[p], members, reactions, shells: shellRes, U });
     }
 
     // combinations over pattern end-forces — add / absolute / SRSS / envelope
@@ -597,6 +597,9 @@
     }
     if (cat === 'rsAnalysis') { rsDialog(app); return; }
     if (cat === 'thAnalysis') { thDialog(app); return; }
+    if (cat === 'storyResults') { storyDialog(app); return; }
+    if (cat === 'storyReplicate') { replicateDialog(app); return; }
+    if (cat === 'designOptimize') { optimizeDialog(app); return; }
     if (cat === 'forceTable') {
       const table = forceTable(app);
       if (!table) { app.toast('Run the analysis first', true); return; }
@@ -875,6 +878,327 @@
     }
   }
 
+  // ==========================================================================
+  // STORY RESULTS — per-story inter-story drift and story shear (ASCE 7
+  // §12.8 / Table 12.12-1 workflow). Drift from the superposed displacement
+  // field (mean ux/uy per diaphragm level); story shear from the END shears
+  // of columns topped out at the level (projected to global X/Y) plus the
+  // in-plane N12 resultant of walls cut at the level.
+  // ==========================================================================
+  function storyResults(app, caseName) {
+    const R = app.rcResults;
+    if (!R) return { error: 'Run the analysis first.' };
+    const model = R.model;
+    if (!model || !model.nodes || !model.nodes.length) return { error: 'No model — re-run the analysis.' };
+
+    // superposition weights for the selected combination/pattern
+    let w = null;
+    const cb = R.combos.find(c => c.name === caseName);
+    if (cb) {
+      w = new Array(R.patterns.length).fill(0);
+      for (const item of cb.cases) {
+        const pi = R.patterns.findIndex(p => p.name === item.name);
+        if (pi >= 0) w[pi] += item.scale || 1;
+      }
+    } else {
+      const pi = R.patterns.findIndex(p => p.name === caseName);
+      if (pi < 0) return { error: `Case "${caseName}" not found.` };
+      w = new Array(R.patterns.length).fill(0);
+      w[pi] = 1;
+    }
+    if (!w.some(v => v)) return { error: 'The selected case has no load components.' };
+
+    // superposed displacement field (m): U[i] = Σ wp · Up[i]
+    const U = new Float64Array(R.nDof);
+    for (let p = 0; p < R.patterns.length; p++) {
+      if (!w[p] || !R.patterns[p].U) continue;
+      const Up = R.patterns[p].U;
+      for (let i = 0; i < R.nDof; i++) U[i] += w[p] * Up[i];
+    }
+    const nodes = model.nodes;
+    // story levels: column base + top elevations (mesh nodes of walls/slabs
+    // create intermediate levels that are not stories)
+    const levels = [...new Set(model.map.filter(m => m && m.ent.type === 'column')
+      .flatMap(m => {
+        const f = model.frames[m.idx];
+        return f ? [nodes[f.ni].z, nodes[f.nj].z] : [];
+      }).map(z => +z.toFixed(4)))].sort((a, b) => a - b);
+    if (levels.length < 2) return { error: 'No stories found — draw columns first.' };
+
+    // mean lateral displacement per level (diaphragm average, m)
+    const meanLat = z => {
+      let sx = 0, sy = 0, n = 0;
+      for (let i = 0; i < nodes.length; i++) {
+        if (Math.abs(nodes[i].z - z) > 1e-4) continue;
+        sx += U[i * 6]; sy += U[i * 6 + 1]; n++;
+      }
+      return n ? { ux: sx / n, uy: sy / n, n } : null;
+    };
+
+    // column end shears at a level, projected to global X/Y (N)
+    const colShearAt = z => {
+      let vx = 0, vy = 0, nCols = 0;
+      for (const m of model.map) {
+        if (!m || m.ent.type !== 'column') continue;
+        const f = model.frames[m.idx];
+        if (!f) continue;
+        const a = nodes[f.ni], b = nodes[f.nj];
+        if (Math.abs(b.z - z) > 1e-4 || b.z - a.z < 1e-6) continue; // must TOP OUT here
+        // superposed end shears in LOCAL axes
+        let V2 = 0, V3 = 0;
+        for (let pi2 = 0; pi2 < R.patterns.length; pi2++) {
+          if (!w[pi2]) continue;
+          const mm = R.patterns[pi2].members[m.idx];
+          if (!mm) continue;
+          V2 += w[pi2] * (mm.Vj2 || 0);
+          V3 += w[pi2] * (mm.Vj || 0);
+        }
+        // local axes: y carries the "major" shear (Vj), z the "minor" (Vj2);
+        // f_global = Rᵀ · f_local → g_x pairs row 1 with local-y, row 2 with local-z
+        const Rm = FE().rotationMatrix(a, b);
+        const gx = Rm[1][0] * V3 + Rm[2][0] * V2;
+        const gy = Rm[1][1] * V3 + Rm[2][1] * V2;
+        vx += gx; vy += gy; nCols++;
+      }
+      return { vx, vy, nCols };
+    };
+
+    // wall in-plane shear at a level (N) from the superposed shell N12
+    const wallShearAt = z => {
+      let vx = 0, vy = 0, nWalls = 0;
+      const byEnt = {};
+      const shSrc = cb ? (cb.shells || []) : (R.patterns[pIdxOf(w)].shells || []);
+      for (const sf of shSrc) {
+        if (!sf || !sf.forces) continue;
+        (byEnt[sf.entId] = byEnt[sf.entId] || []).push(sf);
+      }
+      for (const entId of Object.keys(byEnt)) {
+        const ent = app.bim.getEntityById(entId);
+        if (!ent || ent.type !== 'wall') continue;
+        const cells = byEnt[entId];
+        // in-plane unit vector along the wall length
+        const s0 = cells[0];
+        const ax = nodes[s0.n2].x - nodes[s0.n1].x, ay = nodes[s0.n2].y - nodes[s0.n1].y;
+        const L = Math.hypot(ax, ay) || 1;
+        const tx = ax / L, ty = ay / L;
+        // the row just BELOW the cut carries the story shear into it
+        const below = cells.filter(s => (nodes[s.n1].z + nodes[s.n4].z) / 2 <= z + 1e-4);
+        if (!below.length) continue;
+        const zCut = Math.max(...below.map(s => (nodes[s.n1].z + nodes[s.n4].z) / 2));
+        for (const s of below) {
+          const zMid = (nodes[s.n1].z + nodes[s.n4].z) / 2;
+          if (Math.abs(zMid - zCut) > 1e-4) continue;
+          const wmm = Math.hypot(nodes[s.n2].x - nodes[s.n1].x, nodes[s.n2].y - nodes[s.n1].y) * 1000;
+          const F = (s.forces.N12 || 0) * wmm; // N crossing the cut
+          vx += F * tx; vy += F * ty; nWalls++;
+        }
+      }
+      return { vx, vy, nWalls };
+    };
+
+    const pIdxOf = ww => ww.findIndex(v => v);
+
+    const rows = [];
+    for (let i = 1; i < levels.length; i++) {
+      const zTop = levels[i], zBot = levels[i - 1];
+      const h = (zTop - zBot) * 1000; // mm
+      if (h < 1e-6) continue;
+      const dTop = meanLat(zTop), dBot = meanLat(zBot);
+      const cols = colShearAt(zTop);
+      const walls = wallShearAt(zTop);
+      // solution displacements are already in mm
+      const driftX = dTop && dBot ? (dTop.ux - dBot.ux) : 0;
+      const driftY = dTop && dBot ? (dTop.uy - dBot.uy) : 0;
+      rows.push({
+        zTop: +zTop.toFixed(2), hMm: Math.round(h),
+        driftX: +driftX.toFixed(2), driftY: +driftY.toFixed(2),
+        ratioX: +(driftX / h).toFixed(4), ratioY: +(driftY / h).toFixed(4),
+        vx: (cols.vx + walls.vx) / 1e3, vy: (cols.vy + walls.vy) / 1e3, // kN
+        nCols: cols.nCols, nWalls: walls.nWalls,
+        okX: Math.abs(driftX / h) <= 0.02, okY: Math.abs(driftY / h) <= 0.02,
+      });
+    }
+    return { results: rows, caseName, limit: 0.02 };
+  }
+
+  // ==========================================================================
+  // DESIGN OPTIMIZATION — auto-size frame sections until every DCR is within
+  // target (ETABS Design ▸ "iterate until passing", clean-room version).
+  // Upsize-only loop: any frame section whose WORST member DCR exceeds the
+  // cap grows by one 50 mm step (b and h, capped at 1.2 m), then the model
+  // re-analyzes (stiffness changed → forces redistribute). Sections are
+  // resized in place — shared sections protect all their users.
+  // ==========================================================================
+  function optimizeDesign(app, opts) {
+    const o = opts || {};
+    const comboName = o.combo;
+    const dcrMax = o.dcrMax || 0.95;
+    const maxIter = o.maxIter || 8;
+    const step = 0.05; // m
+    const hCap = 1.2;
+    const t0 = performance.now();
+    const d = root.RCDefine.ensure(app);
+
+    const history = [];
+    let resizedTotal = 0;
+    for (let iter = 1; iter <= maxIter; iter++) {
+      const R = runAnalysis(app, { silent: true });
+      if (R.error) return { error: R.error };
+      const combo = comboName || (R.combos[0] && R.combos[0].name) || (R.patterns[0] && R.patterns[0].name);
+      if (!combo) return { error: 'No combinations or patterns to design for.' };
+
+      // worst DCR per frame section, from column + beam design
+      const worst = {};
+      const col = root.RCColumn.designAllColumns(app, combo);
+      for (const c of (col.results || [])) {
+        const ent = app.bim.getEntityById(c.id);
+        const sn = ent && ent.params.designSection;
+        if (sn && c.dcr != null && isFinite(c.dcr)) worst[sn] = Math.max(worst[sn] || 0, c.dcr);
+      }
+      const beam = root.RCBeam.designAllBeams(app, combo);
+      for (const b of (beam.results || [])) {
+        const ent = app.bim.getEntityById(b.id);
+        const sn = ent && ent.params.designSection;
+        if (!sn) continue;
+        // beam results carry no scalar DCR — screen with the rebar ratio
+        const AsNeed = Math.max(b.AsTop || 0, b.AsBot || 0);
+        const AsProv = Math.max(b.topBars ? b.topBars.As : 0, b.botBars ? b.botBars.As : 0);
+        if (AsProv > 0) worst[sn] = Math.max(worst[sn] || 0, AsNeed / AsProv);
+      }
+
+      // find sections to grow
+      const grown = [];
+      for (const sec of d.frameSections) {
+        if (!sec.dims || sec.type !== 'rect') continue;
+        const w = worst[sec.name];
+        if (w == null || w <= dcrMax) continue;
+        if (sec.dims.h >= hCap) continue; // at cap — report, don't grow
+        sec.dims.h = Math.min(hCap, +(sec.dims.h + step).toFixed(3));
+        sec.dims.b = Math.min(hCap, +(sec.dims.b + step).toFixed(3));
+        sec.t2 = sec.dims.b; sec.t3 = sec.dims.h; // keep legacy mirrors in sync
+        grown.push({ name: sec.name, dcr: +w.toFixed(2), h: sec.dims.h, b: sec.dims.b });
+      }
+      history.push({ iter, grown: grown.length, worst: Object.values(worst).length ?
+        +Math.max(...Object.values(worst)).toFixed(2) : 0 });
+      if (!grown.length) break;
+      resizedTotal += grown.length;
+    }
+
+    // final pass with the last sizes
+    const R = runAnalysis(app, { silent: true });
+    return {
+      ok: true, iterations: history.length, resizedTotal, history,
+      ms: Math.round(performance.now() - t0),
+      combo: comboName || null,
+      sections: d.frameSections.filter(s => s.type === 'rect').map(s => ({
+        name: s.name, b: s.dims.b, h: s.dims.h })),
+    };
+  }
+
+  function optimizeDialog(app) {
+    const d = root.RCDefine.ensure(app);
+    const R = app.rcResults;
+    const names = R ? (R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name)) : [];
+    if (!names.length) { app.toast('Run the analysis first', true); return; }
+    const opts = names.map(n => `<option value="${n}">${n}</option>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Upsizes rectangular frame sections in 50 mm steps until every DCR ≤ target — each round re-analyzes (forces redistribute). Shared sections resize as a group.</p>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Design Case</span>' +
+      `<select id="op-combo" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${opts}</select></div>`,
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">DCR target ≤</span>' +
+      '<input id="op-max" type="number" value="0.95" step="0.05" min="0.3" max="1.0" style="width:80px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px"></div>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Max iterations</span>' +
+      '<input id="op-iters" type="number" value="8" step="1" min="1" max="20" style="width:80px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px"></div>',
+    ].join('');
+    app.dialog('Auto-Size Frame Sections', html, [
+      ['Optimize', () => {
+        const r = optimizeDesign(app, {
+          combo: document.getElementById('op-combo').value,
+          dcrMax: +document.getElementById('op-max').value,
+          maxIter: +document.getElementById('op-iters').value,
+        });
+        if (r.error) { app.toast(r.error, true); return false; }
+        const rows = r.history.map(h => `<tr><td style="padding:3px 8px">${h.iter}</td><td>${h.grown}</td><td>${h.worst}</td></tr>`).join('');
+        const secs = r.sections.map(s => `<tr><td style="padding:3px 8px">${s.name}</td><td>${(s.b * 1000).toFixed(0)}×${(s.h * 1000).toFixed(0)}</td></tr>`).join('');
+        const html2 = '<div style="max-height:60vh;overflow:auto;font-size:12px">' +
+          `<p style="margin:0 0 6px"><b>${r.iterations}</b> iteration(s) · ${r.resizedTotal} section-growth event(s) · ${r.ms} ms</p>` +
+          '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;opacity:.7">' +
+          '<th style="padding:2px 8px">Iter</th><th>Sections grown</th><th>Worst DCR</th></tr></thead><tbody>' + rows + '</tbody></table>' +
+          '<p style="margin:8px 0 4px;font-weight:bold">Final sections</p>' +
+          '<table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="text-align:left;opacity:.7">' +
+          '<th style="padding:2px 8px">Section</th><th>b×h (mm)</th></tr></thead><tbody>' + secs + '</tbody></table></div>';
+        app.dialog('Auto-Size Results', html2, [['Close', null]]);
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
+    // ============================================== story dialogs
+  function storyDialog(app) {
+    if (!app.rcResults) { app.toast('Run the analysis first', true); return; }
+    const R = app.rcResults;
+    const names = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
+    const opts = names.map(n => `<option value="${n}">${n}</option>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Per-story inter-story drift and story shear from the superposed case — drift limit 0.020·h<sub>sx</sub> (ASCE 7 Table 12.12-1).</p>',
+      '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Case</span>' +
+      `<select id="st-case" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${opts}</select></div>`,
+    ].join('');
+    app.dialog('Story Results — Drift & Shear', html, [
+      ['Show', () => {
+        const r = storyResults(app, document.getElementById('st-case').value);
+        if (r.error) { app.toast(r.error, true); return false; }
+        const esc2 = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        const rows = r.results.map(x => '<tr>' +
+          `<td style="padding:3px 6px">${x.zTop.toFixed(2)}</td>` +
+          `<td>${x.hMm}</td>` +
+          `<td>${x.driftX.toFixed(2)}</td><td>${x.driftY.toFixed(2)}</td>` +
+          `<td style="color:${x.okX ? '#2e7d32' : '#c62828'}">${(x.ratioX * 100).toFixed(2)}%</td>` +
+          `<td style="color:${x.okY ? '#2e7d32' : '#c62828'}">${(x.ratioY * 100).toFixed(2)}%</td>` +
+          `<td>${x.vx.toFixed(0)}</td><td>${x.vy.toFixed(0)}</td>` +
+          `<td>${x.nCols}+${x.nWalls}</td></tr>`).join('');
+        const html2 = '<div style="max-height:65vh;overflow:auto">' +
+          `<p style="font-size:12px;margin:0 0 6px;opacity:.8">Case: <b>${esc2(r.caseName)}</b> · limit ${(r.limit * 100).toFixed(1)}% · shear in kN · cut = columns topped out + wall N12</p>` +
+          '<table style="width:100%;border-collapse:collapse;font-size:11px"><thead><tr style="text-align:left;opacity:.7">' +
+          '<th style="padding:3px 5px;border-bottom:1px solid #d7dde3">Level (m)</th><th>h (mm)</th>' +
+          '<th>Δx (mm)</th><th>Δy (mm)</th><th>Drift X</th><th>Drift Y</th>' +
+          '<th>Vx (kN)</th><th>Vy (kN)</th><th>Col+Wall</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+        app.dialog('Story Results — ' + r.caseName, html2, [['Close', null]]);
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
+  function replicateDialog(app) {
+    const lvs = (app.levelManager.levels || []).slice().sort((a, b) => a.elevation - b.elevation);
+    if (lvs.length < 2) { app.toast('Define at least two levels first', true); return; }
+    const srcOpts = lvs.map((l, i) => `<option value="${l.elevation}"${i === 0 ? ' selected' : ''}>${l.name || l.id} (${(+l.elevation).toFixed(2)} m)</option>`).join('');
+    const tgtChecks = lvs.slice(1).map(l =>
+      `<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:2px 0"><input type="checkbox" class="rp-tgt" value="${l.elevation}"> ${l.name || l.id} (${(+l.elevation).toFixed(2)} m)</label>`).join('');
+    const html = [
+      '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Clone the beams, columns and floors of the source story onto the selected target levels (ETABS Similar Stories). Sections and loads are shared; walls are not included yet.</p>',
+      `<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Source story</span><select id="rp-src" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${srcOpts}</select></div>`,
+      '<div style="margin:6px 0 2px;font-size:12px;opacity:.75">Target levels</div>' + tgtChecks,
+      '<label style="display:flex;align-items:center;gap:6px;font-size:12px;margin:6px 0 0"><input type="checkbox" id="rp-sel"> Selection only (otherwise the whole story)</label>',
+    ].join('');
+    app.dialog('Replicate Story', html, [
+      ['Replicate', () => {
+        const srcZ = +document.getElementById('rp-src').value;
+        const tgts = [...document.querySelectorAll('.rp-tgt:checked')].map(c => +c.value - srcZ);
+        if (!tgts.length) { app.toast('Pick at least one target level', true); return false; }
+        const r = app.bim.replicateStory(srcZ, tgts, document.getElementById('rp-sel').checked);
+        if (r.error) { app.toast(r.error, true); return false; }
+        app.toast(`Replicated: ${r.made} element(s) to ${tgts.length} level(s)` +
+          (r.skippedWalls ? ` · ${r.skippedWalls} wall(s) skipped` : '') +
+          (r.paramsOnly ? ` · ${r.paramsOnly} without geometry` : ''));
+        return false;
+      }],
+      ['Close', null],
+    ]);
+  }
+
     // ============================================== response spectrum
   function rsDialog(app) {
     const d = root.RCDefine.ensure(app);
@@ -1011,6 +1335,6 @@
     return { maxU: Array.from(maxU), nSteps, dt };
   }
   root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, forceTable, open, openAssign,
-    responseSpectrumAnalysis, timeHistoryAnalysis };
+    responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign };
 })(window);
 

@@ -391,12 +391,13 @@ const RIBBON_TABS = {
     { title: 'Releases & Supports', tools: ['asgrel', 'asgbase'] },
     { title: 'Wall Design', tools: ['asgpier', 'asgspan'] },
     { title: 'Slab Design', tools: ['asgstrip', 'asgdiaph'] },
+    { title: 'Stories', tools: ['defstoryrep'] },
   ] },
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['anlrun'] },
     { title: 'Dynamics', tools: ['anlrs', 'anlth'] },
     { title: 'Diagrams', tools: ['anldiagram', 'anlforce'] },
-    { title: 'Results', tools: ['anlforces'] },
+    { title: 'Results', tools: ['anlforces', 'anlstory'] },
   ] },
   rcdesign: { label: 'Design', groups: [
     { title: 'Beam Design', tools: ['dsbbeam'] },
@@ -405,6 +406,7 @@ const RIBBON_TABS = {
     { title: 'Slab Design', tools: ['dsbslab'] },
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
+    { title: 'Optimize', tools: ['dsopt'] },
     { title: 'Report', tools: ['dsreport'] },
     { title: '3D View', tools: ['dsviz'] },
   ] },
@@ -486,6 +488,7 @@ const DEFINE_BUTTONS = {
   anldiagram: { label: 'Show Diagrams', glyph: '∠', tip: 'Toggle moment/shear diagrams on beams in the 3D viewport (cycles: off → M3 → V3 → off)', cat: 'showDiagrams' },
   anlforce: { label: 'Force Dialog', glyph: '≡', tip: 'Per-member BMD/SFD canvas with values', cat: 'showForceDialog' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
+  anlstory: { label: 'Story Results', glyph: '⇤⇥', tip: 'Per-story inter-story drift and story shear (ASCE 7 Table 12.12-1)', cat: 'storyResults' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
   dscbcol: { label: 'Column Design', glyph: '▣', tip: 'ACI 318-19 column design: biaxial P-M interaction, DCR', cat: 'columnDesign' },
   dsviz: { label: 'Show Rebar', glyph: '▤', tip: 'Toggle 3D rebar visualization on the model (longitudinal bars + stirrups)', cat: 'toggleRebarViz' },
@@ -495,6 +498,8 @@ const DEFINE_BUTTONS = {
   dspunch: { label: 'Punching Check', glyph: '⊙▪', tip: 'Two-way punching at column tops from combo forces — drop-panel aware (ACI 22.6)', cat: 'punchingDesign' },
   dssbe: { label: 'SBE Check', glyph: '◫▪', tip: 'ACI 18.10.6 special boundary elements: stress-limit + NA-depth methods', cat: 'sbeCheck' },
   dsfoot: { label: 'Foundation', glyph: '⬛⊥', tip: 'Isolated footing design: bearing, one/two-way shear, flexure, development', cat: 'footingDesign' },
+  defstoryrep: { label: 'Replicate Story', glyph: '⧉', tip: 'Clone the beams/columns/floors of one story onto selected levels (ETABS Similar Stories)', cat: 'storyReplicate' },
+  dsopt: { label: 'Auto-Size', glyph: '⤢', tip: 'Iterate frame section sizes until every DCR meets the target — re-analyzes each round', cat: 'designOptimize' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
@@ -2566,6 +2571,66 @@ class BimEntityManager {
   // Regenerate a column FROM ITS PARAMS — a deleted/moved beam leaves its
   // notch behind otherwise (the beam's sweep cut the column's faces; the
   // column rebuilds whole from base/width/depth/height).
+  // ==========================================================================
+  // STORY REPLICATION (ETABS Edit ▸ Story: replicate framing up a level).
+  // Clones the structural entities of one story — beams, columns, floors —
+  // with a Z offset, rebuilds each clone's geometry from its params, and
+  // keeps the section/load references so stories share definitions
+  // (ETABS "Similar Stories" behavior). Walls need their own rebuild pass
+  // and are skipped in v1.
+  // ==========================================================================
+  replicateStory(sourceZ, targetZs, onlySelected) {
+    const picked = [];
+    let selIds = null;
+    if (onlySelected) {
+      selIds = new Set();
+      for (const fid of (window.app.sel && window.app.sel.faces) || []) {
+        const f = this.model.faces.get(fid);
+        if (f && f.userData && f.userData.bimEntityId) selIds.add(f.userData.bimEntityId);
+      }
+    }
+    for (const ent of this.entities) {
+      if (selIds && !selIds.has(ent.id)) continue;
+      const p = ent.params || {};
+      if (ent.type === 'beam' && Array.isArray(p.baseline) &&
+        Math.abs(p.baseline[0][2] - sourceZ) < 1e-4) picked.push(ent);
+      else if (ent.type === 'column' && Array.isArray(p.base) &&
+        Math.abs(p.base[2] - sourceZ) < 1e-4) picked.push(ent);
+      else if ((ent.type === 'floor' || ent.type === 'slab' || ent.type === 'roof') && p.regions) {
+        const zRing = (p.regions[0] && p.regions[0].outer && p.regions[0].outer[0]) ? (p.regions[0].outer[0][2] || 0) : null;
+        const zL = p.baseLevel != null ? window.app.levelManager.getElevation(p.baseLevel) : zRing;
+        if (zL != null && Math.abs(zL - sourceZ) < 1e-4) picked.push(ent);
+      }
+    }
+    if (!picked.length) return { made: 0, picked: 0, skippedWalls: 0, error: 'No beams/columns/floors found on the source story.' };
+    const lvAt = z => window.app.levelManager.levels.find(l => Math.abs(l.elevation - z) < 1e-4);
+    let made = 0, paramsOnly = 0, skippedWalls = 0;
+    for (const dz of targetZs) {
+      for (const src of picked) {
+        if (src.type === 'wall') { skippedWalls++; continue; }
+        const P = JSON.parse(JSON.stringify(src.params)); // deep clone — loads ride along
+        if (src.type === 'beam') { for (const pt of P.baseline) pt[2] += dz; }
+        else if (src.type === 'column') { P.base[2] += dz; }
+        else if (P.regions) {
+          for (const r of P.regions) {
+            for (const q of (r.outer || [])) q[2] = (q[2] || 0) + dz;
+            for (const h of (r.holes || [])) for (const q of h) q[2] = (q[2] || 0) + dz;
+          }
+          if (P.baseLevel != null) {
+            const tgt = lvAt(sourceZ + dz);
+            if (tgt) P.baseLevel = tgt.id;
+          }
+        }
+        const ent = this._createInner(src.type, P, {}, []);
+        const ok = src.type === 'column' ? this.rebuildColumnEntity(ent.id)
+          : src.type === 'beam' ? this.rebuildBeamEntity(ent.id)
+            : this.rebuildFloorEntity(ent.id);
+        if (ok) made++; else paramsOnly++;
+      }
+    }
+    return { made, picked: picked.length, paramsOnly, skippedWalls };
+  }
+
   rebuildColumnEntity(id) {
     const ent = this.getEntityById(id);
     if (!ent || ent.type !== 'column') return false;
@@ -5209,7 +5274,7 @@ class App {
           const defBtn = DEFINE_BUTTONS[id];
           mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
             defBtn.tip, 'tbtn-def', '{}', () => {
-              const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis'].includes(defBtn.cat);
+              const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
               const mod = isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
               if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
