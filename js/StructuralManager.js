@@ -237,38 +237,6 @@
         zEnd = zStart + Math.max(0.1, +p.height || 3);
       return { zStart, zEnd, height: zEnd - zStart };
     }
-    /** BEAM-CONTINUOUS JOINTS: the effective column height stops at the
-     *  soffit of the lowest beam that passes over the column's footprint
-     *  at its top level. Pure display precedence — the analysis model keeps
-     *  the full-height centerline with rigid offsets. Returns meters. */
-    columnEffectiveHeight(p) {
-      const model = this.model || (window.app && window.app.model) || null;
-      const b = this.columnBounds(p);
-      const c0 = p.base || p.center;
-      if (!c0 || !model || !model.bimEntities) return b.height;
-      const topZ = b.zEnd;
-      const hw = Math.max(0.02, +p.width || 0.3) / 2 + 0.05;
-      const hd = Math.max(0.02, +p.depth || 0.3) / 2 + 0.05;
-      let soffit = Infinity;
-      for (const e of model.bimEntities) {
-        if (e.type !== 'beam' || !e.params || !Array.isArray(e.params.baseline)) continue;
-        const bl = e.params.baseline;
-        if (Math.abs(bl[0][2] - topZ) > 0.01) continue;
-        const bh = Math.max(0.05, +e.params.height || 0.5);
-        const A = bl[0], B = bl[bl.length - 1];
-        const steps = 24;
-        for (let s = 0; s <= steps; s++) {
-          const t = s / steps;
-          const px = A[0] + (B[0] - A[0]) * t, py = A[1] + (B[1] - A[1]) * t;
-          if (Math.abs(px - c0[0]) <= hw && Math.abs(py - c0[1]) <= hd) {
-            soffit = Math.min(soffit, topZ - bh);
-            break;
-          }
-        }
-      }
-      if (soffit > b.zStart + 0.1 && soffit < b.zEnd) return soffit - b.zStart;
-      return b.height;
-    }
     // LEVEL-SCOPED WALL SPAN: wall geometry builds at the LEVEL elevation,
     // but params.base[2] stores the raw click z (0 in plan views). Every
     // trim / split / retreat comparison resolves the span through the wall's
@@ -892,25 +860,6 @@
       // (edge/corner, no continuation beyond) trim the beam to the column
       // face. The ANALYSIS model is unaffected either way — centerline
       // elements with rigid end offsets, monolithic joints.
-      const beamContinues = (px, py, dx, dy) => {
-        // a sibling beam MEETS this joint and extends beyond it along
-        // (dx, dy): one of its endpoints at the joint, the far one past it
-        const pool = model.bimEntities ? [...model.bimEntities] : [];
-        if (pending && pending.length) for (const x of pending)
-          if (x.type === 'beam') pool.push({ type: 'beam', params: x.params });
-        for (const e of pool) {
-          if (e.type !== 'beam' || !e.params || !Array.isArray(e.params.baseline)) continue;
-          const bl = e.params.baseline;
-          const A = bl[0], B = bl[bl.length - 1];
-          for (const [near, far] of [[A, B], [B, A]]) {
-            if (Math.hypot(near[0] - px, near[1] - py) > 0.05) continue;
-            const along = (far[0] - px) * dx + (far[1] - py) * dy;
-            const across = Math.abs(-(far[0] - px) * dy + (far[1] - py) * dx);
-            if (along > 0.3 && across < 0.3) return true;
-          }
-        }
-        return false;
-      };
       const ov = Math.max(prof0.webWidth || 0.2, 0.1) / 2;
       const colReach = (px, py) => {
         let best = 0;
@@ -928,12 +877,8 @@
         }
         return best;
       };
-      const reachesA = colReach(A0[0], A0[1]);
-      const reachesB = colReach(B0[0], B0[1]);
-      // through-joint → continuous beam (extend past the center); terminating
-      // joint at a column → trim to the column face; empty corner → weld ov
-      const reachA = reachesA > 0 ? (beamContinues(A0[0], A0[1], d.x, d.y) ? 0 : reachesA) : 0;
-      const reachB = reachesB > 0 ? (beamContinues(B0[0], B0[1], -d.x, -d.y) ? 0 : reachesB) : 0;
+      const reachA = colReach(A0[0], A0[1]);
+      const reachB = colReach(B0[0], B0[1]);
       const A = reachA > 0 ? [A0[0] + d.x * reachA, A0[1] + d.y * reachA, A0[2]]
         : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
       const B = reachB > 0 ? [B0[0] - d.x * reachB, B0[1] - d.y * reachB, B0[2]]
@@ -992,8 +937,9 @@
       const fam = root.ColumnFamilies && root.ColumnFamilies.get(p.family);
       if (fam) return this._buildFamilyColumn(G, model, p);
       const b = this.columnBounds(p);
-      b.zEnd = b.zStart + this.columnEffectiveHeight(p); // beam-continuous joints
-      b.height = b.zEnd - b.zStart;
+      // COLUMNS KEEP THEIR DRAWN HEIGHT - a 3 m column is 3 m tall no matter
+      // what beams hang beside it (beams live below the level line with Top
+      // justification and butt into the column faces). No soffit trim.
       if (b.height < 0.02) throw new Error('column height below minimum');
       const c = p.base || p.center;
       // insertion offset: the ANALYTICAL base (grid position) stays; the solid

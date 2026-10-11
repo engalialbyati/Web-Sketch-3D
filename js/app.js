@@ -2657,14 +2657,12 @@ class BimEntityManager {
       for (const h2 of (f2.holes || [])) m.edgesForRing(h2, true);
     }
     const b = p.base, z = b[2];
-    // BEAM-CONTINUOUS JOINTS: the rebuild path trims the solid to the beam
-    // soffit too (the placement tool path does it via buildColumn)
-    const effH = (window.app && window.app.structural && window.app.structural.columnEffectiveHeight)
-      ? window.app.structural.columnEffectiveHeight(p) : (+p.height || 3);
+    // COLUMNS KEEP THEIR DRAWN HEIGHT - beams hang beside them (Top
+    // justification) and butt into the faces; no soffit trim.
     let made = [];
     try {
       made = window.ColumnFeature
-        ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, effH, +p.rotation || 0,
+        ? window.ColumnFeature.placeColumn(G, m, { x: b[0], y: b[1], z }, p.width, p.depth, +p.height || 3, +p.rotation || 0,
           { bimEntityId: id, bimType: 'column' }, [+p.offsetX || 0, +p.offsetY || 0])
         : [];
     } catch (e) { m.bimHold = false; return false; }
@@ -2673,7 +2671,7 @@ class BimEntityManager {
     for (const f of made) {
       const c = m.faceCentroid(f);
       roles[f.id] = Math.abs(c.z - z) < 1e-6 ? 'bottom'
-        : Math.abs(c.z - (z + effH)) < 1e-6 ? 'top' : 'side';
+        : Math.abs(c.z - (z + (+p.height || 3))) < 1e-6 ? 'top' : 'side';
     }
     ent.faces = made.map(f => f.id);
     ent.edges = [];
