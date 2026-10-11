@@ -396,7 +396,7 @@ const RIBBON_TABS = {
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['anlrun'] },
     { title: 'Dynamics', tools: ['anlrs', 'anlth'] },
-    { title: 'Diagrams', tools: ['anldiagram', 'anlforce'] },
+    { title: 'Diagrams', tools: ['anldiagram', 'anlforce', 'anldefl'] },
     { title: 'Results', tools: ['anlforces', 'anlstory'] },
   ] },
   rcdesign: { label: 'Design', groups: [
@@ -489,6 +489,7 @@ const DEFINE_BUTTONS = {
   anldiagram: { label: 'Show Diagrams', glyph: '∠', tip: 'Toggle moment/shear diagrams on beams in the 3D viewport (cycles: off → M3 → V3 → off)', cat: 'showDiagrams' },
   anlforce: { label: 'Force Dialog', glyph: '≡', tip: 'Per-member BMD/SFD canvas with values', cat: 'showForceDialog' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
+  anldefl: { label: 'Deflection', glyph: '⌒', tip: 'Deflected shape — beam elastic lines from M/EI, auto-scaled; purple ≤ L/250', cat: 'showDeflection' },
   anlstory: { label: 'Story Results', glyph: '⇤⇥', tip: 'Per-story inter-story drift and story shear (ASCE 7 Table 12.12-1)', cat: 'storyResults' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
   dscbcol: { label: 'Column Design', glyph: '▣', tip: 'ACI 318-19 column design: biaxial P-M interaction, DCR', cat: 'columnDesign' },
@@ -5366,6 +5367,7 @@ class App {
               // this map they fall through to RCDefine and do nothing
               const DESIGN_MOD = {
                 showDiagrams: 'RCDiagram', showForceDialog: 'RCDiagram',
+                showDeflection: 'RCDiagram',
                 beamDesign: 'RCBeam', columnDesign: 'RCColumn',
                 wallDesign: 'RCWall', slabDesign: 'RCSlab',
                 designReport: 'RCReport',

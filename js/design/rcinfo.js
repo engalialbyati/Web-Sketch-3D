@@ -171,12 +171,31 @@
       : '<span style="padding:1px 6px;border-radius:3px;font-size:10px;font-weight:bold;background:#ffebee;color:#c62828">FAIL</span>';
     const bars = b => b ? `${b.count}Ø${b.dia}${b.spacing ? '@' + b.spacing : ''}` : '—';
     if (ent.type === 'beam') {
+      // deflection table (ETABS ImmediateDeflection check parity):
+      // elastic line from M/EI double integration over the entity
+      let deflHtml = '';
+      try {
+        const defs = root.RCModel.beamDeflections(app, comboName || 'ENVELOPE');
+        const v = defs && defs.get(ent.id);
+        if (v) {
+          const stRows = v.stations.map(st =>
+            '<tr>' + td((st.x).toFixed(2)) + td(st.d.toFixed(2)) +
+            td(`<b style="color:${st.d > v.L_mm / 250 ? '#c62828' : '#2e7d32'}">${(v.L_mm / 250).toFixed(2)}</b>`) + '</tr>').join('');
+          deflHtml = '<p style="font-size:12px;margin:8px 0 2px"><b>Deflection</b> — elastic, gross EI (mm, down+)</p>' +
+            table(['x (m)', 'δ (mm)', 'Limit L/250'],
+              stRows) +
+            `<p style="font-size:11px;opacity:.8;margin:4px 0 0">δmax = <b>${v.dmax_mm.toFixed(2)} mm</b> · ` +
+            `L/δ = ${v.ratio} · L/250 = ${(v.L_mm / 250).toFixed(2)} mm · ` +
+            `<b style="color:${v.ok250 ? '#2e7d32' : '#c62828'}">${v.ok250 ? 'OK' : 'EXCEEDS L/250'}</b>` +
+            ' <span style="opacity:.6">(elastic gross-EI; no creep/long-term)</span></p>';
+        }
+      } catch (e) { deflHtml = ''; }
       return table(['Mu top/bot at faces (kN·m)', 'Vu at face (kN)', 'As req top/bot (mm²)', 'Top bars', 'Bot bars', 'Stirrups', 'Torsion'],
         ['<tr>' + td(`${(d.MuTop / 1e6).toFixed(1)} / ${(d.MuBot / 1e6).toFixed(1)}`) +
         td((d.Vu / 1e3).toFixed(1)) +
         td(`${Math.round(d.AsTop)} / ${Math.round(d.AsBot)}`) +
         td(bars(d.topBars)) + td(bars(d.botBars)) + td(d.stirrups ? `Ø${d.stirrups.dia}@${d.stirrups.spacing}` : '—') +
-        td(d.torsion ? (d.torsion.needed ? (d.torsion.ok === false ? 'SECTION TOO SMALL' : `At/s=${d.torsion.AtOverS}`) : 'below threshold') : '—') + '</tr>']);
+        td(d.torsion ? (d.torsion.needed ? (d.torsion.ok === false ? 'SECTION TOO SMALL' : `At/s=${d.torsion.AtOverS}`) : 'below threshold') : '—') + '</tr>']) + deflHtml;
     }
     if (ent.type === 'column') {
       const dcr = d.dcr != null ? d.dcr : 0;

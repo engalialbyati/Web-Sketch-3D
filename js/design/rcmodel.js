@@ -758,6 +758,146 @@
     return R.combos.length ? R.combos : R.patterns;
   }
 
+  // ======================================================== deflections
+  // ETABS parity: joint displacements come from the solver per case, combos
+  // are linear in displacements too (ResultDisplayTypes.DeformedShape +
+  // JointDispl). Beams: the elastic line by double integration of M(x)/EI
+  // over the whole entity (segments chained), simply-supported on the M
+  // distribution, plus the chord line between the end joint uz — robust
+  // because it uses only the (validated) station forces, not the raw
+  // rotational dofs. Gross EI (elastic, no creep — ETABS long-term adds a
+  // creep factor on top; flagged as not implemented).
+  function comboU(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return null;
+    ensureAutoCombos(app);
+    const d = RD().ensure(app);
+    // case weights live in the combo DEFINITIONS (d.combos), the displacement
+    // vectors in the results patterns — combine by name
+    const build = cases => {
+      const U = new Float64Array(R.nDof);
+      let used = 0;
+      for (const item of cases) {
+        const pi = R.patterns.findIndex(p2 => p2.name === item.name);
+        if (pi < 0 || !R.patterns[pi].U) continue;
+        const w = item.scale || 1; used++;
+        const Up = R.patterns[pi].U;
+        for (let i = 0; i < U.length; i++) U[i] += w * Up[i];
+      }
+      return used ? U : null;
+    };
+    if (comboName && comboName !== 'ENVELOPE') {
+      const def = d.combos.find(c2 => c2.name === comboName);
+      if (def) return build(def.cases);
+      const p = R.patterns.find(p2 => p2.name === comboName);
+      return p ? p.U : null;
+    }
+    // ENVELOPE v1: the first defined combo (typically 1.4D) — per-station
+    // max across combos needs assembly and is phase-2
+    const c0 = d.combos[0];
+    if (!c0) return R.patterns[0] ? R.patterns[0].U : null;
+    return build(c0.cases);
+  }
+
+  // returns Map(entId → { L_mm, dmax_mm, ratio, ok250, stations: [{x, d}] })
+  // d positive DOWN (mm); stations x in meters from the entity start
+  function beamDeflections(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return null;
+    ensureAutoCombos(app);
+    const U = comboU(app, comboName);
+    if (!U) return null;
+    const model = R.model;
+    const d = RD().ensure(app);
+    const rowsBy = new Map();
+    for (const m of model.map) {
+      if (!m.ent || m.ent.type !== 'beam') continue;
+      if (!rowsBy.has(m.ent.id)) rowsBy.set(m.ent.id, []);
+      rowsBy.get(m.ent.id).push(m);
+    }
+    const out = new Map();
+    // combo weights per pattern name (stations are stored per pattern; the
+    // combo's M(x) is the weighted sum — linear statics)
+    const patNames = R.patterns.map(p2 => p2.name);
+    let wts = null;
+    if (comboName && comboName !== 'ENVELOPE') {
+      const def = d.combos.find(c2 => c2.name === comboName);
+      wts = def ? patNames.map(n2 => { const it = def.cases.find(x => x.name === n2); return it ? (it.scale || 1) : 0; })
+                : patNames.map(n2 => n2 === comboName ? 1 : 0);
+    } else {
+      const c0 = d.combos[0];
+      wts = c0 ? patNames.map(n2 => { const it = c0.cases.find(x => x.name === n2); return it ? (it.scale || 1) : 0; })
+               : patNames.map((n2, i2) => i2 === 0 ? 1 : 0);
+    }
+    for (const [entId, rows] of rowsBy) {
+      rows.sort((a, b) => (a.x0 || 0) - (b.x0 || 0));
+      const ent = rows[0].ent;
+      const sec = sectionOf(app, ent);
+      if (!sec) continue;
+      const mat = materialOf(app, sec, ent);
+      if (!mat) continue;
+      const E = RD().matE(mat);                       // MPa
+      const I33 = (RD().frameSectionProps(sec).I33 || 0) * 1e12; // mm⁴
+      if (!(E > 0) || !(I33 > 0)) continue;
+      const EI = E * I33;
+      // stitch the entity's combo M(x) in global meters: each segment row's
+      // station table exists per pattern — combine with the combo weights
+      const X = [], Mm = [];
+      for (const m of rows) {
+        const el = model.frames[m.idx];
+        if (el.dummy) continue;
+        const st0 = R.patterns[0].members[m.idx] && R.patterns[0].members[m.idx].stations;
+        if (!st0) continue;
+        for (let si = 0; si < st0.length; si++) {
+          let Mv = 0;
+          for (let p2 = 0; p2 < R.patterns.length; p2++) {
+            if (!wts[p2]) continue;
+            const rowP = R.patterns[p2].members[m.idx];
+            if (rowP && rowP.stations && rowP.stations[si]) Mv += wts[p2] * rowP.stations[si].M;
+          }
+          X.push((m.x0 || 0) + st0[si].x); Mm.push(Mv);
+        }
+      }
+      if (X.length < 2) continue;
+      const L_mm = X[X.length - 1] * 1000;
+      if (!(L_mm > 10)) continue;
+      // curvature and double integration (trapezoid), SS on the M distribution
+      const xsMM = X.map(x2 => x2 * 1000);
+      const slope = [0];
+      for (let i = 0; i < xsMM.length - 1; i++) {
+        const k1 = Mm[i] * 1e6 / EI, k2 = Mm[i + 1] * 1e6 / EI;
+        slope.push(slope[i] + 0.5 * (k1 + k2) * (xsMM[i + 1] - xsMM[i]));
+      }
+      const vraw = [0];
+      for (let i = 0; i < xsMM.length - 1; i++)
+        vraw.push(vraw[i] + 0.5 * (slope[i] + slope[i + 1]) * (xsMM[i + 1] - xsMM[i]));
+      const endRaw = vraw[vraw.length - 1];
+      // chord from end joint uz (mm, up-positive)
+      const ni = rows[0] ? model.frames[rows[0].idx].ni : null;
+      const nj = model.frames[rows[rows.length - 1].idx].nj;
+      const di = U[ni * 6 + 2] || 0, dj = U[nj * 6 + 2] || 0;
+      const stations = [], dArr = [];
+      let dmax = 0;
+      for (let i = 0; i < xsMM.length; i++) {
+        const t = xsMM[i] / L_mm;
+        const chordUp = (1 - t) * di + t * dj;         // mm, up +
+        // relative SS deflection (down +) minus the chord rise → total down
+        // (vraw is already mm: κ[1/mm] × dx[mm])
+        const d = vraw[i] - t * endRaw - chordUp; // mm, down +
+        dmax = Math.max(dmax, d);
+        dArr.push(d);
+        stations.push({ x: +(xsMM[i] / 1000).toFixed(3), d: +d.toFixed(3) });
+      }
+      out.set(entId, {
+        id: entId, L_mm: Math.round(L_mm), dmax_mm: +dmax.toFixed(3),
+        ratio: +(L_mm / Math.max(dmax, 1e-6)).toFixed(0),
+        ok250: dmax <= L_mm / 250, ok360: dmax <= L_mm / 360,
+        stations, len: X[X.length - 1],
+      });
+    }
+    return out;
+  }
+
   function runAnalysis(app, opts = {}) {
     const model = buildModel(app);
     if (!model.frames.length && !model.shells.length)
@@ -1739,7 +1879,7 @@
     }
     return { maxU: Array.from(maxU), nSteps, dt };
   }
-  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, forceTable, open, openAssign,
+  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, beamDeflections, comboU, forceTable, open, openAssign,
     responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign, caseU };
 })(window);
 

@@ -316,6 +316,13 @@
       else hideDiagrams(app);
       return;
     }
+    if (cat === 'showDeflection') {
+      const comboName = defaultCase(app);
+      if (!comboName) { app.toast('Run the analysis first', true); return; }
+      if (currentMode === 'DEF') hideDiagrams(app);
+      else showDeflection(app, comboName);
+      return;
+    }
     if (cat === 'showForceDialog') {
       const comboName = defaultCase(app);
       if (!comboName) { app.toast('Run the analysis first', true); return; }
@@ -324,5 +331,52 @@
     }
   }
 
-  root.RCDiagram = { showDiagrams, hideDiagrams, showForceDialog, open };
+  // ================================================== deflected shape
+  // ETABS ResultDisplayTypes.DeformedShape parity: beams drawn on their
+  // elastic line (double integration of M/EI per entity, chord from the
+  // end joint uz), auto-scaled; deflection values in mm.
+  function showDeflection(app, comboName) {
+    hideDiagrams(app);
+    const THREE = root.THREE;
+    const view = app.view;
+    if (!THREE || !view || !view.scene) return;
+    const defs = root.RCModel.beamDeflections(app, comboName);
+    if (!defs || !defs.size) { app.toast('No deflection data — run the analysis first', true); return; }
+    currentMode = 'DEF';
+    diagramGroup = new THREE.Group();
+    diagramGroup.name = 'rcForceDiagrams';
+    let maxD = 0;
+    for (const v of defs.values()) maxD = Math.max(maxD, v.dmax_mm);
+    if (maxD < 1e-6) { app.toast('Negligible deflection'); return; }
+    const scale = 0.7 / maxD;   // meters of offset per mm of deflection
+    for (const v of defs.values()) {
+      const ent = app.bim.getEntityById(v.id);
+      if (!ent) continue;
+      const ends = beamEnds(ent);
+      if (!ends) continue;
+      const ax = ends.a[0], ay = ends.a[1], az = ends.a[2];
+      const bx = ends.b[0], by = ends.b[1], bz = ends.b[2];
+      const dx = bx - ax, dy = by - ay, dz = bz - az;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      // baseline
+      diagramGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(ax, ay, az), new THREE.Vector3(bx, by, bz)]),
+        new THREE.LineBasicMaterial({ color: 0x333333 })));
+      // deflected curve — offset along global −z (down), scaled
+      const pts = v.stations.map(st => {
+        const t = st.x / len;
+        const off = st.d * scale;
+        return new THREE.Vector3(ax + dx * t, ay + dy * t, az + dz * t - off);
+      });
+      const curve = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: v.ok250 ? 0x7b1fa2 : 0xe53935 }));
+      curve.renderOrder = 5;
+      diagramGroup.add(curve);
+    }
+    view.scene.add(diagramGroup);
+    app.toast(`Deflected shape (×${(scale * 1000).toFixed(0)}·10³) — max δ ${maxD.toFixed(2)} mm · purple ≤ L/250`);
+  }
+
+  root.RCDiagram = { showDiagrams, hideDiagrams, showDeflection, showForceDialog, open };
 })(window);
