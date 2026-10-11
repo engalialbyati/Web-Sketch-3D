@@ -6,7 +6,7 @@
 (function (root) {
   'use strict';
 
-  const STRUCTURAL = ['beam', 'column', 'wall', 'slab', 'roof'];
+  const STRUCTURAL = ['beam', 'column', 'wall', 'slab', 'floor', 'roof'];
 
   // entities under the current selection (face stamps → entity)
   function selStructuralEnts(app) {
@@ -123,7 +123,7 @@
         const r = root.RCWall.designAllWalls(app, comboName);
         return r.error ? { error: r.error } : (r.results.find(x => x.id === ent.id) || { error: 'No design row.' });
       }
-      if (ent.type === 'slab' || ent.type === 'roof') {
+      if (ent.type === 'slab' || ent.type === 'floor' || ent.type === 'roof') {
         const r = root.RCSlab.designAllSlabs(app, comboName);
         return r.error ? { error: r.error } : (r.results.find(x => x.id === ent.id) || { error: 'No design row.' });
       }

@@ -1411,10 +1411,10 @@
   function renderAssign(app, kind) {
     const d = ensure(app);
     const isFrame = kind === 'assignFrames';
-    const kinds = isFrame ? ['beam', 'column'] : ['wall', 'slab', 'roof'];
+    const kinds = isFrame ? ['beam', 'column'] : ['wall', 'slab', 'floor', 'roof'];
     const ents = selectedStructuralEnts(app, kinds);
     if (!ents.length) {
-      app.toast(`Select ${isFrame ? 'beam/column' : 'wall/slab/roof'} elements first, then Assign`, true);
+      app.toast(`Select ${isFrame ? 'beam/column' : 'wall/slab/floor/roof'} elements first, then Assign`, true);
       return;
     }
     const list = isFrame ? d.frameSections : d.areaSections;
@@ -1637,8 +1637,8 @@
   }
 
   function renderAssignSurfaceLoads(app) {
-    const ents = selectedStructuralEnts(app, ['slab', 'roof', 'wall']);
-    if (!ents.length) { app.toast('Select slab/roof/wall elements first', true); return; }
+    const ents = selectedStructuralEnts(app, ['slab', 'floor', 'roof', 'wall']);
+    if (!ents.length) { app.toast('Select slab/floor/roof/wall elements first', true); return; }
     const html = [
       `<p style="margin:0 0 6px;font-size:12px;opacity:.8">${ents.length} element(s) selected.</p>`,
       row('Load Pattern', `<select id="sl-pat" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${
