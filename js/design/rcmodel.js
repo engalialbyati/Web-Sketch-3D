@@ -83,10 +83,12 @@
       return best; // null = no column node within tolerance
     };
 
-    for (const ent of ents) {
-      if (ent.type !== 'beam' && ent.type !== 'column') { skipped.walls++; continue; }
+    // per-member frame builder: section properties + stiffness + the frame
+    // record + its map tie. Called once per element — or once per segment
+    // for through-beams divided at interior column joints.
+    const pushMember = (ent, ni, nj, seg) => {
       const sec = sectionOf(app, ent);
-      if (!sec) { skipped.noSection++; continue; }
+      if (!sec) { skipped.noSection++; return; }
       const mat = materialOf(app, sec, ent);
       const props = RD().frameSectionProps(sec);        // A, I22, I33 (m⁴ → mm⁴ below)
       const dims = sec.dims || {};
@@ -97,30 +99,6 @@
       const nu = mat && mat.iso ? mat.iso.u : 0.2;
       const Ec = mat ? RD().matE(mat) : 25000;          // MPa (auto or explicit)
       const Gm = Ec / (2 * (1 + nu));
-
-      let ni, nj;
-      if (ent.type === 'beam' && Array.isArray(ent.params.baseline) && ent.params.baseline.length >= 2) {
-        const [p1, p2] = ent.params.baseline;
-        // snap to a reserved column node when the drawn line is offset:
-        // the ELEMENT connects at the joint; the offset becomes a rigid
-        // insertion arm so the physical (eccentric) section still governs
-        const snapArmFor = (pt) => {
-          const n = snapToColumnNode(pt[0], pt[1], pt[2]);
-          if (!n) return { idx: nodeAt(pt[0], pt[1], pt[2]), arm: [0, 0, 0] };
-          return { idx: nodes.indexOf(n), arm: [(pt[0] - n.x) * 1000, (pt[1] - n.y) * 1000, (pt[2] - n.z) * 1000] };
-        };
-        const eI = snapArmFor(p1);
-        const eJ = snapArmFor(p2);
-        ni = eI.idx; nj = eJ.idx;
-        if (eI.arm[0] || eI.arm[1] || eI.arm[2] || eJ.arm[0] || eJ.arm[1] || eJ.arm[2])
-          snapArm.set(ent.id, [eI.arm, eJ.arm]);
-      } else if (ent.type === 'column' && Array.isArray(ent.params.base)) {
-        const [x, y, z] = ent.params.base;
-        const hgt = +ent.params.height || 3;
-        ni = nodeAt(x, y, z);
-        nj = nodeAt(x, y, z + hgt);
-      } else { skipped.noSection++; continue; }
-      if (ni === nj) continue;
 
       // stiffness modifiers (ETABS SetModifiers): a→A, i22→Iy, i33→Iz,
       // torsion→J, mass/weight→self weight — ACI cracked-section values
@@ -145,7 +123,65 @@
               .filter(v => v >= 0)
           : null,
       });
-      map.push({ ent, idx: frames.length - 1, len: null });
+      map.push({ ent, idx: frames.length - 1, len: null, seg: seg || 0 });
+    };
+
+    for (const ent of ents) {
+      if (ent.type !== 'beam' && ent.type !== 'column') { skipped.walls++; continue; }
+
+      let ni, nj;
+      if (ent.type === 'beam' && Array.isArray(ent.params.baseline) && ent.params.baseline.length >= 2) {
+        const [p1, p2] = ent.params.baseline;
+        // snap to a reserved column node when the drawn line is offset:
+        // the ELEMENT connects at the joint; the offset becomes a rigid
+        // insertion arm so the physical (eccentric) section still governs
+        const snapArmFor = (pt) => {
+          const n = snapToColumnNode(pt[0], pt[1], pt[2]);
+          if (!n) return { idx: nodeAt(pt[0], pt[1], pt[2]), arm: [0, 0, 0] };
+          return { idx: nodes.indexOf(n), arm: [(pt[0] - n.x) * 1000, (pt[1] - n.y) * 1000, (pt[2] - n.z) * 1000] };
+        };
+        const eI = snapArmFor(p1);
+        const eJ = snapArmFor(p2);
+        ni = eI.idx; nj = eJ.idx;
+        // THROUGH-BEAM (ETABS joint semantics): a column top landing strictly
+        // inside the baseline divides it into segments there — one frame per
+        // segment, each sharing the column's top node so its loads flow. The
+        // drawn entity stays whole; only the analysis model divides.
+        const splitTs = [0, 1];
+        const bdx = nodes[nj].x - nodes[ni].x, bdy = nodes[nj].y - nodes[ni].y;
+        const bL2 = bdx * bdx + bdy * bdy || 1;
+        for (const ci of colNodes) {
+          const cn = nodes[ci];
+          if (Math.abs(cn.z - p1[2]) > 1e-4) continue;
+          const t = ((cn.x - nodes[ni].x) * bdx + (cn.y - nodes[ni].y) * bdy) / bL2;
+          if (t <= 0.02 || t >= 0.98) continue;
+          const px = nodes[ni].x + bdx * t, py = nodes[ni].y + bdy * t;
+          if (Math.hypot(px - cn.x, py - cn.y) > 0.25) continue; // off-axis column
+          splitTs.push(+t.toFixed(4));
+        }
+        if (splitTs.length > 2) {
+          const ts = [...new Set(splitTs)].sort((x, y) => x - y);
+          const segArms = [];
+          for (let s = 0; s < ts.length - 1; s++) {
+            const t0 = ts[s], t1 = ts[s + 1];
+            const nA = nodeAt(nodes[ni].x + bdx * t0, nodes[ni].y + bdy * t0, p1[2]);
+            const nB = nodeAt(nodes[ni].x + bdx * t1, nodes[ni].y + bdy * t1, p1[2]);
+            if (nA === nB) continue;
+            pushMember(ent, nA, nB, s);
+            // arms: only the outer ends carry the joint eccentricity
+            segArms.push([s === 0 ? eI.arm : [0, 0, 0], s === ts.length - 2 ? eJ.arm : [0, 0, 0]]);
+          }
+          if (segArms.length) snapArm.set(ent.id, segArms);
+          continue;
+        }
+      } else if (ent.type === 'column' && Array.isArray(ent.params.base)) {
+        const [x, y, z] = ent.params.base;
+        const hgt = +ent.params.height || 3;
+        ni = nodeAt(x, y, z);
+        nj = nodeAt(x, y, z + hgt);
+      } else { skipped.noSection++; continue; }
+      if (ni === nj) continue;
+      pushMember(ent, ni, nj, 0);
     }
 
     // ---------------- shells: walls and slabs meshed into quads ------------
@@ -360,7 +396,9 @@
         // total rigid arm per end = connectivity offset (×RZF) + insertion
         // + drawn-offset snap (baseline → column joint); all GLOBAL mm,
         // arm points from the node to the member axis
-        const sA = snapArm.get(m.ent.id) || [[0, 0, 0], [0, 0, 0]];
+        // per-segment arm pairs: split beams carry [start, end] per segment
+        const sAll = snapArm.get(m.ent.id);
+        const sA = (sAll && sAll[m.seg || 0]) || [[0, 0, 0], [0, 0, 0]];
         const fx = (b.x - a.x) / L, fy2 = (b.y - a.y) / L, fz = (b.z - a.z) / L;
         frames[m.idx].armI = [fx * frames[m.idx].eoI + ins[0] + sA[0][0],
           fy2 * frames[m.idx].eoI + ins[1] + sA[0][1], fz * frames[m.idx].eoI + ins[2] + sA[0][2]];

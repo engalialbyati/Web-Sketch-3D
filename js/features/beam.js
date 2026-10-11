@@ -98,20 +98,31 @@
       if (app.preTrimWallsFor) app.preTrimWallsFor({ id: '__pending__', type: 'beam', params });
       const facesBefore = new Set(m.faces.keys());
       const edgesBefore = new Set(m.edges.keys());
+      // WALL-CONTRACT PLACEMENT: register the entity FIRST (pending), then
+      // sweep with bimHold = the entity id - the born faces carry its stamp,
+      // so they only ever intersect their OWN element. Columns and walls are
+      // never cut: beam and column go THROUGH each other full-length (ETABS
+      // extruded-view behavior) and the takeoff deducts the joint (column
+      // wins) - no trimming, no splitting, no shredded columns.
+      const ent = app.bim.create('beam', params, {}, [], { pending: true });
+      ent._pending = true;
       let ok = false;
       app.transaction.run('beam', mm => {
         // PRE-SPLIT: walls in the beam's path retreat to its faces FIRST —
         // the sweep travels between the pieces instead of slicing wall
         // material (same contract as column placement)
         app.bim.preSplitWallsForBeam(params);
-        mm.bimHold = true; // the beam deliberately meets its neighbors
+        mm.bimHold = ent.id; // owner stamp: born faces only cut their own
         try {
-          const st = app.structural.buildBeam(G, mm, params);
+          const st = app.structural.buildBeam(G, mm, { ...params, ownerId: ent.id });
           if (!st.length) throw new Error('beam sweep produced nothing');
           ok = true;
         } finally { mm.bimHold = false; }
       });
-      if (!ok) return; // rolled back
+      if (!ok) { // rolled back - release the pending registration
+        app.bim.detach(ent.id);
+        return;
+      }
       // Claim only UNSTAMPED new faces: splits of pre-existing elements
       // (a wall the beam's section crosses) keep their owner's stamp and
       // stay with that entity — the beam never steals geometry it divided.
@@ -120,7 +131,12 @@
       const roles = app.structural.classifyBeamRoles(G, m, newFaces, params);
       const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id))
         .filter(id => !(m.edges.get(id) || {}).userData);
-      app.bim.create('beam', params, roles, newEdges);
+      delete ent._pending;
+      ent.faces = newFaces.map(f => f.id);
+      ent.edges = [...new Set(newEdges)];
+      for (const f of newFaces) {
+        if (!f.userData) f.userData = { bimEntityId: ent.id, bimType: 'beam', role: 'body' };
+      }
       // dynamic infill walls under the new beam terminate at its underside
       const trimmed = app.syncStructuralWalls ? app.syncStructuralWalls() : 0;
       const prof = { rectangular: 'Rectangular', t: 'T', l: 'L' }[params.profile] || '';

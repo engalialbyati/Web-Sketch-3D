@@ -526,10 +526,10 @@
     // parameter — piece baselines run center-to-center and buildBeam does
     // the face trim, exactly like every hand-drawn framing beam.
     beamPlanTrims(beamParams, pending) {
-      // v0.6 ELEMENT INDEPENDENCE: a beam is NEVER split by columns rising
-      // through it — beam and column overlap by ELEMENT_EPS (bearing, not
-      // division). Kept as a stub: callers consult it opportunistically.
-      return null;
+      // OWNER'S RULE (restored): a beam drawn along a column run TRIMS at
+      // each column it crosses - the column keeps its solid, the beam yields
+      // the joint (option a: column wins). The old interval computation is
+      // live again; callers split the beam into face-to-face spans.
       const p = beamParams;
       const bl = p.baseline;
       if (!bl || bl.length < 2) return null;
@@ -877,12 +877,13 @@
         }
         return best;
       };
-      const reachA = colReach(A0[0], A0[1]);
-      const reachB = colReach(B0[0], B0[1]);
-      const A = reachA > 0 ? [A0[0] + d.x * reachA, A0[1] + d.y * reachA, A0[2]]
-        : [A0[0] - d.x * ov, A0[1] - d.y * ov, A0[2]];
-      const B = reachB > 0 ? [B0[0] - d.x * reachB, B0[1] - d.y * reachB, B0[2]]
-        : [B0[0] + d.x * ov, B0[1] + d.y * ov, B0[2]];
+      // BOTH-THROUGH (ETABS extruded view): the beam sweeps its EXACT drawn
+      // baseline - through columns, past columns, everything. Elements never
+      // divide each other (autoIntersect's indepSkip), so the overlap at the
+      // joints is display-only; the takeoff deducts it (column wins). No
+      // endpoint trim, no mid-run trim, no shredded columns.
+      const A = [A0[0], A0[1], A0[2]];
+      const B = [B0[0], B0[1], B0[2]];
       const L = Math.hypot(B[0] - A[0], B[1] - A[1]);
       // The sweep sits ELEMENT_EPS below the reference plane (v0.6: the
       // standard element overlap): a slab at the same level then buries the
@@ -895,6 +896,7 @@
       const before = new Set(model.faces.keys());
       const f = model.addFaceFromRings(startLoop);
       if (!f) throw new Error('beam profile face is degenerate');
+      if (p.ownerId) f.userData = { bimEntityId: p.ownerId, bimType: 'beam' }; // owner-stamped sweep
       const n = G.loopNormal(model.pts(f.loop));
       const dist = (G.dot(n, d) >= 0 ? 1 : -1) * L;
       if (!model.pushPull(f, dist)) throw new Error('beam sweep failed');
