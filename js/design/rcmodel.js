@@ -297,6 +297,37 @@
         // effective rigid length per end (mm) on the analysis frame
         frames[m.idx].eoI = m.offI * rz * 1000;
         frames[m.idx].eoJ = m.offJ * rz * 1000;
+
+        // INSERTION POINT (ETABS Assign ▸ Frame ▸ Insertion Point): where
+        // the physical section sits relative to the joint — beams draw Top
+        // (top of beam at the level line) and can shift laterally. The
+        // eccentricity becomes a FULLY RIGID arm (ETABS StiffTransform):
+        // the analysis axis runs at the section centroid, the joint couples
+        // to it rigidly, and bearing lands on the real column area.
+        let ins = [0, 0, 0]; // global mm, node → member axis
+        if (m.ent.type === 'beam') {
+          const p = m.ent.params;
+          const h = Math.max(0.05, +p.height || 0.5);
+          const j = p.zJustification || 'Top';
+          // arm from the baseline joint to the section centroid: Top hangs
+          // the beam below the line → centroid BELOW the node → dz = −h/2
+          const dz = j === 'Bottom' ? h / 2 : j === 'Center' ? 0 : -h / 2;
+          const wHalf = (p.webWidth || 0.3) / 2;
+          const lat = (p.locationLine === 'left' ? -wHalf
+            : p.locationLine === 'right' ? wHalf : 0) + (+p.offsetLateral || 0);
+          const L2 = Math.hypot(m.ent.params.baseline[1][0] - m.ent.params.baseline[0][0],
+            m.ent.params.baseline[1][1] - m.ent.params.baseline[0][1]) || 1;
+          const nx = -((m.ent.params.baseline[1][1] - m.ent.params.baseline[0][1]) / L2);
+          const ny = ((m.ent.params.baseline[1][0] - m.ent.params.baseline[0][0]) / L2);
+          ins = [nx * lat * 1000, ny * lat * 1000, dz * 1000];
+        }
+        // total rigid arm per end = connectivity offset (×RZF) + insertion;
+        // both in GLOBAL mm, arm points from the node to the member axis
+        const fx = (b.x - a.x) / L, fy2 = (b.y - a.y) / L, fz = (b.z - a.z) / L;
+        frames[m.idx].armI = [fx * frames[m.idx].eoI + ins[0],
+          fy2 * frames[m.idx].eoI + ins[1], fz * frames[m.idx].eoI + ins[2]];
+        frames[m.idx].armJ = [-fx * frames[m.idx].eoJ + ins[0],
+          -fy2 * frames[m.idx].eoJ + ins[1], -fz * frames[m.idx].eoJ + ins[2]];
       }
     }
 

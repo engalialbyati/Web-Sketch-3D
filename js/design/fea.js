@@ -419,20 +419,26 @@
       }
   }
 
-  // Rigid end zones: the 12×12 kinematic map T (node DOFs → flexible-span
-  // end DOFs) for rigid blocks aI/aJ long in LOCAL coordinates. A rigid arm
-  // d = (±a, 0, 0) from the node carries translations u' = u + θ×d and the
-  // same rotations, so only the bending coupling terms are non-unitary.
-  function rigidEndT(aI, aJ) {
+  // Rigid end zones + insertion points: the 12×12 kinematic map T (node
+  // DOFs → flexible-span-end DOFs) for rigid arms dI/dJ in LOCAL
+  // coordinates. u_end = u_node + θ_node × d ; θ_end = θ_node — a general
+  // 3D arm covers both along-axis end offsets (d = ±a·x̂) and insertion
+  // point eccentricities (ETABS CardinalPoint + StiffTransform).
+  function rigidEndT(dI, dJ) {
     const T = [];
     for (let i = 0; i < 12; i++) T.push(new Float64Array(12));
     for (let k = 0; k < 6; k++) { T[k][k] = 1; T[6 + k][6 + k] = 1; }
-    // end i: face at local +aI
-    T[1][5] += aI;    // face uy ← node θz
-    T[2][4] -= aI;    // face uz ← node θy
-    // end j: face at local −aJ
-    T[7][11] -= aJ;   // face uy ← node θz
-    T[8][10] += aJ;   // face uz ← node θy
+    const skew = (r0, c0, d) => {
+      // u' = u + θ×d → the 3×3 skew coupling on the rotation dofs
+      T[r0 + 0][c0 + 4] += d[2];  // u'x ← +θy·dz
+      T[r0 + 0][c0 + 5] -= d[1];  // u'x ← −θz·dy
+      T[r0 + 1][c0 + 3] -= d[2];  // u'y ← −θx·dz
+      T[r0 + 1][c0 + 5] += d[0];  // u'y ← +θz·dx
+      T[r0 + 2][c0 + 3] += d[1];  // u'z ← +θx·dy
+      T[r0 + 2][c0 + 4] -= d[0];  // u'z ← −θy·dx
+    };
+    skew(0, 0, dI);
+    skew(6, 6, dJ);
     return T;
   }
 
@@ -449,21 +455,34 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      // rigid end zones (ETABS End Length Offsets × Rigid Zone Factor):
-      // the element stiffness is built over the FLEXIBLE span between the
-      // rigid blocks and mapped to the node DOFs by rigid-body kinematics —
-      // K = Tᵀ·K(Lf)·T (exact, no extra nodes, no penalty stiffness)
-      const eoI = el.eoI || 0, eoJ = el.eoJ || 0;
-      let Kl, Lf = L;
-      if (eoI > 0.5 || eoJ > 0.5) {
-        Lf = Math.max(L - eoI - eoJ, L * 0.1);
+      // rigid end zones (ETABS End Length Offsets × Rigid Zone Factor) and
+      // insertion point eccentricities (always rigid, ETABS StiffTransform):
+      // the element stiffness is built over the FLEXIBLE span and mapped to
+      // the node DOFs by rigid-body kinematics — K = Tᵀ·K(Lf)·T
+      const aI = el.eoI || 0, aJ = el.eoJ || 0;
+      const gI = el.armI || null, gJ = el.armJ || null; // global arm vectors, mm
+      let Kl, Lf = L, dIl = null, dJl = null;
+      if (aI > 0.5 || aJ > 0.5 || gI || gJ) {
+        Lf = (aI > 0.5 || aJ > 0.5) ? Math.max(L - aI - aJ, L * 0.1) : L;
         const Kf = frameK(el.E, el.A, el.Iy, el.Iz, el.J, Lf, el.G, el.As2, el.As3);
         if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
           const KgF = frameKg(opts.geo[elIdx], Lf);
           for (let i = 0; i < 12; i++)
             for (let j = 0; j < 12; j++) Kf[i][j] += KgF[i][j];
         }
-        const Tr = rigidEndT(eoI, eoJ);
+        // arms: connectivity offset along the axis + insertion eccentricity
+        const axx = (b.x - a.x) / L, axy = (b.y - a.y) / L, axz = (b.z - a.z) / L;
+        const dIg = gI ? [gI[0], gI[1], gI[2]] : [0, 0, 0];
+        const dJg = gJ ? [gJ[0], gJ[1], gJ[2]] : [0, 0, 0];
+        if (aI > 0.5) { dIg[0] += axx * aI; dIg[1] += axy * aI; dIg[2] += axz * aI; }
+        if (aJ > 0.5) { dJg[0] -= axx * aJ; dJg[1] -= axy * aJ; dJg[2] -= axz * aJ; }
+        // global → local (R rows are the local axes in global coords)
+        const R0 = rotationMatrix(a, b);
+        const toL = v => [R0[0][0] * v[0] + R0[0][1] * v[1] + R0[0][2] * v[2],
+          R0[1][0] * v[0] + R0[1][1] * v[1] + R0[1][2] * v[2],
+          R0[2][0] * v[0] + R0[2][1] * v[1] + R0[2][2] * v[2]];
+        dIl = toL(dIg); dJl = toL(dJg);
+        const Tr = rigidEndT(dIl, dJl);
         Kl = [];
         for (let i = 0; i < 12; i++) Kl.push(new Float64Array(12));
         for (let i = 0; i < 12; i++)
@@ -474,7 +493,7 @@
             Kl[i][j] = s;
           }
       } else {
-        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
+        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
         // P-delta: soften/stiffen the transverse terms with the axial force
         if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
           const Kg = frameKg(opts.geo[elIdx], L);
@@ -495,11 +514,11 @@
       // loads shift into flexible-span coordinates
       let feq0 = null;
       if (ml) {
-        if (Lf < L - 0.5) {
-          const pts = (ml.points || []).map(p => ({ P: p.P, a: p.a - eoI }))
+        if (dIl) {
+          const pts = (ml.points || []).map(p => ({ P: p.P, a: p.a - aI }))
             .filter(p => p.a > 0 && p.a < Lf);
           feq0 = consistentUDL(ml.wy || 0, ml.wz || 0, Lf, pts);
-          const Tr = rigidEndT(eoI, eoJ);
+          const Tr = rigidEndT(dIl, dJl);
           const feq2 = new Float64Array(12);
           for (let i = 0; i < 12; i++)
             for (let k = 0; k < 12; k++) feq2[i] += Tr[k][i] * feq0[k];
@@ -607,18 +626,28 @@
       const a = nodes[el.ni], b = nodes[el.nj];
       const L = G.dist(a, b);
       if (L < 1e-6) return;
-      const eoI = el.eoI || 0, eoJ = el.eoJ || 0;
+      const aI = el.eoI || 0, aJ = el.eoJ || 0;
+      const gI = el.armI || null, gJ = el.armJ || null;
       let Kl, Lf = L;
-      if (eoI > 0.5 || eoJ > 0.5) {
-        // rigid end zones — the identical mapping the solve used
-        Lf = Math.max(L - eoI - eoJ, L * 0.1);
+      if (aI > 0.5 || aJ > 0.5 || gI || gJ) {
+        // rigid ends + insertion arms — the identical mapping the solve used
+        Lf = (aI > 0.5 || aJ > 0.5) ? Math.max(L - aI - aJ, L * 0.1) : L;
         const Kf = frameK(el.E, el.A, el.Iy, el.Iz, el.J, Lf, el.G, el.As2, el.As3);
         if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
           const KgF = frameKg(opts.geo[elIdx], Lf);
           for (let i = 0; i < 12; i++)
             for (let j = 0; j < 12; j++) Kf[i][j] += KgF[i][j];
         }
-        const Tr = rigidEndT(eoI, eoJ);
+        const axx = (b.x - a.x) / L, axy = (b.y - a.y) / L, axz = (b.z - a.z) / L;
+        const dIg = gI ? [gI[0], gI[1], gI[2]] : [0, 0, 0];
+        const dJg = gJ ? [gJ[0], gJ[1], gJ[2]] : [0, 0, 0];
+        if (aI > 0.5) { dIg[0] += axx * aI; dIg[1] += axy * aI; dIg[2] += axz * aI; }
+        if (aJ > 0.5) { dJg[0] -= axx * aJ; dJg[1] -= axy * aJ; dJg[2] -= axz * aJ; }
+        const R0 = rotationMatrix(a, b);
+        const toL = v => [R0[0][0] * v[0] + R0[0][1] * v[1] + R0[0][2] * v[2],
+          R0[1][0] * v[0] + R0[1][1] * v[1] + R0[1][2] * v[2],
+          R0[2][0] * v[0] + R0[2][1] * v[1] + R0[2][2] * v[2]];
+        const Tr = rigidEndT(toL(dIg), toL(dJg));
         Kl = [];
         for (let i = 0; i < 12; i++) Kl.push(new Float64Array(12));
         for (let i = 0; i < 12; i++)
@@ -629,7 +658,7 @@
             Kl[i][j] = s;
           }
       } else {
-        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G);
+        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
         if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
           const Kg = frameKg(opts.geo[elIdx], L);
           for (let i = 0; i < 12; i++)
