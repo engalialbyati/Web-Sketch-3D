@@ -1147,6 +1147,498 @@ body.mode-bim #hint::before {
   box-shadow: 0 0 6px rgba(129, 140, 248, 0.7);
 }
 
+/* ==========================================================================
+   ETABS RC DESIGN & ANALYSIS MODE THEME
+   Inspired by ETABS (Computers and Structures, Inc.)
+   Dark navy navigation accents, structural engineering ribbons, crisp data grids
+   ========================================================================== */
+body.mode-design {
+  --primary: #0284c7;
+  --primary-hover: #0369a1;
+  --primary-light: #f0f9ff;
+  --primary-border: #bae6fd;
+  --primary-glow: rgba(2, 132, 199, 0.2);
+}
+
+/* ETABS Header Brand Badge in Design Mode */
+body.mode-design .brand {
+  color: #0c4a6e;
+}
+body.mode-design .brand::before {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 50%, #0f172a 100%);
+  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.45);
+}
+body.mode-design .brand::after {
+  content: 'Design & Analysis';
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: #0284c7;
+  background: #e0f2fe;
+  border: 1px solid #bae6fd;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 2px;
+  text-transform: uppercase;
+}
+
+/* ETABS Tab Strip (#modetabs) */
+body.mode-design #modetabs {
+  background: #e2e8f0;
+  border-bottom: 2px solid #cbd5e1;
+  padding: 3px 14px 0;
+}
+body.mode-design .mtab {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 6px 16px;
+  color: #475569;
+  border-radius: 6px 6px 0 0;
+  transition: all 0.12s ease;
+}
+body.mode-design .mtab:hover {
+  background: #f8fafc;
+  color: #0369a1;
+}
+body.mode-design .mtab.active {
+  background: #ffffff;
+  color: #0369a1;
+  border: 1px solid #cbd5e1;
+  border-bottom: 2px solid #ffffff;
+  box-shadow: 0 -3px 0 #0284c7 inset, 0 2px 8px rgba(2, 132, 199, 0.08);
+}
+body.mode-design .mtab[data-tab="define"].active { box-shadow: 0 -3px 0 #0284c7 inset; color: #0284c7; }
+body.mode-design .mtab[data-tab="assign"].active { box-shadow: 0 -3px 0 #d97706 inset; color: #b45309; }
+body.mode-design .mtab[data-tab="analyze"].active { box-shadow: 0 -3px 0 #059669 inset; color: #047857; }
+body.mode-design .mtab[data-tab="rcdesign"].active { box-shadow: 0 -3px 0 #7c3aed inset; color: #6d28d9; }
+
+/* ETABS Toolbar Ribbon */
+body.mode-design #toolbar {
+  background: #f8fafc;
+  border-bottom: 1px solid #cbd5e1;
+  padding: 5px 12px 6px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+body.mode-design #toolbar .tgroup {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 7px;
+  padding: 3px 6px 3px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+}
+body.mode-design #toolbar .tgroup:hover {
+  border-color: #94a3b8;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+}
+body.mode-design #toolbar .tg-title {
+  color: #64748b;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+}
+
+/* ETABS Define/Assign/Analyze/Design Ribbon Button Card */
+body.mode-design .tbtn.tbtn-def {
+  min-width: 72px;
+  height: 50px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  color: #334155;
+}
+body.mode-design .tbtn.tbtn-def:hover {
+  background: #f0f9ff;
+  border-color: #bae6fd;
+  color: #0369a1;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.1);
+}
+body.mode-design .tbtn.tbtn-def:active {
+  transform: translateY(0);
+}
+body.mode-design .tbtn.tbtn-def .def-glyph {
+  font-size: 17px;
+  line-height: 1.1;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.08));
+}
+body.mode-design .tbtn.tbtn-def .def-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Category-specific button accents */
+body.mode-design .mtab[data-tab="analyze"] ~ #toolbar .tbtn.tbtn-def:hover,
+body.mode-design .tbtn.tbtn-def[data-tool="anlrun"]:hover {
+  background: #ecfdf5; border-color: #a7f3d0; color: #047857;
+}
+
+/* ETABS Statusbar in Design Mode */
+body.mode-design #statusbar {
+  background: #0f172a;
+  border-top: 1px solid #0284c7;
+}
+body.mode-design #hint::before {
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.9);
+}
+body.mode-design #unitshint {
+  background: #1e293b;
+  border-color: #0284c7;
+  color: #38bdf8;
+}
+
+/* ETABS Dialog / Property Grid Aesthetics */
+body.mode-design #dialog {
+  border: 1px solid #94a3b8;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.35), 0 0 0 1px rgba(2, 132, 199, 0.15);
+  border-radius: 8px;
+}
+body.mode-design .dialog-title {
+  background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+  border-bottom: 1px solid #cbd5e1;
+  color: #0f172a;
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 10px 16px;
+  letter-spacing: -0.01em;
+}
+body.mode-design .dlg-btn {
+  background: #0284c7;
+  border-color: #0369a1;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 5px 16px;
+  border-radius: 4px;
+}
+body.mode-design .dlg-btn:hover {
+  background: #0369a1;
+  filter: none;
+}
+body.mode-design .dlg-btn.secondary {
+  background: #f8fafc;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+body.mode-design .dlg-btn.secondary:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+/* ==========================================================================
+   ETABS RC DESIGN TOOL WINDOWS & MODALS THEME
+   - Form controls, Property grids, Tables, Section titles, Badges, Charts
+   ========================================================================== */
+body.mode-design #dialog {
+  width: 720px;
+  max-width: 95vw;
+  max-height: 88vh;
+  border: 1px solid #64748b;
+  box-shadow: 0 25px 60px rgba(15, 23, 42, 0.45), 0 0 0 1px rgba(2, 132, 199, 0.3);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1e293b;
+}
+
+/* Widen for detailed analysis & design result tables and BMD/SFD diagram charts */
+body.mode-design #dialog:has(canvas),
+body.mode-design #dialog:has(#fd-canvas),
+body.mode-design #dialog:has(th:nth-child(5)) {
+  width: 860px;
+  max-width: 96vw;
+}
+
+
+body.mode-design .dialog-title {
+  background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+  border-bottom: 2px solid #0284c7;
+  color: #f8fafc;
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 10px 16px;
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+body.mode-design .dialog-title .dlg-x {
+  color: #94a3b8;
+  font-size: 18px;
+  border-radius: 4px;
+}
+body.mode-design .dialog-title .dlg-x:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+}
+
+body.mode-design .dialog-body {
+  padding: 16px 20px;
+  background: #f8fafc;
+  color: #1e293b;
+  font-size: 12.5px;
+}
+
+/* ETABS Form Grid Rows (.pp-row) */
+body.mode-design .dialog-body .pp-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 5px 0 !important;
+  padding: 3px 6px;
+  border-radius: 4px;
+  transition: background 0.12s ease;
+}
+body.mode-design .dialog-body .pp-row:hover {
+  background: #f1f5f9;
+}
+body.mode-design .dialog-body .pp-row > span:first-child {
+  font-weight: 600;
+  color: #334155;
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+}
+
+/* ETABS Section Titles */
+body.mode-design .dialog-body div[style*="color:#1a3c6e"],
+body.mode-design .dialog-body p[style*="font-weight:bold"] {
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  color: #0369a1 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  border-bottom: 1px solid #cbd5e1;
+  padding-bottom: 4px;
+  margin-top: 14px !important;
+  margin-bottom: 8px !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+body.mode-design .dialog-body div[style*="color:#1a3c6e"]::before,
+body.mode-design .dialog-body p[style*="font-weight:bold"]::before {
+  content: '▪';
+  color: #0284c7;
+  font-size: 14px;
+}
+
+/* ETABS Inputs & Selects */
+body.mode-design #dialog input[type="text"],
+body.mode-design #dialog input[type="number"],
+body.mode-design #dialog select {
+  font-family: inherit;
+  font-size: 12px;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: #0f172a;
+  transition: all 0.12s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+body.mode-design #dialog input[type="number"] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+body.mode-design #dialog input:focus,
+body.mode-design #dialog select:focus {
+  border-color: #0284c7;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.25);
+  background: #ffffff;
+}
+
+/* ETABS Action Buttons */
+body.mode-design .dialog-buttons {
+  background: #f1f5f9;
+  border-top: 1px solid #cbd5e1;
+  padding: 10px 18px;
+  gap: 8px;
+}
+body.mode-design .dlg-btn {
+  background: #0284c7;
+  border: 1px solid #0369a1;
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 6px 18px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.2);
+  transition: all 0.12s ease;
+}
+body.mode-design .dlg-btn:hover {
+  background: #0369a1;
+  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.35);
+  transform: translateY(-1px);
+}
+body.mode-design .dlg-btn:active {
+  transform: translateY(0);
+}
+body.mode-design .dlg-btn.secondary {
+  background: #ffffff;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+body.mode-design .dlg-btn.secondary:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+  border-color: #94a3b8;
+}
+
+/* ETABS Structural Data Grids */
+body.mode-design #dialog table {
+  width: 100%;
+  font-family: inherit;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+  margin: 6px 0;
+}
+body.mode-design #dialog table thead tr {
+  background: linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 100%);
+}
+body.mode-design #dialog table th {
+  color: #334155 !important;
+  font-weight: 700;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 2px solid #cbd5e1 !important;
+  border-right: 1px solid #e2e8f0;
+  padding: 7px 10px !important;
+  white-space: nowrap;
+}
+body.mode-design #dialog table th:last-child {
+  border-right: none;
+}
+body.mode-design #dialog table td {
+  border-bottom: 1px solid #f1f5f9;
+  border-right: 1px solid #f1f5f9;
+  padding: 6px 10px !important;
+  color: #1e293b;
+  font-size: 11.5px;
+  vertical-align: middle;
+}
+body.mode-design #dialog table td:last-child {
+  border-right: none;
+}
+body.mode-design #dialog table tbody tr:nth-child(even) {
+  background: #f8fafc;
+}
+body.mode-design #dialog table tbody tr:hover td {
+  background: #e0f2fe !important;
+  color: #0369a1;
+}
+body.mode-design #dialog table tbody tr.selected td {
+  background: #bae6fd !important;
+  color: #0369a1 !important;
+  font-weight: 600;
+}
+
+/* Force Diagrams Canvas in ETABS Dialog */
+body.mode-design #fd-canvas {
+  background: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+body.mode-design #fd-reactions {
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: #0f172a;
+  line-height: 1.6;
+}
+
+/* ETABS Status & DCR Badges */
+body.mode-design .dialog-body span[style*="color:#2e7d32"],
+body.mode-design .dialog-body td[style*="color:#2e7d32"] {
+  color: #059669 !important;
+  font-weight: 700;
+}
+body.mode-design .dialog-body span[style*="color:#c62828"],
+body.mode-design .dialog-body td[style*="color:#c62828"] {
+  color: #dc2626 !important;
+  font-weight: 700;
+}
+body.mode-design .dialog-body span[style*="color:#f57f17"],
+body.mode-design .dialog-body td[style*="color:#f57f17"] {
+  color: #d97706 !important;
+  font-weight: 700;
+}
+
+/* Top Mode Selector Pill (ETABS / Revit / SketchUp) */
+.menubar-modes {
+  display: flex;
+  align-items: center;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 2px;
+  margin-left: 12px;
+  gap: 2px;
+}
+.mode-pill {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.12s ease;
+  white-space: nowrap;
+}
+.mode-pill:hover {
+  background: rgba(255, 255, 255, 0.7);
+  color: #0f172a;
+}
+.mode-pill.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+.mode-pill[data-mode="design"].active {
+  background: #0284c7;
+  color: #ffffff;
+}
+.mode-pill[data-mode="bim"].active {
+  background: #4f46e5;
+  color: #ffffff;
+}
+.mode-pill[data-mode="free"].active {
+  background: #ea580c;
+  color: #ffffff;
+}
+.mode-pill .mp-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.mode-pill[data-mode="bim"] .mp-dot { background: #6366f1; }
+.mode-pill[data-mode="free"] .mp-dot { background: #f97316; }
+.mode-pill[data-mode="design"] .mp-dot { background: #0ea5e9; }
+.mode-pill.active .mp-dot { background: #ffffff; }
+
+
+
 /* ---------- gear menu (refined) ---------- */
 #gearbtn {
   position: fixed; right: 14px; bottom: 40px; z-index: 40;

@@ -4855,6 +4855,8 @@ class App {
     try { localStorage.setItem('websketch3d.mode', mode); } catch (e) { }
     document.querySelectorAll('#modetabs .mtab').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === mode));
+    document.querySelectorAll('.mode-pill').forEach(b =>
+      b.classList.toggle('active', b.dataset.mode === mode));
     document.body.classList.toggle('mode-bim', mode === 'bim');
     document.body.classList.remove('mode-design');
     // leaving Design & Analysis drops the RC workspace ribbons (mode-only)
@@ -4892,6 +4894,8 @@ class App {
     this.lockAxis = null;
     this.clearAxisLocks();
     this.mode = 'design';
+    document.querySelectorAll('.mode-pill').forEach(b =>
+      b.classList.toggle('active', b.dataset.mode === 'design'));
     document.body.classList.remove('mode-bim');
     document.body.classList.add('mode-design');
     document.getElementById('bimoptions').classList.add('hidden');
@@ -5601,6 +5605,26 @@ class App {
       btn.addEventListener('click', () => this.action(q.act));
       qTools.appendChild(btn);
     });
+    // Top Mode Selector Pill (ETABS / Revit / SketchUp)
+    const modePills = document.createElement('div');
+    modePills.id = 'menubar-modes';
+    modePills.className = 'menubar-modes';
+    const modes = [
+      { id: 'free', label: 'Free', title: 'Free Drawing (SketchUp style)' },
+      { id: 'bim', label: 'Precise BIM', title: 'Precise Drawing (Revit style)' },
+      { id: 'design', label: 'Design & Analysis', title: 'Design & Analysis (RC / Structural workspace)' },
+    ];
+    modes.forEach(mDef => {
+      const b = document.createElement('button');
+      b.className = 'mode-pill' + (this.mode === mDef.id ? ' active' : '');
+      b.dataset.mode = mDef.id;
+      b.title = mDef.title;
+      b.innerHTML = `<span class="mp-dot"></span><span>${mDef.label}</span>`;
+      b.addEventListener('click', () => this.setMode(mDef.id));
+      modePills.appendChild(b);
+    });
+    bar.appendChild(modePills);
+
     bar.appendChild(qTools);
 
     window.addEventListener('mousedown', () => this._closeMenus());

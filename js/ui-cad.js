@@ -338,7 +338,7 @@
     if (cmd === 'gltf' || cmd === 'export') { app.action('exportGltf'); return; }
     if (cmd === 'free') { app.setMode('free'); app.setTool('select'); return; }
     if (cmd === 'bim' || cmd === 'precise') { app.setMode('bim'); app.setTool('select'); return; }
-    if (cmd === 'design') { app.setMode('bim'); app.setTool('select'); app.toast('Design mode is gone — rebar detailing lives on the Detailing tab'); return; }
+    if (cmd === 'design' || cmd === 'etabs' || cmd === 'rc') { app.setMode('design'); return; }
     if (cmd === 'rebuild') { app.rebuildFromParams(); return; }
     if (cmd === 'sched' || cmd === 'schedules') {
       if (window.SchedulesUI) SchedulesUI.open();
