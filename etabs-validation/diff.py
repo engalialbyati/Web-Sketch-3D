@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # App (WebSketch FEA) vs ETABS validation diff.
-# Loads both result files, maps axes/signs, superposes ETABS combo forces
-# from its pattern results (exact for linear analysis), and reports the
-# agreement statistics + worst members.
+# Forces: maps axes/signs (conventions verified empirically), superposes
+# ETABS combo forces from its pattern results (exact for linear analysis).
+# Design: app required areas / DCR vs ETABS ACI 318-19 summary areas.
 import json, os, math
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -21,36 +21,34 @@ etF = et['forces']
 COMBOS = [{'name': '1.4D', 'cases': [('DEAD', 1.4)]},
           {'name': '1.2D+1.6L', 'cases': [('DEAD', 1.2), ('LIVE', 1.6)]}]
 
-def etabs_combo_force(mname, combo, key):
-    """Superpose ETABS pattern end-values for a combo, e.g. 'M3_0'."""
-    s = 0.0
-    for pat, f in combo['cases']:
-        s += f * etF[mname][pat][key if not key.startswith('M') or True else key]
-    return s
-
-# ETABS axis mapping (verified empirically across all 65 members):
-#   beams   : gravity bending = M3, gravity shear = V2, axial = P (sgn +1)
+# Axis mapping (verified empirically across all 65 members):
+#   P: BOTH sides now tension-positive, signed — direct compare. The app
+#      value is the member-average axial; ETABS reports per end, so columns
+#      compare against (P0+P1)/2 (beams have no axial UDL: avg == ends).
+#   beams   : gravity bending = M3, gravity shear = V2
 #   columns : app M(i/j) <-> et M2, app M2 <-> et M3, app V(i/j) <-> et V3,
-#             app V2 <-> et V2 with sgn -1; app P is the AVERAGE of the end
-#             axials in compression-positive convention (et P is tension+,
-#             so sgn -1; the average shows up as ~half a story's column
-#             self-weight on base columns)
+#             app V2 <-> et V2 with sgn -1
 def fields(n):
     if kind[n] == 'beam':
-        return [('P',    'P0',    'P',    1),
-                ('M_i',  'M3_0',  'Mi',   1),
-                ('M_j',  'M3_1',  'Mj',   1),
-                ('V_i',  'V2_0',  'Vi',   1),
-                ('V_j',  'V2_1',  'Vj',   1)]
-    return [('P',    'P0',    'P',    -1),
-            ('M_i',  'M2_0',  'Mi',   1),
-            ('M_j',  'M2_1',  'Mj',   1),
-            ('M2_i', 'M3_0',  'M2i',  1),
-            ('M2_j', 'M3_1',  'M2j',  1),
-            ('V_i',  'V3_0',  'Vi',   1),
-            ('V_j',  'V3_1',  'Vj',   1),
-            ('V2_i', 'V2_0',  'V2i',  -1),
-            ('V2_j', 'V2_1',  'V2j',  -1)]
+        return [('P',    ('P0', 'P1'), 'P',   1),
+                ('M_i',  ('M3_0',),     'Mi',  1),
+                ('M_j',  ('M3_1',),     'Mj',  1),
+                ('V_i',  ('V2_0',),     'Vi',  1),
+                ('V_j',  ('V2_1',),     'Vj',  1)]
+    return [('P',    ('P0', 'P1'), 'P',    1),
+            ('M_i',  ('M2_0',),     'Mi',   1),
+            ('M_j',  ('M2_1',),     'Mj',   1),
+            ('M2_i', ('M3_0',),     'M2i',  1),
+            ('M2_j', ('M3_1',),     'M2j',  1),
+            ('V_i',  ('V3_0',),     'Vi',   1),
+            ('V_j',  ('V3_1',),     'Vj',   1),
+            ('V2_i', ('V2_0',),     'V2i',  -1),
+            ('V2_j', ('V2_1',),     'V2j',  -1)]
+
+def etAvg(mname, pat, keys):
+    if len(keys) == 2:
+        return (etF[mname][pat][keys[0]] + etF[mname][pat][keys[1]]) / 2.0
+    return etF[mname][pat][keys[0]]
 
 def rel(a, b):
     d = abs(a - b)
@@ -59,20 +57,15 @@ def rel(a, b):
 
 report = {'patterns': {}, 'combos': {}}
 
-def compare(appV, etV, label, bucket):
-    d, pct = rel(appV, etV)
-    row = bucket.setdefault(label, [])
-    row.append((pct, d, appV, etV))
-
 # ---------- pattern forces (per member, per end value)
 for pat in ('DEAD', 'LIVE'):
     bucket = report['patterns'].setdefault(pat, {})
-    worst = []
     for n in sorted(mdl):
         av = appPat[pat][n]
         for label, ek, ak, sgn in fields(n):
-            compare(av[ak], sgn * etF[n][pat][ek], f'{kind[n]}.{label}', bucket)
-    # combo-level summary rows collected below
+            ev = etAvg(n, pat, ek)
+            d, pct = rel(av[ak], sgn * ev)
+            bucket.setdefault(label, []).append((pct, d, av[ak], ev))
 
 # ---------- combos: app combo vs superposed ETABS
 for cmb in COMBOS:
@@ -80,13 +73,19 @@ for cmb in COMBOS:
     for n in sorted(mdl):
         av = appCmb[cmb['name']][n]
         for label, ek, ak, sgn in fields(n):
-            ev = sum(f * etF[n][p][ek] for p, f in cmb['cases'])
-            compare(av[ak], sgn * ev, f'{kind[n]}.{label}', bucket)
+            if len(ek) == 2:
+                ev = sum(f * (etF[n][p][ek[0]] + etF[n][p][ek[1]]) / 2
+                         for p, f in cmb['cases'])
+            else:
+                ev = sum(f * etF[n][p][ek[0]] for p, f in cmb['cases'])
+            d, pct = rel(av[ak], sgn * ev)
+            bucket.setdefault(label, []).append((pct, d, av[ak], ev))
 
 # ---------- print summary
 print('=' * 74)
 print('APP (WebSketch FEA) vs ETABS 23 — 65-member 5-story frame, kN / kN·m')
 print('=' * 74)
+summary = {}
 def band(pcts):
     n = len(pcts)
     med = sorted(pcts)[n // 2]
@@ -100,52 +99,78 @@ for sect in ('patterns', 'combos'):
         print(f'\n--- {sect.upper()} {name}')
         for label, rows in sorted(bucket.items()):
             print(f'  {label:8} {band([r[0] for r in rows])}')
+            pcts = sorted(r[0] for r in rows)
+            summary[f'{sect}:{name}:{label}'] = {
+                'n': len(pcts), 'median_pct': round(pcts[len(pcts)//2], 2),
+                'p90_pct': round(pcts[int(len(pcts)*0.9)], 2),
+                'max_pct': round(pcts[-1], 2)}
 
-# ---------- worst offenders + a few spot checks
-print('\n--- worst 12 absolute differences (combos)')
 rows = []
 for cname, bucket in report['combos'].items():
     for label, rs in bucket.items():
         for pct, d, av, ev in rs:
             rows.append((d, cname, label, av, ev))
 rows.sort(reverse=True)
-for d, cname, label, av, ev in rows[:12]:
+print('\n--- worst 10 absolute differences (combos)')
+for d, cname, label, av, ev in rows[:10]:
     print(f'  {cname:10} {label:8} Δ={d:8.3f}   app={av:9.3f}  etabs={ev:9.3f}')
 
-# ---------- design side: app DCR vs ETABS required rebar
+# ---------- per-member DESIGN diff
 print('\n' + '=' * 74)
-print('DESIGN — app DCR vs ETABS ACI 318-19 required areas')
+print('DESIGN — app ACI 318-19 export vs ETABS (API limits on this install)')
 print('=' * 74)
-appD = app.get('design') or {}
-etD = et.get('design') or {}
-cols = [(n, v) for n, v in sorted(etD.items()) if kind.get(n) == 'column' and isinstance(v, dict) and v.get('rows')]
-beams = [(n, v) for n, v in sorted(etD.items()) if kind.get(n) == 'beam' and isinstance(v, dict) and v.get('rows')]
-print(f'ETABS design rows available: {len(cols)} columns, {len(beams)} beams')
-if cols:
-    print(f"\n{'col':5} {'worst PMM ratio (et)':>20} {'PMM area mm2 (et)':>18} {'app DCR':>9}")
-    for n, v in cols[:8]:
-        pr = v.get('pmmRatio') or []
-        pa = v.get('pmmArea') or []
-        worst_r = max((r for r in pr), default=0)
-        worst_a = max((a for a in pa), default=0)
-        dcr = appD.get(n, {}).get('pmm') or appD.get(n, {}).get('DCR') or ''
-        print(f'{n:5} {worst_r:20.3f} {worst_a*1e6:18.0f} {str(dcr):>9}')
-if beams:
-    print(f"\n{'beam':5} {'top mm2 (et)':>13} {'bot mm2 (et)':>13}   app (Mu kN·m, DCR)")
-    for n, v in beams[:8]:
-        ta = max((a for a in (v.get('topArea') or [0])), default=0) * 1e6
-        ba = max((a for a in (v.get('botArea') or [0])), default=0) * 1e6
-        info = appD.get(n, {})
-        print(f'{n:5} {ta:13.0f} {ba:13.0f}   {info}')
+appD = app['appResults'].get('design') or {}
+etD  = et.get('design') or {}
 
-# ---------- save machine-readable diff
-out = {'patterns': {}, 'combos': {}}
-for sect in ('patterns', 'combos'):
-    for name, bucket in report[sect].items():
-        out[sect][name] = {label: {
-            'n': len(rs), 'median_pct': sorted(r[0] for r in rs)[len(rs)//2],
-            'p90_pct': sorted(r[0] for r in rs)[int(len(rs)*0.9)],
-            'max_pct': max(r[0] for r in rs)} for label, rs in bucket.items()}
+def areaStats(pairs, tag):
+    """pairs: list of (id, app_mm2, et_mm2). Prints + records stats."""
+    ok = [(i, a, e) for i, a, e in pairs if a is not None and e is not None and e > 1]
+    if not ok:
+        print(f'  {tag}: no comparable rows'); return
+    ratios = sorted(a / e for _, a, e in ok)
+    med = ratios[len(ratios) // 2]
+    w = max(ok, key=lambda t: abs(t[1] / t[2] - 1))
+    n10 = sum(1 for r in ratios if abs(r - 1) <= 0.10)
+    n20 = sum(1 for r in ratios if abs(r - 1) <= 0.20)
+    print(f'  {tag}: n={len(ok)}  median app/et={med:.3f}  '
+          f'within10%:{n10}/{len(ok)}  within20%:{n20}/{len(ok)}  '
+          f'worst: {w[0]} app={w[1]:.0f} et={w[2]:.0f}')
+    summary[tag] = {'n': len(ok), 'median_ratio': round(med, 3),
+                    'within10': n10, 'within20': n20,
+                    'worst': {'id': w[0], 'app': round(w[1]), 'et': round(w[2])}}
+
+# beams: app AsTop/AsBot (worst combo) — ETABS beam design summaries return
+# 0 rows through this API on this install, so only the app side is listed
+appB = appD.get('beams') or {}
+if appB:
+    ts = sorted((v.get('AsTop') or 0) for v in appB.values())
+    bs = sorted((v.get('AsBot') or 0) for v in appB.values())
+    print(f'  app beam AsTop mm²: n={len(ts)} median={ts[len(ts)//2]:.0f} '
+          f'max={ts[-1]:.0f} | AsBot median={bs[len(bs)//2]:.0f} max={bs[-1]:.0f}')
+    summary['beam_app'] = {'n': len(appB), 'AsTop_med': round(ts[len(ts)//2]),
+                           'AsTop_max': round(ts[-1]), 'AsBot_med': round(bs[len(bs)//2]),
+                           'AsBot_max': round(bs[-1])}
+print('  etabs beam summaries: 0 rows (API returns no beam design data here)')
+summary['beam_etabs'] = 'unavailable'
+
+# columns: app required-As sweep + DCR vs ETABS pmmArea.
+# CAVEAT: ETABS pmmRatio is unpopulated (0.0) via this API and pmmArea tracks
+# its internal default rebar layout — not a comparable minimum requirement.
+appC = appD.get('columns') or {}
+crows = []
+for n, v in sorted(etD.items()):
+    if kind.get(n) != 'column' or not isinstance(v, dict) or not v.get('rows'):
+        continue
+    a = appC.get(n)
+    if not a: continue
+    crows.append((n, a.get('AsReq'), max(v.get('pmmArea') or [0]) * 1e6))
+if crows:
+    areaStats(crows, 'column AsReq app vs et pmmArea (see caveat)')
+    ds = sorted((v.get('dcr') or 0) for v in appC.values())
+    print(f'  app column DCR: median={ds[len(ds)//2]:.3f} max={ds[-1]:.3f} '
+          f'(worst member {max(appC.items(), key=lambda kv: kv[1].get("dcr", 0))[0]})')
+    summary['column_app_dcr'] = {'median': round(ds[len(ds)//2], 3), 'max': round(ds[-1], 3)}
+
 with open(os.path.join(HERE, 'diff-summary.json'), 'w') as f:
-    json.dump(out, f, indent=1)
+    json.dump(summary, f, indent=1)
 print('\nwrote diff-summary.json')

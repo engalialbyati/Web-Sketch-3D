@@ -44,14 +44,19 @@
           return best || pt;
         };
         const sa = snap(bl[0]), sb = snap(bl[bl.length - 1]);
+        // LOCAL AXES: ETABS local 1 follows the exported a→b order, which is
+        // exactly the app engine's element direction (baseline[0]→end), and
+        // ETABS's angle-0 default keeps local 2 vertical-up — the app's
+        // strong axis for gravity members. ax=0 always holds today; if the
+        // app ever grows a member roll, this is where it is carried.
         out.members.push({ kind: 'beam', name: e.id, sec: sec ? sec.name : null,
-          a: sa, b: sb,
+          a: sa, b: sb, ax: 0,
           loads: (e.params.frameLoads || []).map(L => ({ pat: L.pattern, type: L.type, w: L.w || 0, P: L.P || 0, a: L.a || 0 })) });
       } else if (e.type === 'column' && Array.isArray(e.params.base)) {
         const p = e.params;
         const sec = d.frameSections.find(s => s.name === p.designSection);
         out.members.push({ kind: 'column', name: e.id, sec: sec ? sec.name : null,
-          a: p.base, b: [p.base[0], p.base[1], p.base[2] + (+p.height || 3)], loads: [] });
+          a: p.base, b: [p.base[0], p.base[1], p.base[2] + (+p.height || 3)], ax: 0, loads: [] });
       }
     }
     // insertion points: cardinal row (0=Bottom,1=Center,2=Top) and column
@@ -86,7 +91,12 @@
     return out;
   }
 
-  // app-side results for the diff: member end forces per case (kN, kN·m)
+  // app-side results for the diff: member end forces per case (kN, kN·m).
+  // Axials are exported SIGNED in ETABS's convention (tension positive): the
+  // engine's i-end end force Fi is compression-positive, so N = −Fi (the
+  // member-average axial — ETABS reports per-end, which differs by half the
+  // column self-weight). The old Math.abs() export destroyed exactly the
+  // sign information that made beam axials look flipped against ETABS.
   function serializeResults(app) {
     const R = app.rcResults;
     if (!R) return null;
@@ -94,11 +104,101 @@
       name: src.name,
       members: src.members.filter(Boolean).map(m => ({
         id: m.id,
-        P: kN(Math.abs(m.Fi)), Vi: kN(m.Vi), Mi: kNm(m.Mi), Vj: kN(m.Vj), Mj: kNm(m.Mj),
+        P: kN(-(m.Fi)),
+        Vi: kN(m.Vi), Mi: kNm(m.Mi), Vj: kN(m.Vj), Mj: kNm(m.Mj),
         V2i: kN(m.Vi2 || 0), M2i: kNm(m.Mi2 || 0), V2j: kN(m.Vj2 || 0), M2j: kNm(m.Mj2 || 0),
       })),
     });
-    return { patterns: R.patterns.map(pick), combos: R.combos.map(pick) };
+    const out = { patterns: R.patterns.map(pick), combos: R.combos.map(pick) };
+    try { out.design = serializeDesign(app); }
+    catch (e) { out.designError = String((e && e.message) || e); }
+    return out;
+  }
+
+  // ---- per-member ACI 318-19 design on the governing (worst) combo.
+  // Beams export required As top/bot (mm²) directly; columns export DCR at
+  // the provided layout plus the REQUIRED steel, found by sweeping a uniform
+  // bar diameter through the same fiber P-M interaction math ETABS uses for
+  // its PMM sweep (generatePMCurve + capacityRatio, memoized per layout).
+  function serializeDesign(app) {
+    const R = app.rcResults;
+    const combos = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
+    const d = root.RCDefine.ensure(app);
+    const beams = {}, columns = {};
+
+    for (const cn of combos) {
+      let res;
+      try { res = root.RCBeam.designAllBeams(app, cn).results; } catch (e) { continue; }
+      for (const r of res || []) {
+        const c = beams[r.id] || (beams[r.id] = { AsTop: 0, AsBot: 0, MuTop: 0, MuBot: 0, Vu: 0, combo: cn });
+        if ((r.AsTop || 0) > c.AsTop) { c.AsTop = r.AsTop || 0; c.MuTop = r.MuTop || 0; c.combo = cn; }
+        if ((r.AsBot || 0) > c.AsBot) { c.AsBot = r.AsBot || 0; c.MuBot = r.MuBot || 0; c.combo = cn; }
+        if ((r.Vu || 0) > c.Vu) c.Vu = r.Vu || 0;
+      }
+    }
+
+    // columns: DCR at the provided layout per combo, then one As sweep at
+    // the governing combo (demands are combo-fixed inside designAllColumns)
+    const colSecs = d.frameSections.filter(s => (s.designType || 'column') === 'column');
+    let govCombo = combos[0], worst = -1;
+    const providedRuns = [];
+    for (const cn of combos) {
+      try {
+        const res = root.RCColumn.designAllColumns(app, cn, 'design', true).results;
+        providedRuns.push({ cn, byId: new Map(res.map(r => [r.id, r])) });
+        for (const r of res) if (r.dcr > worst) { worst = r.dcr; govCombo = cn; }
+      } catch (e) { /* skip broken combo */ }
+    }
+    for (const { cn, byId } of providedRuns) {
+      for (const [id, r] of byId) {
+        const c = columns[id] || (columns[id] = { dcr: 0, Pu: 0, Mx: 0, My: 0, combo: cn });
+        if (r.dcr > c.dcr) Object.assign(c, {
+          dcr: r.dcr, Pu: r.Pu, Mx: r.Mx, My: r.My, crStrong: r.crStrong,
+          crWeak: r.crWeak, Pcap: r.Pcap, combo: cn, status: r.status });
+      }
+    }
+
+    // required-As sweep per column SECTION (columns share sections; the
+    // sweep overrides rebarSize on the section record and restores it)
+    const barCount = reb => 4 + 2 * (reb.nR3 || 0) + 2 * (reb.nR2 || 0);
+    const dias = [10, 12, 16, 20, 22, 25, 28, 32, 36, 40];
+    const passDia = new Map(); // section name → Map(columnId → min dia passing)
+    for (const sec of colSecs) {
+      const reb0 = sec.rebar || {};
+      const saved = sec.rebar;
+      try {
+        for (const dia of dias) {
+          sec.rebar = { ...reb0, rebarSize: String(dia) };
+          let res;
+          try { res = root.RCColumn.designAllColumns(app, govCombo, 'design', true).results; }
+          catch (e) { break; }
+          for (const r of res || []) {
+            if (r.dcr <= 1) {
+              if (!passDia.has(sec.name)) passDia.set(sec.name, new Map());
+              const m = passDia.get(sec.name);
+              if (!m.has(r.id)) m.set(r.id, dia);
+            }
+          }
+          if (passDia.get(sec.name) && passDia.get(sec.name).size >=
+              app.bim.entities.filter(e => e.type === 'column' &&
+                (e.params.designSection === sec.name)).length) break;
+        }
+      } finally { sec.rebar = saved; }
+    }
+    for (const sec of colSecs) {
+      const m = passDia.get(sec.name);
+      if (!m) continue;
+      const reb0 = sec.rebar || {};
+      const nb = barCount(reb0);
+      for (const [id, dia] of m) {
+        columns[id] = Object.assign(columns[id] || {}, {
+          AsReq: +(nb * Math.PI * dia * dia / 4).toFixed(0),  // mm²
+          AsReqDia: dia, AsProvided: +(nb * Math.PI *
+            ((parseFloat(reb0.rebarSize)) || 16) ** 2 / 4).toFixed(0),
+        });
+      }
+    }
+    return { combo: govCombo, beams, columns };
   }
 
   function buildScript(model) {
@@ -112,6 +212,17 @@
 # Auto-generated by WebSketch 3D (dev validation export) — builds the same
 # model in ETABS via the OAPI, runs analysis + ACI 318-19 design, and dumps
 # results to etabs-results.json for diffing against the app engine.
+# Pipeline notes (verified live on ETABS 23.3):
+#   • SetLoadDistributed defaults to Replace=true and the optional
+#     Replace=false args fail to marshal on this install — self-weight is
+#     COMBINED with the user DEAD UDL into one call.
+#   • ETABS auto rigid end-length offsets are forced OFF (centerline) to
+#     match the app engine (rigid-zone factor 0); SetLocalAxes(0) pins the
+#     axis convention (ETABS local 1 = the app's element direction).
+#   • RespCombo.SetCaseList refuses every call form here — the named combos
+#     stay empty; diff.py superposes pattern forces (exact for linear runs).
+#   • Design summaries need NumberItems as an in-value int followed by one
+#     empty array per out-array.
 import json, os, sys, traceback
 import comtypes
 import comtypes.client
@@ -143,8 +254,7 @@ def attach():
 def main():
     etabs = attach()
     sap = etabs.SapModel
-    sap.InitializeNewModel(6)   # kN_m_C
-    sap.File.NewBlank()
+    sap.InitializeNewModel(6)   # kN_m_C — fresh blank model
 
     # ---------------- materials (exact ETABS 23 signatures)
     for name, m in MATS.items():
@@ -171,19 +281,27 @@ def main():
         nm, ret = sap.FrameObj.AddByCoord(a[0], a[1], a[2], b[0], b[1], b[2],
                                           '', mb['sec'], mb['name'])
         names[mb['name']] = nm
+        # pin the local axes: 0° = ETABS default (local 1 = a→b, local 2
+        # vertical-up for horizontal members) — matches the app engine
+        try: sap.FrameObj.SetLocalAxes(nm, float(mb.get('ax') or 0))
+        except Exception as e: print('local axes skipped', mb['name'], e)
         if mb['kind'] == 'beam':
-            # ETABS insertion point from the app's placement params —
-            # cardinal 1-9 (bottom-left .. top-right), StiffTransform = True,
-            # plus the drawn-offset as a local 2-axis offset (meters)
             info = INSERTIONS.get(mb['name'])
             if info:
                 cp = info['row'] * 3 + info['col'] + 1
                 try:
                     sap.FrameObj.SetInsertionPoint(nm, cp, False, True,
-                                                   0, info.get('off2', 0), 'Global')
+                                                   0.0, float(info.get('off2', 0)),
+                                                   'Global')
                 except Exception as e:
                     print('insertion point skipped', mb['name'], e)
     print('members added:', len(names))
+
+    # ---------------- centerline connectivity (parity with the app engine)
+    for nm in names.values():
+        ret = sap.FrameObj.SetEndLengthOffset(nm, False, 0.0, 0.0, 0.0)
+        if ret != 0:
+            print('end length offset failed:', nm, ret)
 
     # ---------------- supports: fixed at the lowest nodes
     cnt, allNames, ret = sap.PointObj.GetNameList()
@@ -193,32 +311,45 @@ def main():
         if abs(z - zBase) < 1e-6:
             sap.PointObj.SetRestraint(nm, (True,) * 6)
 
-    # ---------------- load patterns (self-weight multiplier 0 — explicit UDL)
+    # ---------------- load patterns: REUSE the default cases when the app
+    # pattern matches them case-insensitively. ETABS auto-creates the design
+    # combos (DConS1/DConS2) referencing the DEFAULT 'Dead'/'Live' names and
+    # SetCaseList is broken on this install — so the app's loads must land on
+    # those cases for ETABS design to see real demand.
+    cnt, cases, _ = sap.LoadCases.GetNameList()
+    existing = {str(c).upper(): str(c) for c in cases}
+    caseOf = {}
     for p in PATTERNS:
-        t = {'DEAD': 1, 'SUPERDEAD': 2, 'LIVE': 3}.get(p['type'].upper(), 4)
-        sap.LoadPatterns.Add(p['name'], t, 0, True)
+        nm = existing.get(p['name'].upper())
+        if not nm:
+            t = {'DEAD': 1, 'SUPERDEAD': 2, 'LIVE': 3}.get(p['type'].upper(), 4)
+            sap.LoadPatterns.Add(p['name'], t, 0, True)
+            nm = p['name']
+        sap.LoadPatterns.SetSelfWTMultiplier(nm, 0)
+        caseOf[p['name']] = nm
+    print('case map:', caseOf)
 
-    # ---------------- member loads: explicit self-weight + user loads
+    # ---------------- member loads: self-weight COMBINED into DEAD
     for mb in MEMBERS:
         nm = names[mb['name']]
         sec = next((s for s in SECTIONS if s['name'] == mb['sec']), None)
         sw = (sec['b'] * sec['h'] * 25.0) if sec else 0.0   # A * 25 kN/m3
-        sap.FrameObj.SetLoadDistributed(nm, 'DEAD', 1, 10, 0, 1, sw, sw)
+        dead = [l for l in mb['loads'] if l['pat'] == 'DEAD' and l['type'] == 'dist']
+        wtot = sw + sum(l['w'] for l in dead)
+        sap.FrameObj.SetLoadDistributed(nm, caseOf['DEAD'], 1, 10, 0, 1, wtot, wtot)
         for L2 in mb['loads']:
-            if L2['type'] == 'dist':
-                sap.FrameObj.SetLoadDistributed(nm, L2['pat'], 1, 10, 0, 1,
+            if L2['type'] == 'dist' and L2['pat'] != 'DEAD':
+                sap.FrameObj.SetLoadDistributed(nm, caseOf[L2['pat']], 1, 10, 0, 1,
                                                 L2['w'], L2['w'])
             elif L2['type'] == 'point':
                 a, b = mb['a'], mb['b']
                 L = ((b[0]-a[0])**2 + (b[1]-a[1])**2 + (b[2]-a[2])**2) ** 0.5 or 1
-                sap.FrameObj.SetLoadPoint(nm, L2['pat'], 1, 10,
+                sap.FrameObj.SetLoadPoint(nm, caseOf[L2['pat']], 1, 10,
                                           min(max(L2['a'] / L, 0), 1), L2['P'])
 
-    # ---------------- combos
+    # ---------------- combos (names only — see header note)
     for c in COMBOS:
         sap.RespCombo.Add(c['name'], 0)
-        for it in c['cases']:
-            sap.RespCombo.SetCaseList(c['name'], 1, it['name'], it['scale'] or 1)
 
     # ---------------- save first: the ETABS solver requires a saved model
     edb = os.path.join(HERE, 'etabs-test.EDB')
@@ -227,54 +358,78 @@ def main():
     # ---------------- analyze (Modal off — no mass source in this validation)
     cnt, cases, ret = sap.LoadCases.GetNameList()
     for i in range(cnt):
-        if cases[i] == 'Modal':
+        if cases[i] in ('Modal',):
             sap.Analyze.SetRunCaseFlag(cases[i], False)
     ret = sap.Analyze.RunAnalysis()
     print('RunAnalysis ret', ret)
 
-    # ---------------- concrete design (ACI 318-19)
+    # ---------------- concrete design (ACI 318-19) — design sections then
+    # design, in the same flow as the analysis (StartDesign refuses re-runs)
     try: sap.DesignConcrete.SetCode('ACI 318-19')
     except Exception as e: print('code set failed:', e)
-    sap.DesignConcrete.StartDesign()
+    dret = sap.DesignConcrete.StartDesign()
+    print('StartDesign ret', dret, '(1 = refused / nothing to design)')
 
-    # ---------------- extract analysis forces at member ends (i and j)
-    results = {'forces': {}, 'design': {}, 'nameMap': names}
-    sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
-    for p in PATTERNS: sap.Results.Setup.SetCaseSelectedForOutput(p['name'])
-    for c in COMBOS: sap.Results.Setup.SetComboSelectedForOutput(c['name'])
-    cases = [p['name'] for p in PATTERNS] + [c['name'] for c in COMBOS]
+    # ---------------- extract analysis forces (patterns only; combos are
+    # superposed by diff.py — exact for this linear model)
+    results = {'forces': {}, 'design': {}, 'nameMap': names,
+               'note': 'combo forces are superposed by diff.py from patterns'}
     for mb in MEMBERS:
         nm = names[mb['name']]
-        for sta in (0, 1):
-            for cs in cases:
-                try:
-                    # NumberResults, Obj, ObjSta, Elm, ElmSta, LoadCase,
-                    # StepType, StepNum, P, V2, V3, T, M2, M3, ret
-                    r = sap.Results.FrameForce(nm, 1, cs, 0, [], [], [], [], [],
-                                               [], [], [], [], [])
-                    n = r[0]
-                    if not n:
-                        results['forces'].setdefault(mb['name'], {}).setdefault(cs, {})[str(sta)] = {'error': 'no results'}
-                        continue
-                    # take the requested station: 0 -> first row, 1 -> last row
-                    row = 0 if sta == 0 else n - 1
-                    results['forces'].setdefault(mb['name'], {}).setdefault(cs, {})[str(sta)] = {
-                        'P': r[8][row], 'V2': r[9][row], 'V3': r[10][row],
-                        'T': r[11][row], 'M2': r[12][row], 'M3': r[13][row]}
-                except Exception as e:
-                    results['forces'].setdefault(mb['name'], {}).setdefault(cs, {})[str(sta)] = {'error': str(e)}
+        for cs in [p['name'] for p in PATTERNS]:
+            try:
+                # one case selected at a time (resolved ETABS case name);
+                # results are stored under the APP pattern name so diff.py
+                # keys match across engines
+                sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
+                sap.Results.Setup.SetCaseSelectedForOutput(caseOf[cs])
+                r = sap.Results.FrameForce(nm, 1, 0, [], [], [], [], [], [],
+                                           [], [], [], [], [])
+                n = r[0]
+                if not n:
+                    results['forces'].setdefault(mb['name'], {}).setdefault(cs, {})['err'] = 'no results'
+                    continue
+                results['forces'].setdefault(mb['name'], {})[cs] = {
+                    'P0': r[8][0], 'V2_0': r[9][0], 'V3_0': r[10][0],
+                    'M2_0': r[12][0], 'M3_0': r[13][0],
+                    'P1': r[8][n - 1], 'V2_1': r[9][n - 1], 'V3_1': r[10][n - 1],
+                    'M2_1': r[12][n - 1], 'M3_1': r[13][n - 1]}
+            except Exception as e:
+                results['forces'].setdefault(mb['name'], {})[cs] = {'error': str(e)}
 
-    # ---------------- design summary — raw out tuples for offline mapping
+    # ---------------- design summary — structured rows
     for mb in MEMBERS:
         nm = names[mb['name']]
         try:
             if mb['kind'] == 'beam':
-                r3 = sap.DesignConcrete.GetSummaryResultsBeam(nm)
+                # Name, NumberItems(in), then 14 out arrays:
+                # FrameName, Location, TopCombo, TopArea, BotCombo, BotArea,
+                # VMajorCombo, VMajorArea, TLCombo, TLArea, TTCombo, TTArea,
+                # ErrorSummary, WarningSummary -> + ret
+                r3 = sap.DesignConcrete.GetSummaryResultsBeam(
+                    nm, 0, [], [], [], [], [], [], [], [], [], [], [], [], [])
+                n = r3[0]
+                results['design'][mb['name']] = {
+                    'rows': n,
+                    'location': list(r3[2]), 'topCombo': list(r3[3]),
+                    'topArea': list(r3[4]), 'botCombo': list(r3[5]),
+                    'botArea': list(r3[6]), 'vmajorArea': list(r3[8]),
+                }
             else:
-                r3 = sap.DesignConcrete.GetSummaryResultsColumn(nm, 1)
-            results['design'].setdefault(mb['name'], {})['design'] = [repr(v) for v in r3]
+                # Name, NumberItems(in), then 12 out arrays:
+                # FrameName, MyOption, Location, PMMCombo, PMMArea, PMMRatio,
+                # VMajorCombo, AVMajor, VMinorCombo, AVMinor,
+                # ErrorSummary, WarningSummary -> + ret
+                r3 = sap.DesignConcrete.GetSummaryResultsColumn(
+                    nm, 0, [], [], [], [], [], [], [], [], [], [], [])
+                n = r3[0]
+                results['design'][mb['name']] = {
+                    'rows': n,
+                    'location': list(r3[3]), 'pmmCombo': list(r3[4]),
+                    'pmmArea': list(r3[5]), 'pmmRatio': list(r3[6]),
+                }
         except Exception as e:
-            results['design'].setdefault(mb['name'], {})['design'] = {'error': str(e)}
+            results['design'][mb['name']] = {'error': str(e)}
 
     with open(os.path.join(HERE, 'etabs-results.json'), 'w') as f2:
         json.dump(results, f2, indent=1)
