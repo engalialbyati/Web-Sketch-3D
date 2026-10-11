@@ -3757,6 +3757,7 @@ class App {
   }
   toggleDesignView() {
     this.designView = !this.designView;
+    this.designViewOn = this.designView; // native View-menu checkmark state
     this._applyDesignView();
     this.setStatus(this.designView
       ? 'Design View ON — only designed elements shown (shear walls, columns, beams, slabs, foundations)'
@@ -5535,6 +5536,8 @@ class App {
         ['Hide Selected', 'hideSelected', ''], ['Unhide All', 'unhideAll', ''],
       ]],
       ['View', [
+        ['Design View (designed elements only)', 'toggleDesignView', '', 'designViewOn'],
+        '-',
         ['Axes', 'toggleAxes', '', 'axesOn'], ['Grid & Ground', 'toggleGrid', '', 'gridOn'], ['Grid Snap (F9)', 'toggleGridSnap', '', 'gridSnap'],
         ['Entity Info', 'entityInfoShow'],
         ['Materials', 'materialsShow'],
@@ -6061,6 +6064,7 @@ class App {
             : 'Auto Face Creation: ON — closing a loop of lines now fills a face immediately (like SketchUp)');
         } else A.toast('Auto Face Creation: OFF — faces come from Create Face again');
       },
+      toggleDesignView: () => { A.toggleDesignView(); },
       toggleShadows: () => { A.shadowsOn = !A.shadowsOn; A.view.setShadows(A.shadowsOn); },
       togglePerfHud: () => {
         A.view.perfHud = !A.view.perfHud;
