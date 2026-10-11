@@ -13,8 +13,8 @@
     const etLimit = esy + 0.003; // tension-controlled limit (ACI 21.2.2)
     if (et >= etLimit) return 0.90;
     if (et <= esy) return 0.65;
-    // transition zone (ACI 21.2.3): linear interpolation
-    return 0.65 + 0.25 * (et - esy) / 0.003;
+    // transition zone (ACI 21.2.3): span uses the actual εty (ETABS parity)
+    return 0.65 + 0.25 * (et - esy) / (0.005 - esy);
   }
 
   // β₁ (ACI 22.2.2.4.3): f'c in MPa
@@ -152,17 +152,18 @@
     const AvsFinal = Math.max(Avs, Vu > phiVc ? AvsMin : 0);
 
     return {
-      ok: true, phi, Vc: phiVc, Avs: AvsFinal, AvsMin,
+      ok: true, phi, fc, Vc: phiVc, Avs: AvsFinal, AvsMin,
       VuEq: Vu, VsReq: Math.max(0, Vu / phi - Vc),
     };
   }
 
   // ============================================================ development
   // Straight bar development length (ACI 25.4.2.3, SI simplified)
-  function devLength(fy, fc, db, cover, spacing) {
-    // ψt = 1.0 (bottom bar), λ = 1.0 (normal weight)
-    // ld = (fy·ψt·ψe·db) / (2·λ·√f'c)  — ACI 25.4.2.3 (simplified, ≥300mm)
-    let ld = (fy * db) / (2 * Math.sqrt(fc) * 1.0);
+  function devLength(fy, fc, db, cover, spacing, topBar) {
+    // ACI 25.4.2.3 simplified + ETABS ψt (top bars 1.3, ACI-12.2.4):
+    // ld = (fy·ψt·db) / (2·λ·√f'c), ≥ 300 mm
+    const psiT = topBar ? 1.3 : 1.0;
+    let ld = (fy * psiT * db) / (2 * Math.sqrt(fc));
     ld = Math.max(ld, 300); // ACI 25.4.2.1 minimum
     return ld;
   }
@@ -231,19 +232,21 @@
     const R = app.rcResults;
     if (!R) return { error: 'Run the analysis first (Analyze ▸ Run Analysis).' };
     const d = (RD || root.RCDefine).ensure(app);
+    RCModel.ensureAutoCombos(app);
 
-    // find the combo (or use a pattern if no combos)
-    let combo = R.combos.find(c => c.name === comboName);
-    let pat = null;
-    if (!combo) {
-      pat = R.patterns.find(p => p.name === comboName);
-      if (!pat) return { error: `Combination or pattern "${comboName}" not found.` };
-    }
+    // ETABS-style demand envelope: the named combo alone, or EVERY combo
+    // (falling back to patterns) — per-entity worst governs (P0 fix)
+    const sources = RCModel.designSources(app, comboName);
+    if (!sources.length)
+      return { error: comboName ? `Combination or pattern "${comboName}" not found.` : 'No combos or patterns.' };
 
     const rebarDb = d.rebarDb || [];
-
     const results = [];
-    const members = combo ? combo.members : pat.members;
+    for (const src of sources) {
+    const combo = src.name && src.members ? (R.combos.find(c => c.name === src.name) || null) : null;
+    const pat = combo ? null : src;
+    const members = src.members;
+
     for (let mi = 0; mi < members.length; mi++) {
       const m = members[mi];
       if (m.type !== 'beam') continue;
@@ -341,6 +344,7 @@
       results.push({
         id: m.id, b, h, dTop, dBot, fc, fy,
         MuTop, MuBot, Vu,
+        combo: src.name,
         offI, offJ, MfI, MfJ,
         AsTop: AsTopRaw, AsBot: AsBotRaw, AsMinTop, AsMax,
         topDoubly: topResult.doubly || false,
@@ -359,13 +363,15 @@
     }
     // auto-meshed beams arrive as several segment rows per entity — the
     // entity gets ONE record: its governing segment (worst demand)
+    }
+    // segment envelope (auto-mesh rows) AND combo envelope in one pass
     const env = new Map();
     const score = r => (r.MuTop + r.MuBot) / 1e6 + r.Vu / 1e3;
     for (const rec of results) {
       const prev = env.get(rec.id);
       if (!prev || score(rec) > score(prev)) env.set(rec.id, rec);
     }
-    return { results: [...env.values()], comboName, rebarDb };
+    return { results: [...env.values()], comboName: comboName || 'ENVELOPE', rebarDb };
   }
 
   // sectionOf/materialOf are in rcmodel.js — re-export
@@ -403,10 +409,14 @@
   function selectStirrups(shear, rebarDb, bw, d) {
     if (!shear.ok) return null;
     if (shear.Avs <= 0) return { dia: 8, spacing: 200, note: 'minimum' };
+    // ETABS ACI-05 MaxBeamStirrupSpacing: min(24in=600, d/2); when Av·fyt >
+    // 4√f'c·bw·d the hinge-zone-style min(d/4, 100, 6db, 150) governs
+    const highShear = shear.Avs * 500 > 4 * Math.sqrt(shear.fc || 25) * bw * d;
     for (const bar of rebarDb) {
       const Av2leg = 2 * bar.area;
       const spacing = Av2leg / shear.Avs;
-      const sMax = Math.min(d / 2, 600);
+      const sMax = highShear ? Math.min(d / 4, 100, 6 * bar.dia, 150)
+                             : Math.min(d / 2, 600);
       const sFinal = Math.min(Math.floor(spacing / 10) * 10, sMax);
       if (sFinal >= 50) return { dia: bar.dia, spacing: sFinal, AvsProvided: Av2leg / sFinal };
     }
@@ -445,7 +455,8 @@
     }
     if (!comboNames.length) { app.toast('Run the analysis first', true); return; }
 
-    const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    const ENVELOPE_OPT = '<option value="ENVELOPE">ENVELOPE - all combinations (governing)</option>';
+    const patOpts = ENVELOPE_OPT + comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
     const html = [
       '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Designs all beams for the selected combination using ACI 318-19 (CFD §3.5).</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +

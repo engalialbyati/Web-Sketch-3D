@@ -658,6 +658,44 @@
   // ------------------------------------------------------------------- run
   // solves every pattern in one factorization, then linear-combines the
   // member end forces per 'add' combination. Results in N and N·mm.
+  // ============================================================ auto combos
+  // ETABS auto-creates the ACI strength set at StartDesign (our OAPI probe
+  // of real ETABS 23 showed DConS1 = 1.4 Dead, DConS2 = 1.2 Dead + 1.6 Live).
+  // Same behavior here: when no combinations are defined, generate the
+  // standard set from the defined patterns before any design pass.
+  function ensureAutoCombos(app) {
+    const d = RD().ensure(app);
+    if (d.combos.length) return d.combos;
+    const pat = name => d.loadPatterns.find(p => p.name.toUpperCase() === name);
+    const DEAD = pat('DEAD'), LIVE = pat('LIVE');
+    const mk = (name, cases) => d.combos.push({ name, type: 'add', cases });
+    if (DEAD && LIVE) {
+      mk('1.4D', [{ name: DEAD.name, scale: 1.4 }]);
+      mk('1.2D+1.6L', [{ name: DEAD.name, scale: 1.2 }, { name: LIVE.name, scale: 1.6 }]);
+      mk('0.9D', [{ name: DEAD.name, scale: 0.9 }]);
+    } else if (DEAD) {
+      mk('1.4D', [{ name: DEAD.name, scale: 1.4 }]);
+    } else {
+      for (const p of d.loadPatterns) mk('1.4 x ' + p.name, [{ name: p.name, scale: 1.4 }]);
+    }
+    return d.combos;
+  }
+
+  // combo/pattern sources a design pass should envelope across: the named
+  // combo alone, or every combo (falling back to patterns) for 'ENVELOPE'
+  function designSources(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return [];
+    if (comboName && comboName !== 'ENVELOPE') {
+      const c = R.combos.find(c2 => c2.name === comboName);
+      if (c) return [c];
+      const p = R.patterns.find(p2 => p2.name === comboName);
+      if (p) return [p];
+      return [];
+    }
+    return R.combos.length ? R.combos : R.patterns;
+  }
+
   function runAnalysis(app, opts = {}) {
     const model = buildModel(app);
     if (!model.frames.length && !model.shells.length)
@@ -1639,7 +1677,7 @@
     }
     return { maxU: Array.from(maxU), nSteps, dt };
   }
-  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, forceTable, open, openAssign,
+  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, forceTable, open, openAssign,
     responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign, caseU };
 })(window);
 

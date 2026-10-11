@@ -104,11 +104,11 @@
     // pure tension point
     let Pt = 0;
     for (const bar of rotBars) Pt -= bar.area * fy;
-    raw.push({ P: Pt, M: 0 });
+    raw.push({ P: Pt, M: 0, mx: 0, my: 0 });
 
     for (const a of sweepA) {
       if (a < 1e-9) {
-        raw.push({ P: Pt, M: 0 });
+        raw.push({ P: Pt, M: 0, mx: 0, my: 0 });
         continue;
       }
       const c = a / b1;
@@ -154,14 +154,19 @@
       // design curves carry φPn–φMn (the φ per strain, ACI 21.2); expected-
       // strength curves stay nominal with the overstrength fy
       const phiF = capTypeDesign ? phi : 1;
-      raw.push({ P: Pcap * phiF, M: Math.abs(Mx * mComp) * phiF, phi, et });
+      // global-axis moment components of this NA angle (U-layout caps for the
+    // biaxial sum method): local x-axis makes angle θ with global x
+    const mLoc = Math.abs(Mx);
+    const mxG = mLoc * Math.abs(cos), myG = mLoc * Math.abs(sin);
+    raw.push({ P: Pcap * phiF, M: Math.abs(Mx * mComp) * phiF,
+      mx: mxG * phiF, my: myG * phiF, phi, et });
     }
 
     // pure-compression anchor at M = 0 — the sweep approaches but never
     // reaches M = 0, and without this point small-moment demands fall in
     // a bracket gap and read as 'outside curve'
     const P0 = alphaConc * fc * (Ag - Ast) + Ast * fy;
-    raw.push({ P: 0.80 * P0 * (capTypeDesign ? 0.65 : 1), M: 0,
+    raw.push({ P: 0.80 * P0 * (capTypeDesign ? 0.65 : 1), M: 0, mx: 0, my: 0,
       phi: phiFromStrain(0, esy), et: 0 });
 
     // the sweep runs tension → compression; the ETABS-style repairs below
@@ -211,20 +216,113 @@
   }
 
   // ============================================================ design all
+  // ================================================ biaxial P-M-M capacity
+  // ETABS CSiCol parity: NA-angle curves (fiber surface slices) + the
+  // capacity-method set of cPMMSurface.ComputePMCapacityResults* — axial,
+  // moment-vector, moment-sum, ray (true-vector) — governing = max.
+  // (The eccentricity-vector method needs the curve's e(θ) table; the four
+  // here bound it for rectangular sections with symmetric layouts.)
+  const pmSurfaceCache = new Map();
+  function generatePMSurface(sec, mat, capType, nAngles = 7) {
+    const key = [sec.name || '?', mat.conc ? mat.conc.fc : 25,
+      JSON.stringify(sec.rebar || {}), capType, nAngles].join('|');
+    if (pmSurfaceCache.has(key)) return pmSurfaceCache.get(key);
+    const curves = [];
+    for (let a = 0; a < nAngles; a++) {
+      const ang = a * 90 / (nAngles - 1); // 0..90
+      curves.push({ ang, pts: generatePMCurve(sec, mat, ang, 30, capType) });
+    }
+    pmSurfaceCache.set(key, curves);
+    return curves;
+  }
+  function interpAtP(pts, P, field) {
+    // pts: P descending (pure compression first, pure tension last)
+    if (!pts.length) return null;
+    if (P >= pts[0].P || P <= pts[pts.length - 1].P) return null; // outside axial range
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p1 = pts[i].P, p0 = pts[i + 1].P;
+      if (P <= p1 && P >= p0) {
+        const t = (p1 - P) / Math.max(p1 - p0, 1e-9);
+        return (1 - t) * pts[i][field] + t * pts[i + 1][field];
+      }
+    }
+    return null;
+  }
+  function capacityBiaxial(sec, mat, Pu, Mx, My, capType) {
+    const curves = generatePMSurface(sec, mat, capType, 7);
+    const Mres = Math.hypot(Mx, My);
+    const PmaxC = curves[0].pts.length ? curves[0].pts[0].P : 0;
+    const last = curves[0].pts.length ? curves[0].pts[curves[0].pts.length - 1].P : 0;
+    let best = null;
+    for (const { ang, pts } of curves) {
+      const Mcap = interpAtP(pts, Pu, 'M');
+      if (Mcap == null || Mcap < 1) continue;
+      const ratioVec = Mres / Mcap;
+      // moment-sum: component caps on this NA-angle curve at Pu
+      let ratioSum = 0;
+      const capX = interpAtP(pts, Pu, 'mx'), capY = interpAtP(pts, Pu, 'my');
+      if (capX != null && capY != null) {
+        ratioSum = (Mx > 1 ? Mx / Math.max(capX, 1) : 0) + (My > 1 ? My / Math.max(capY, 1) : 0);
+      } else ratioSum = ratioVec;
+      // ray (true vector): eccentricity match on the same curve
+      let ratioRay = ratioVec;
+      const eDem = Mres / Math.max(Math.abs(Pu), 1);
+      let found = false;
+      for (let i = 0; i < pts.length && !found; i++) {
+        if (pts[i].M < 1 || Math.abs(Pu) < 1) break;
+        const e_i = pts[i].M / Math.max(Math.abs(pts[i].P), 1);
+        if (Math.abs(e_i - eDem) <= 0.05 * Math.max(e_i, eDem)) {
+          const s = pts[i].M / Math.max(Mres, 1);
+          if (s > 0.05) { ratioRay = 1 / s; found = true; }
+        }
+      }
+      const rec = { ang, ratioVec, ratioSum, ratioRay, dcr: Math.max(ratioVec, ratioSum, ratioRay) };
+      if (!best || rec.dcr < best.dcr) best = rec; // governing = the curve that resists best
+    }
+    // axial-only (angle-free) + governing across everything (ETABS MaxOfAll)
+    let dcrAxial = null;
+    if (Pu >= 0 && PmaxC > 1) dcrAxial = Pu / PmaxC;
+    if (Pu < 0 && Math.abs(last) > 1) dcrAxial = Math.abs(Pu) / Math.abs(last);
+    const dcr = Math.max(best ? best.dcr : 99, dcrAxial != null ? dcrAxial : 0);
+    return { dcr, method: dcrAxial != null && dcrAxial >= (best ? best.dcr : 0) ? 'axial' : (best ? 'biaxial' : 'none'),
+      ratioVec: best ? best.ratioVec : null, ratioSum: best ? best.ratioSum : null,
+      ratioRay: best ? best.ratioRay : null, dcrAxial, ang: best ? best.ang : null, PmaxC };
+  }
+
+  // ================================================== column shear (ETABS)
+  // cDsnCodeConcRC_ACI_08.ColumnNetShearCapacity, psi form → SI:
+  //   2√f'c→0.17√f'c, 500psi→3.45MPa, 2000psi→13.79MPa, 1.9√f'c→0.158√f'c,
+  //   2500ρw→17.24ρw MPa, 3.5√f'c→0.291√f'c, 8√f'c→0.664√f'c; φVn = 0.8(Vc+Vs)
+  function columnNetShearCapacitySI(Vu, Nu, Mu, fc, Acv, Ag, h, Av, s, fyt, rhoW) {
+    const sq = Math.sqrt(fc);
+    const num = 0.17 * sq * Acv;
+    const val = num * (1 + Nu / (13.79 * Ag));
+    const val2 = Mu > 1 ? (0.158 * sq + 17.24 * rhoW * (Vu * h / Mu)) * Acv : 0;
+    const val3 = 0.291 * sq * Acv * Math.sqrt(1 + Math.max(Nu, 0) / (3.45 * Ag));
+    const num2 = num * (1 + Nu / (3.45 * Ag));
+    const Vc = (Nu < 0) ? num2 : (Nu > 0 ? Math.max(val, val3) : Math.max(num, val2));
+    let Vs = s > 1 ? Av * fyt * h / s : 0;
+    Vs = Math.min(Vs, 0.664 * sq * Acv);
+    const phiVn = 0.8 * (Vc + Vs);
+    const Avs = Math.max(0, (Vu / 0.8 - Vc) / (fyt * h)); // required Av/s when over
+    return { Vc, Vs, phiVn, dcr: Vu / Math.max(phiVn, 1), Avs };
+  }
+
   function designAllColumns(app, comboName, capType, minEcc) {
     const R = app.rcResults;
     if (!R) return { error: 'Run the analysis first (Analyze ▸ Run Analysis).' };
     const d = root.RCDefine.ensure(app);
+    root.RCModel.ensureAutoCombos(app);
 
-    let combo = R.combos.find(c => c.name === comboName);
-    let pat = null;
-    if (!combo) {
-      pat = R.patterns.find(p => p.name === comboName);
-      if (!pat) return { error: `Combination or pattern "${comboName}" not found.` };
-    }
+    // ETABS-style envelope: the named combo, or EVERY combo — max DCR governs
+    const sources = root.RCModel.designSources(app, comboName);
+    if (!sources.length)
+      return { error: comboName ? `Combination or pattern "${comboName}" not found.` : 'No combos or patterns.' };
 
     const results = [];
-    for (const m of (combo ? combo.members : pat.members)) {
+    const shearMax = new Map();
+    for (const src of sources) {
+    for (const m of src.members) {
       if (m.type !== 'column') continue;
       const ent = app.bim.getEntityById(m.id);
       if (!ent) continue;
@@ -263,18 +361,56 @@
 
       const cr0 = capacityRatio(Pu, Mx, pm0);
       const cr90 = capacityRatio(Pu, My, pm90);
-      const dcr = Math.max(cr0.dcr, cr90.dcr);
+      // biaxial surface capacity (CSiCol parity): max of the capacity methods
+      // over the NA-angle curve set — governs the DCR
+      const bx = capacityBiaxial(sec, mat, Pu, Mx, My, capType);
+      const dcr = Math.max(bx.dcr, 0);
+
+      // column shear (cDsnCodeConcRC_ACI_08.ColumnNetShearCapacity, SI)
+      const rb = sec.rebar || {};
+      const db = parseFloat(rb.rebarSize) || 16;
+      const nBars = 4 + 2 * (rb.nR3 || 0) + 2 * (rb.nR2 || 0);
+      const Ast = nBars * Math.PI * db * db / 4;
+      const tieDia = parseFloat(rb.tieSize) || 8;
+      const Av = 2 * Math.PI * tieDia * tieDia / 4;
+      const sTie = Math.max((rb.tieSpacingLongit || 0.15) * 1000, 40);
+      const cover = (rb.colCover || 0.04) * 1000;
+      const dEff = h - cover - tieDia - db / 2;
+      const Vu = Math.max(Math.abs(m.Vi || 0), Math.abs(m.Vj || 0),
+        Math.abs(m.V2i || 0), Math.abs(m.V2j || 0));
+      const Nu = Pu; // compression positive (ETABS inNu convention)
+      const shear = columnNetShearCapacitySI(Vu, Nu, Mx, fc,
+        b * dEff, b * h, dEff, Av, sTie, 500, Ast / (b * dEff));
 
       results.push({
         id: m.id, b, h, fc, fy: 500,
         Pu: Pu / 1e3, Mx: Mx / 1e6, My: My / 1e6,
         dcr, crStrong: cr0.dcr, crWeak: cr90.dcr,
+        biaxial: { method: bx.method, ang: bx.ang,
+          ratioVec: bx.ratioVec, ratioSum: bx.ratioSum, ratioRay: bx.ratioRay,
+          dcrAxial: bx.dcrAxial },
+        shear: { Vu: Vu / 1e3, Vc: shear.Vc / 1e3, Vs: shear.Vs / 1e3,
+          phiVn: shear.phiVn / 1e3, dcr: +shear.dcr.toFixed(3),
+          Avs: +shear.Avs.toFixed(2) },
         Pcap: cr0.Pcap / 1e3,
-        status: dcr > 1 ? 'OVERSTRESSED' : dcr > 0.9 ? 'NEAR LIMIT' : 'OK',
+        status: Math.max(dcr, shear.dcr) > 1 ? 'OVERSTRESSED' : Math.max(dcr, shear.dcr) > 0.9 ? 'NEAR LIMIT' : 'OK',
         pmCurve: pm0,
+        combo: src.name,
       });
+      const sh = shearMax.get(m.id) || 0;
+      shearMax.set(m.id, Math.max(sh, shear.dcr));
     }
-    return { results, comboName };
+    }
+    // envelope: worst PMM record per entity + worst shear DCR across combos
+    const env = new Map();
+    const score = r => r.dcr;
+    for (const rec of results) {
+      const prev = env.get(rec.id);
+      if (!prev || score(rec) > score(prev)) env.set(rec.id, rec);
+    }
+    for (const rec of env.values())
+      rec.shear.dcr = +(shearMax.get(rec.id) || rec.shear.dcr).toFixed(3);
+    return { results: [...env.values()], comboName: comboName || 'ENVELOPE' };
   }
 
   // ============================================================ design dialog
@@ -286,7 +422,8 @@
     const comboNames = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
     if (!comboNames.length) { app.toast('No load combinations or patterns defined', true); return; }
 
-    const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    const ENVELOPE_OPT = '<option value="ENVELOPE">ENVELOPE - all combinations (governing)</option>';
+    const patOpts = ENVELOPE_OPT + comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
     const html = [
       '<p style="margin:0 0 6px;font-size:12px;opacity:.8">Biaxial P-M interaction check per ACI 318-19 (fiber method, φ per point, 0.80P₀ cap).</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +

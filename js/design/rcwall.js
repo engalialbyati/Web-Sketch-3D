@@ -254,20 +254,19 @@
     if (!R) return { error: 'Run the analysis first.' };
     const d = root.RCDefine.ensure(app);
 
-    let combo = R.combos.find(c => c.name === comboName);
-    let pat = null;
-    if (!combo) {
-      pat = R.patterns.find(p => p.name === comboName);
-      if (!pat) return { error: `Combination "${comboName}" not found.` };
-    }
+    root.RCModel.ensureAutoCombos(app);
+    // ETABS-style envelope: the named combo, or EVERY combo — max DCR governs
+    const sources = root.RCModel.designSources(app, comboName);
+    if (!sources.length) return { error: comboName ? `Combination "${comboName}" not found.` : 'No combos or patterns.' };
 
     const model = R.model;
     if (!model || !model.shells || !model.shells.length)
       return { error: 'No shell model — re-run the analysis.' };
-    const src = combo || pat;
-    const srcShells = (src.shells || []).filter(s => s && s.forces);
 
     const results = [];
+    for (const src of sources) {
+    const srcShells = (src.shells || []).filter(s => s && s.forces);
+
     for (const ent of app.bim.entities) {
       if (ent.type !== 'wall') continue;
       // NORMAL WALLS are non-bearing partitions - never designed. Only the
@@ -348,6 +347,8 @@
 
       results.push({
         id: ent.id, length, thickness, height, fc, fy,
+        pierLabel: ent.params.pierLabel || null,
+        combo: src.name,
         station: gov.station,
         Pu: Pu / 1e3, Mx: Mx / 1e6, Vu: Vu / 1e3, // kN, kN·m
         Ast, rhoVert, rhoMinVert,
@@ -358,7 +359,121 @@
         endZoneBars, endZoneDia,
       });
     }
-    return { results, comboName };
+    }
+    // envelope: worst record per entity across combos
+    const env = new Map();
+    for (const rec of results) {
+      const prev = env.get(rec.id);
+      if (!prev || (rec.dcr || 0) > (prev.dcr || 0)) env.set(rec.id, rec);
+    }
+    return { results: [...env.values()], comboName: comboName || 'ENVELOPE' };
+  }
+
+  // ======================================================= spandrel design
+  // Coupling-beam strips over wall openings: at each jamb, integrate the
+  // horizontal membrane force N11 over the spandrel depth band — the jamb
+  // cut shear Vu and the in-band moment Mu about the band centroid (ETABS
+  // spandrel design strips, SpandrelDesignResult TopAs/BotAs/ShearAh).
+  function designAllSpandrels(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return { error: 'Run the analysis first.' };
+    root.RCModel.ensureAutoCombos(app);
+    const sources = root.RCModel.designSources(app, comboName);
+    if (!sources.length) return { error: 'No combos or patterns.' };
+    const model = R.model;
+    if (!model || !model.shells || !model.shells.length)
+      return { error: 'No shell model — re-run the analysis.' };
+    const d = root.RCDefine.ensure(app);
+    const results = [];
+    for (const src of sources) {
+      const srcShells = (src.shells || []).filter(s => s && s.forces);
+      if (!srcShells.length) continue;
+      for (const ent of app.bim.entities) {
+        if (ent.type !== 'wall') continue;
+        // openings hosted on this wall
+        const openings = app.bim.entities.filter(o =>
+          (o.type === 'door' || o.type === 'window') && o.params.hostWallId === ent.id);
+        if (!openings.length) continue;
+        const cells = srcShells.filter(s2 => s2.entId === ent.id);
+        if (!cells.length) continue;
+        const nd = model.nodes;
+        const matName = ent.params.materialOverwrite || 'CONC25';
+        const mat = d.materials.find(x => x.name === matName) || d.materials.find(x => x.type === 'concrete');
+        const fc = mat && mat.conc ? mat.conc.fc : 25;
+        const fy = d.materials.find(x => x.type === 'rebar')?.rebar?.fy || 500;
+        const t = (ent.params.thickness || 0.2) * 1000; // mm
+        const p = ent.params;
+        const a = p.base, b2 = p.end;
+        const wallLen = Math.hypot(b2[0] - a[0], b2[1] - a[1]) * 1000; // mm
+        const wallH = (+p.height || 3) * 1000;
+        const ux = (b2[0] - a[0]) / (wallLen / 1000), uy = (b2[1] - a[1]) / (wallLen / 1000);
+        for (const op of openings) {
+          const wOp = (+op.params.width || 1) * 1000;
+          // distanceFromStart may be a scalar or an [along, across] pair
+          const distRaw = op.params.distanceFromStart;
+          const dist = (Array.isArray(distRaw) ? distRaw[0] : (+distRaw || 0)) * 1000;
+          const sill = (+op.params.sillHeight || 0) * 1000;
+          const hOp = (+op.params.height || 2) * 1000;
+          const x0 = dist - wOp / 2, x1 = dist + wOp / 2;   // mm along wall
+          const zTopBand = wallH;                            // spandrel runs to wall top (v1)
+          const zBotBand = sill + hOp;
+          if (zBotBand >= zTopBand - 50) continue;           // no spandrel depth
+          const cx = pt => (pt.x - a[0]) * ux * 1000 + (pt.y - a[1]) * uy * 1000; // mm along wall (nd in m)
+          const jambCuts = [];
+          for (const xj of [x0, x1]) {
+            // cells in the jamb column (center within ±150 mm of the cut)
+            const col = cells.filter(s3 => {
+              const c = { x: cx(nd[s3.n1]), zLo: Math.min(nd[s3.n1].z, nd[s3.n4].z) * 1000,
+                zHi: Math.max(nd[s3.n1].z, nd[s3.n4].z) * 1000 };
+              return Math.abs(c.x - xj) <= 150 && c.zHi > zBotBand && c.zLo < zTopBand;
+            });
+            if (!col.length) continue;
+            let Vu = 0, Mnum = 0, hTot = 0;
+            for (const s3 of col) {
+              const n11 = s3.forces.N11 || 0;   // N/mm, horizontal in-plane force
+              const zLo = Math.min(nd[s3.n1].z, nd[s3.n4].z) * 1000;
+              const zHi = Math.max(nd[s3.n1].z, nd[s3.n4].z) * 1000;
+              // overlap of the cell with the spandrel band (partial cells count)
+              const hC = Math.max(0, Math.min(zHi, zTopBand) - Math.max(zLo, zBotBand));
+              if (hC < 1e-6) continue;
+              const zc = (Math.max(zLo, zBotBand) + Math.min(zHi, zTopBand)) / 2;
+              Vu += n11 * hC;
+              Mnum += n11 * hC * zc;
+              hTot += hC;
+            }
+            const zBar = hTot > 0 ? Mnum / (Math.abs(Vu) > 1 ? Vu : 1) : 0;
+            const M = Math.abs(Mnum - Vu * zBar); // about the band centroid
+            jambCuts.push({ x: xj, Vu: Math.abs(Vu), M: Math.abs(Mnum - (hTot ? Vu * zBar : 0)) });
+          }
+          if (jambCuts.length < 2) continue;
+          const Vu = Math.max(...jambCuts.map(c2 => c2.Vu));
+          const M = Math.max(...jambCuts.map(c2 => c2.M));
+          const hS = zTopBand - zBotBand;               // mm spandrel depth
+          const d = 0.8 * hS;
+          const phi = 0.9;
+          const aN = 0;                                  // rectangular flexure v1
+          const Mu = M;                                  // N·mm
+          const As = Mu / (phi * fy * (d - 0));          // lever arm refined below
+          const AsCalc = Math.max(As, 0.0018 * t * hS);  // slab/wall min per face
+          const Vc = 0.17 * Math.sqrt(fc) * t * d;
+          const Avs = Math.max(0, (Vu / 0.75 - Vc) / (fy * d));
+          results.push({
+            id: ent.id + ':' + Math.round(dist), wall: ent.id, pier: ent.params.pierLabel || null,
+            opening: { x: +(dist / 1000).toFixed(2), w: +(wOp / 1000).toFixed(2) },
+            depth: +((zTopBand - zBotBand) / 1000).toFixed(2),
+            Mu: +(Mu / 1e6).toFixed(1), Vu: +(Vu / 1e3).toFixed(1),
+            AsTop: Math.round(AsCalc), AsBot: Math.round(AsCalc),
+            Avs: +Avs.toFixed(3), combo: src.name,
+          });
+        }
+      }
+    }
+    const env = new Map();
+    for (const rec of results) {
+      const prev = env.get(rec.id);
+      if (!prev || rec.Mu > prev.Mu) env.set(rec.id, rec);
+    }
+    return { results: [...env.values()], comboName: comboName || 'ENVELOPE' };
   }
 
   // ============================================================ design dialog
@@ -369,7 +484,8 @@
     const comboNames = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
     if (!comboNames.length) { app.toast('No combinations defined', true); return; }
 
-    const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    const ENVELOPE_OPT = '<option value="ENVELOPE">ENVELOPE - all combinations (governing)</option>';
+    const patOpts = ENVELOPE_OPT + comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
     const html = [
       '<p style="margin:0 0 6px;font-size:12px;opacity:.8">ACI 318-19 Ch.11 wall design: P-M interaction + in-plane shear.</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +
@@ -380,14 +496,15 @@
         const combo = document.getElementById('wd-combo').value;
         const result = designAllWalls(app, combo);
         if (result.error) { app.toast(result.error, true); return false; }
-        showWallResults(app, result, combo);
+        const spandrels = designAllSpandrels(app, combo);
+        showWallResults(app, result, result.comboName, spandrels.error ? null : spandrels);
         return false;
       }],
       ['Close', null],
     ]);
   }
 
-  function showWallResults(app, result, comboName) {
+  function showWallResults(app, result, comboName, spandrels) {
     const esc = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const rows = result.results.map(r => {
       const color = r.status === 'OK' ? '#2e7d32' : r.status === 'NEAR LIMIT' ? '#f57f17' : '#c62828';
@@ -395,7 +512,7 @@
         ? `Avh/s ≥ ${r.shear.Avhs.toFixed(4)} mm²/mm²`
         : 'SHEAR FAIL';
       return '<tr>' +
-        `<td style="padding:3px 6px">${esc(r.id)}</td>` +
+        `<td style="padding:3px 6px">${esc(r.id)}${r.pierLabel ? ' <span style="opacity:.6">[' + esc(r.pierLabel) + ']</span>' : ''}</td>` +
         `<td>${r.length.toFixed(0)}×${r.thickness.toFixed(0)}</td>` +
         `<td>${r.Pu.toFixed(0)}</td>` +
         `<td>${r.Mx.toFixed(1)}</td>` +
@@ -422,8 +539,35 @@
       '</tr></thead><tbody>' + rows + '</tbody></table>' +
       '<p style="font-size:11px;opacity:.7;margin:8px 0 0">DCR = Pu/φPn at applied moment · In-plane shear per ACI 11.5 · Min. reinforcement per ACI 11.6</p>' +
       '</div>';
-    app.dialog('RC Wall Design Results — ' + comboName, html, [['Close', null]]);
+    let spaHtml = '';
+    if (spandrels && spandrels.results && spandrels.results.length) {
+      const spaRows = spandrels.results.map(r =>
+        '<tr>' +
+        `<td style="padding:3px 6px">${esc(r.wall)}${r.pier ? ' <span style="opacity:.6">[' + esc(r.pier) + ']</span>' : ''}</td>` +
+        `<td>@${r.opening.x}m w=${r.opening.w}m</td>` +
+        `<td>${r.depth.toFixed(2)}</td>` +
+        `<td>${r.Mu.toFixed(1)}</td>` +
+        `<td>${r.Vu.toFixed(1)}</td>` +
+        `<td>${r.AsTop} top / ${r.AsBot} bot</td>` +
+        `<td>${r.Avs.toFixed(3)}</td>` +
+        '</tr>').join('');
+      spaHtml = '<p style="font-size:12px;margin:10px 0 4px"><b>Spandrels</b> — strips over wall openings '
+        + '(jamb-cut N11 integration), combo envelope:</p>'
+        + '<table style="width:100%;border-collapse:collapse;font-size:11.5px">'
+        + '<thead><tr style="text-align:left;opacity:.7">'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Wall</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Opening</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Depth (m)</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Mu (kN·m)</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Vu (kN)</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">As mm² (top/bot)</th>'
+        + '<th style="padding:3px 6px;border-bottom:1px solid #d7dde3">Avh/s (mm²/mm)</th>'
+        + '</tr></thead><tbody>' + spaRows + '</tbody></table>';
+    }
+    app.dialog('RC Wall Design Results — ' + comboName,
+      '<div style="max-height:65vh;overflow:auto">' + html + spaHtml + '</div>',
+      [['Close', null]]);
   }
 
-  root.RCWall = { designAllWalls, wallPM, wallNAatP, wallShear, wallBars, wallBaseForces, open, beta1 };
+  root.RCWall = { designAllWalls, designAllSpandrels, wallPM, wallNAatP, wallShear, wallBars, wallBaseForces, open, beta1 };
 })(window);

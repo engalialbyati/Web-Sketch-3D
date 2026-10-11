@@ -56,12 +56,14 @@
     // caller should pass location: 'interior' | 'edge' | 'corner'
     const location = arguments[7] || 'interior';
     if (location === 'edge') bo = b1 + 2 * b2;
+    else if (location === 'edgeN') bo = 2 * b1 + b2;
     else if (location === 'corner') bo = b1 + b2;
 
     // Ac (effective shear area for stress calcs)
     let Ac;
     if (location === 'interior') Ac = 2 * (b1 + b2) * d;
     else if (location === 'edge') Ac = (b1 + 2 * b2) * d;
+    else if (location === 'edgeN') Ac = (2 * b1 + b2) * d;
     else Ac = (b1 + b2) * d;
 
     // Jc (polar moment for moment transfer)
@@ -120,13 +122,16 @@
     if (!model || !model.shells || !model.shells.length)
       return { error: 'No shell model — re-run the analysis.' };
     const d = root.RCDefine.ensure(app);
-
-    const src = R.combos.find(c => c.name === comboName) || R.patterns.find(p => p.name === comboName);
-    if (!src) return { error: `Combination "${comboName}" not found.` };
-    const srcShells = (src.shells || []).filter(sf => sf && sf.forces);
+    root.RCModel.ensureAutoCombos(app);
+    // ETABS-style envelope: the named combo, or EVERY combo — max demand governs
+    const sources = root.RCModel.designSources(app, comboName);
+    if (!sources.length) return { error: comboName ? `Combination "${comboName}" not found.` : 'No combos or patterns.' };
 
     const rebarDb = d.rebarDb || [];
     const results = [];
+
+    for (const src of sources) {
+    const srcShells = (src.shells || []).filter(sf => sf && sf.forces);
 
     // for each slab entity, get shell forces and design
     for (const ent of app.bim.entities) {
@@ -195,6 +200,7 @@
 
       results.push({
         id: ent.id, type: ent.type, thickness,
+        combo: src.name,
         fc, fy, dEff,
         maxM11: maxM11 / 1e3, minM11: minM11 / 1e3, // kN·m/m
         maxM22: maxM22 / 1e3, minM22: minM22 / 1e3,
@@ -204,7 +210,15 @@
         nElements: entShells.length,
       });
     }
-    return { results, comboName };
+    }
+    // envelope: worst demand per entity across combos
+    const env = new Map();
+    const score = r => Math.abs(r.maxM11) + Math.abs(r.minM11) + Math.abs(r.maxM22) + Math.abs(r.minM22) + (r.owShear ? r.owShear.dcr : 0);
+    for (const rec of results) {
+      const prev = env.get(rec.id);
+      if (!prev || score(rec) > score(prev)) env.set(rec.id, rec);
+    }
+    return { results: [...env.values()], comboName: comboName || 'ENVELOPE' };
   }
 
   // ==================================================== strip force integration
@@ -352,7 +366,8 @@
     const comboNames = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
     if (!comboNames.length) { app.toast('No combinations defined', true); return; }
 
-    const patOpts = comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
+    const ENVELOPE_OPT = '<option value="ENVELOPE">ENVELOPE - all combinations (governing)</option>';
+    const patOpts = ENVELOPE_OPT + comboNames.map(n => `<option value="${n}">${n}</option>`).join('');
     const html = [
       '<p style="margin:0 0 6px;font-size:12px;opacity:.8">ACI 318-19 Ch.7: flexural reinforcement from shell forces (both directions).</p>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Load Combination</span>' +

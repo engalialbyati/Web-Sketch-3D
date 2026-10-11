@@ -263,6 +263,16 @@
     const qActual = Pu / (L * B);                  // N/mm²
     const bearingOK = qActual <= qAllowNmm2;
 
+    // concrete bearing on footing (ACI 318-05 §10.17.1 — ETABS
+    // cDesignOfSingleFooting.CheckBearingResistanceOfFooting):
+    // Br = φ·0.85·f'c·A1·√(A2/A1), √(A2/A1) ≤ 2  · A1 column, A2 footing
+    const A1 = bCol * hCol;
+    const A2 = L * B;
+    const ar = Math.min(Math.sqrt(A2 / A1), 2.0);
+    const Br = 0.65 * 0.85 * fc * A1 * ar;         // N
+    const bearingConcDCR = Pu / Br;
+    const bearingConcOK = bearingConcDCR <= 1;
+
     // net upward soil pressure (factored)
     const qu = qActual;
 
@@ -302,7 +312,7 @@
       Pu: Pu / 1e3, Mu: Mu / 1e6,
       qActual: +(qActual * 1000).toFixed(1), // kN/m²
       qAllow,
-      bearingOK,
+      bearingOK, bearingConcDCR: +bearingConcDCR.toFixed(2), bearingConcOK,
       oneWay: { Vu: Vu1, Vc: phiVc1, ok: oneWayOK },
       punching: { Vu: PuPunch, Vc: phiVcPunch, bo: Math.round(bo), ok: punchOK },
       flexure: { Mu: MuFtg / 1e6, As: Math.round(As), AsMin: Math.round(AsMin) },
