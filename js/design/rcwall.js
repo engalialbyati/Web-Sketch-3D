@@ -270,6 +270,10 @@
     const results = [];
     for (const ent of app.bim.entities) {
       if (ent.type !== 'wall') continue;
+      // NORMAL WALLS are non-bearing partitions - never designed. Only the
+      // walls flagged SHEAR WALL (wall properties checkbox) get the ACI
+      // wall design.
+      if (!ent.params.shearWall) continue;
       const wf = wallBaseForces(model, srcShells, ent, src.reactions);
       if (!wf) continue;
       const matName = ent.params.materialOverwrite || 'CONC25';

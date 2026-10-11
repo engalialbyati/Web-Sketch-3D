@@ -407,6 +407,7 @@ const RIBBON_TABS = {
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
     { title: 'Optimize', tools: ['dsopt', 'dsinfo'] },
+    { title: 'View', tools: ['dsv'] },
     { title: 'Report', tools: ['dsreport'] },
     { title: '3D View', tools: ['dsviz'] },
   ] },
@@ -500,6 +501,7 @@ const DEFINE_BUTTONS = {
   dsfoot: { label: 'Foundation', glyph: '⬛⊥', tip: 'Isolated footing design: bearing, one/two-way shear, flexure, development', cat: 'footingDesign' },
   defstoryrep: { label: 'Replicate Story', glyph: '⧉', tip: 'Clone the beams/columns/floors of one story onto selected levels (ETABS Similar Stories)', cat: 'storyReplicate' },
   dsopt: { label: 'Auto-Size', glyph: '⤢', tip: 'Iterate frame section sizes until every DCR meets the target — re-analyzes each round', cat: 'designOptimize' },
+  dsv: { label: 'Design View', glyph: '◎', tip: 'Toggle Design View: show only designed elements (shear walls, columns, beams, slabs, foundations) - hide normal walls, doors, windows', cat: 'designView' },
   dsinfo: { label: 'Element Data', glyph: 'ⓘ', tip: 'Applied loads, analysis forces and design summary for the selected element (ETABS right-click data)', cat: 'elementInfo' },
   defetabs: { label: 'Export ETABS (dev)', glyph: '⇪', tip: 'DEV ONLY: write an OAPI script that rebuilds this model in ETABS (elements, sections, materials, loads, combos) + this engine\'s results for diffing', cat: 'exportEtabs' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
@@ -1600,7 +1602,21 @@ class BimEntityManager {
       } finally { m.endEdgeSweep(); m.bimHold = held; }
       return true;
     }
-    return this._splitBeamToSpans(ent, spans, { A, ux, uy, L, pending });
+    const okSplit = this._splitBeamToSpans(ent, spans, { A, ux, uy, L, pending });
+    // REPAIR: the beam sweep crossed these columns' top band and shredded
+    // their solids - restore each from its params (params are truth)
+    if (okSplit && trims && trims.intervals) {
+      for (const iv of trims.intervals) {
+        for (const e2 of this.entities) {
+          if (e2.type !== 'column' || !e2.params || !e2.params.base) continue;
+          const t = ((e2.params.base[0] - A[0]) * ux + (e2.params.base[1] - A[1]) * uy);
+          if (t >= iv.t0 - 0.01 && t <= iv.t1 + 0.01) {
+            try { this.rebuildColumnEntity(e2.id); } catch (e3) { }
+          }
+        }
+      }
+    }
+    return okSplit;
   }
   // split a beam's span into independent beam pieces (see planTrimWall's
   // _splitWallToSpans for the full contract — this is its beam mirror)
@@ -3702,6 +3718,52 @@ class App {
       await this.db.replaceGrids(this.gridManager.grids.map(g => g.toRecord()));
     } catch (e) { console.warn('[db] grid sync failed:', e); }
   }
+  // -------------------------------------------------- Design View (analysis set)
+  // DESIGN VIEW (owner's rule): show ONLY the elements the module designs -
+  // shear walls, columns, beams, slabs/floors, foundations. Normal (non-
+  // bearing) walls, doors, windows, openings and loose geometry hide.
+  // Display-only: entities, params and the model are untouched.
+  _applyDesignView() {
+    const v = this.view;
+    if (!v) return;
+    if (!this.designView) {
+      // clear our filter, restore the level-view state
+      if (this.levelView === 'all' || !v.viewLocked) {
+        if (!this.levelView || this.levelView === 'all' || !v.viewLocked) {
+          v.faceFilter = v.edgeFilter = v.elementFilter = null;
+        }
+      }
+      if (this.levelView && this.levelView !== 'all' && v.viewLocked) this._applyLevelView();
+      v.rebuild();
+      return;
+    }
+    const DESIGNED = ent => !!ent && (
+      ent.type === 'column' || ent.type === 'beam' ||
+      ent.type === 'slab' || ent.type === 'floor' ||
+      ent.type === 'foundation' ||
+      (ent.type === 'wall' && ent.params && ent.params.shearWall));
+    v.elementFilter = ent => DESIGNED(ent);
+    v.faceFilter = f => {
+      const uid = f.userData && f.userData.bimEntityId;
+      if (!uid) return false; // loose geometry is not designed
+      return DESIGNED(this.bim.getEntityById(uid));
+    };
+    v.edgeFilter = e => {
+      const uid = e.userData && e.userData.bimEntityId;
+      if (!uid) return false;
+      return DESIGNED(this.bim.getEntityById(uid));
+    };
+    v.rebuild();
+  }
+  toggleDesignView() {
+    this.designView = !this.designView;
+    this._applyDesignView();
+    this.setStatus(this.designView
+      ? 'Design View ON — only designed elements shown (shear walls, columns, beams, slabs, foundations)'
+      : 'Design View OFF — full model');
+    return this.designView;
+  }
+
   // ------------------------------------------------------ Level View (plan isolation)
   // While a standard camera view is locked (Top/Front/…), the toolbar Level
   // View select can isolate ONE level: only entities based on that level
@@ -5290,11 +5352,13 @@ class App {
         // RC Design & Analysis Define/Assign buttons — glyph-over-label style
         if (DEFINE_BUTTONS[id]) {
           const defBtn = DEFINE_BUTTONS[id];
-          mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
+          const _defEl = mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
             defBtn.tip, 'tbtn-def', '{}', () => {
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
+              if (defBtn.cat === 'designView') { this.toggleDesignView(); return; }
               const isRCInfo = defBtn.cat === 'elementInfo';
+              if (defBtn.cat === 'designView') this._btnDesignView = _defEl;
               const isRCEtabs = defBtn.cat === 'exportEtabs';
               const mod = isRCInfo ? window.RCInfo : isRCEtabs ? window.RCEtabs
                 : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
@@ -5333,6 +5397,7 @@ class App {
     // ribbon tabs may not carry the display toggles — guard every optional button
     if (this.btnShadow) this.btnShadow.classList.toggle('on', this.shadowsOn);
     if (this.btnXray) this.btnXray.classList.toggle('on', this.xrayOn);
+    if (this._btnDesignView) this._btnDesignView.classList.toggle('on', !!this.designView);
     const fs = { shaded: 'Shaded', monochrome: 'Monochrome', wireframe: 'Wireframe' }[this.faceStyle];
     if (this.btnWire) {
       this.btnWire.classList.toggle('on', this.faceStyle !== 'shaded');
@@ -9380,6 +9445,10 @@ class App {
         (p.base && p.end && !p.closed) ? { key: 'length', label: 'Length m', kind: 'number', step: 0.05,
           value: +(G.dist(G.v(p.base[0], p.base[1], p.base[2]), G.v(p.end[0], p.end[1], p.end[2]))).toFixed(3) } : null,
         num('thickness', 'Thickness m', 0.01), loc,
+        // SHEAR WALL (owner's rule): checked = designed as a shear wall
+        // (analyzed + ACI wall design); unchecked = non-bearing partition,
+        // ignored by analysis/design and hidden in Design View
+        { key: 'shearWall', label: 'Shear Wall', kind: 'check', value: !!p.shearWall },
         { key: 'layers', label: 'Layers (name:t, …)', kind: 'text',
           value: String(Array.isArray(p.layers) && p.layers.length
             ? p.layers.map(l => (l.name || l.material || 'L') + ':' + (+l.thickness || 0).toFixed(3)).join(', ')
@@ -9435,7 +9504,7 @@ class App {
     // Revit's data-only parameters carry no geometry — set and done, no
     // regeneration (Comments, Mark, Phasing, Structural flags, Room Bounding,
     // Occupancy). They ride the entity through save/undo like any param.
-    if (/^(comments|mark|phaseCreated|phaseDemolished|structural|structuralUsage|roomBounding|occupancy)$/.test(key)) {
+    if (/^(comments|mark|phaseCreated|phaseDemolished|structural|structuralUsage|roomBounding|occupancy|shearWall)$/.test(key)) {
       p[key] = v;
       if (this.model && this.model.touch) this.model.touch();
       return true;
@@ -9799,7 +9868,7 @@ class App {
       const CKEYS = new Set(['topConstraint', 'locationLine', 'sillHeight', 'offsetX', 'offsetY', 'offsetLateral']);
       const MKEYS = new Set(['layers']);
       const PKEYS = new Set(['phaseCreated', 'phaseDemolished']);
-      const SKEYS = new Set(['structural', 'structuralUsage', 'roomBounding']);
+      const SKEYS = new Set(['structural', 'structuralUsage', 'roomBounding', 'shearWall']);
       const IKEYS = ent.type === 'room'
         ? new Set(['name', 'number', 'department', 'zone', 'occupancy', 'mark', 'comments'])
         : new Set(['mark', 'comments']);

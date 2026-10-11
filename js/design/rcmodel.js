@@ -203,6 +203,10 @@
     const matFor = ent => materialOf(app, sectionOf(app, ent) || {}, ent);
 
     for (const ent of app.bim.entities) {
+      // NORMAL WALLS are non-bearing partitions - excluded from the
+      // analytical model entirely. Only SHEAR WALLS (the wall's Shear Wall
+      // checkbox) mesh as shells and carry load.
+      if (ent.type === 'wall' && !ent.params.shearWall) { skipped.walls++; continue; }
       if (ent.type !== 'slab' && ent.type !== 'roof' && ent.type !== 'wall') continue;
       const mat = matFor(ent);
       if (!mat) continue;
