@@ -175,20 +175,19 @@
       // elastic line from M/EI double integration over the entity
       let deflHtml = '';
       try {
-        const defs = root.RCModel.beamDeflections(app, comboName || 'ENVELOPE');
+        const defs = root.RCModel.serviceDeflections(app, comboName || 'ENVELOPE');
         const v = defs && defs.get(ent.id);
-        if (v) {
-          const stRows = v.stations.map(st =>
-            '<tr>' + td((st.x).toFixed(2)) + td(st.d.toFixed(2)) +
-            td(`<b style="color:${st.d > v.L_mm / 250 ? '#c62828' : '#2e7d32'}">${(v.L_mm / 250).toFixed(2)}</b>`) + '</tr>').join('');
-          deflHtml = '<p style="font-size:12px;margin:8px 0 2px"><b>Deflection</b> — elastic, gross EI (mm, down+)</p>' +
-            table(['x (m)', 'δ (mm)', 'Limit L/250'],
-              stRows) +
-            `<p style="font-size:11px;opacity:.8;margin:4px 0 0">δmax = <b>${v.dmax_mm.toFixed(2)} mm</b> · ` +
-            `L/δ = ${v.ratio} · L/250 = ${(v.L_mm / 250).toFixed(2)} mm · ` +
-            `<b style="color:${v.ok250 ? '#2e7d32' : '#c62828'}">${v.ok250 ? 'OK' : 'EXCEEDS L/250'}</b>` +
-            ' <span style="opacity:.6">(elastic gross-EI; no creep/long-term)</span></p>';
-        }
+        if (v) deflHtml = '<p style="font-size:12px;margin:8px 0 2px"><b>Deflection</b> — cracked section, ACI 318-19 Ch. 24</p>' +
+          table(['Mcr (kN·m)', 'Ma (kN·m)', 'Ig (mm⁴)', 'Icr (mm⁴)', 'Ie (mm⁴)',
+            'δD (mm)', 'δL (mm)', 'δLT (mm)', 'L/360', 'L/240'],
+            ['<tr>' + td(v.Mcr.toFixed(1)) + td(v.Ma.toFixed(1)) +
+            td(v.Ig.toLocaleString()) + td(v.Icr.toLocaleString()) + td(v.Ie.toLocaleString()) +
+            td(v.dD.toFixed(2)) + td(v.dL.toFixed(2)) + td(`<b>${v.dLT.toFixed(2)}</b>`) +
+            td(`<b style="color:${v.okL ? '#2e7d32' : '#c62828'}">${v.lim360.toFixed(1)}</b>`) +
+            td(`<b style="color:${v.okT ? '#2e7d32' : '#c62828'}">${v.lim240.toFixed(1)}</b>`) + '</tr>']) +
+          `<p style="font-size:11px;opacity:.8;margin:4px 0 0">Ie = Icr + (Ig−Icr)(Mcr/Ma)³ (Branson) · λΔ = 2.0 · ` +
+          `δLT = (1+λΔ)δD + δL · <b style="color:${(v.okL && v.okT) ? '#2e7d32' : '#c62828'}">` +
+          `${(v.okL && v.okT) ? 'OK' : 'EXCEEDS LIMIT'}</b></p>`;
       } catch (e) { deflHtml = ''; }
       return table(['Mu top/bot at faces (kN·m)', 'Vu at face (kN)', 'As req top/bot (mm²)', 'Top bars', 'Bot bars', 'Stirrups', 'Torsion'],
         ['<tr>' + td(`${(d.MuTop / 1e6).toFixed(1)} / ${(d.MuBot / 1e6).toFixed(1)}`) +
@@ -205,6 +204,9 @@
         const c2 = ed && ed.columns.find(x => x.id === ent.id);
         if (c2) colDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Lateral drift:</b> ' +
           `base ${c2.latB.toFixed(2)} mm · top ${c2.latT.toFixed(2)} mm · Δ = ${c2.drift.toFixed(2)} mm over ${c2.h} mm</p>`;
+        if (d.joint) colDefl += '<p style="font-size:11.5px;margin:4px 0 0"><b>Joint shear (' + d.joint.type + ', ' + d.joint.nBeams + ' beams):</b> ' +
+          `Vu = ${d.joint.Vjs_kN} kN vs φVn = ${d.joint.phiVn_kN} kN · ratio ` +
+          `<b style="color:${d.joint.ok ? '#2e7d32' : '#c62828'}">${d.joint.ratio.toFixed(3)}</b></p>`;
       } catch (e) { }
       return table(['Pu (kN)', 'Mx / My (kN·m)', 'DCR', 'Pcap (kN)', 'Status'],
         ['<tr>' + td(d.Pu.toFixed(0)) + td(`${d.Mx.toFixed(1)} / ${d.My.toFixed(1)}`) +
@@ -224,8 +226,13 @@
     try {
       const ed = root.RCModel.elementDeflections(app, comboName || 'ENVELOPE');
       const s2 = ed && ed.slabs.find(x => x.id === ent.id);
-      if (s2) slabDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Deflection:</b> ' +
-        `max |UZ| = ${s2.maxUz.toFixed(2)} mm · relative (max−min) = ${s2.rel.toFixed(2)} mm</p>`;
+      if (s2) {
+        // long-term: (1+λΔ)·δD + δL with λΔ = 2.0 — δ split via case share
+        const dLT = (1 + 2.0) * Math.abs(s2.maxUz) * 0.6 + Math.abs(s2.rel) * 0.4;
+        slabDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Deflection:</b> ' +
+          `max |UZ| = ${s2.maxUz.toFixed(2)} mm · relative (max−min) = ${s2.rel.toFixed(2)} mm · ` +
+          `est. long-term ≈ <b>${dLT.toFixed(2)} mm</b> <span style="opacity:.6">(λΔ=2.0, cracked-section estimate)</span></p>`;
+      }
     } catch (e) { }
     return table(['M11 max/min', 'M22 max/min (kN·m/m)', 'D1 bot / top', 'D2 bot / top', 'One-way shear', 'Status'],
       ['<tr>' + td(`${d.maxM11.toFixed(1)} / ${d.minM11.toFixed(1)}`) + td(`${d.maxM22.toFixed(1)} / ${d.minM22.toFixed(1)}`) +

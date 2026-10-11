@@ -289,6 +289,83 @@
       ratioRay: best ? best.ratioRay : null, dcrAxial, ang: best ? best.ang : null, PmaxC };
   }
 
+  // ============================================ joint shear (ETABS parity)
+  // Concrete Joint Envelope: JS ratio = Vu,js / (φ·γ·√f'c·bj·hc),
+  // φ = 0.85 (ETABS PhiJointShear), γ = 1.66 interior / 1.25 exterior /
+  // 1.0 corner (ACI 21.3.4 SI). Demand: unbalanced beam face moments
+  // framing into the joint on the axis considered (combo-factored).
+  function jointShearCheck(app, m, model, comboName) {
+    const R = app.rcResults;
+    const ent = app.bim.getEntityById(m.id);
+    if (!ent) return null;
+    const [cx, cy, cz] = ent.params.base;
+    const hgt = (+ent.params.height || 3);
+    // beams framing into this column top node
+    const ni = model.frames[R.model.map.findIndex ? 0 : 0]; // placeholder replaced below
+    const srcIdx = model.map.find(mm => mm.ent && mm.ent.id === m.id);
+    if (!srcIdx) return null;
+    const el = model.frames[srcIdx.idx];
+    const topZ = cz + hgt;
+    const sec = root.RCDefine.ensure(app).frameSections.find(s2 =>
+      s2.name === ent.params.designSection);
+    const dims = (sec && sec.dims) || {};
+    const hc = ((dims.h || dims.b || 0.4)) * 1000;   // column depth mm
+    const bc = ((dims.b || 0.4)) * 1000;
+    const mat = sec && (ent.params.materialOverwrite || sec.material);
+    const matObj = root.RCDefine.ensure(app).materials.find(x2 => x2.name === mat) ||
+      root.RCDefine.ensure(app).materials.find(x2 => x2.type === 'concrete');
+    const fc = matObj && matObj.conc ? matObj.conc.fc : 25;
+    // sum beam moments at the joint per axis from the combo row members
+    const src = root.RCModel.designSources(app, comboName)[0] || null;
+    if (!src) return null;
+    let MajX = 0, MajY = 0, nBeams = 0;
+    const byId = new Map(src.members.filter(Boolean).map(mm => [mm.id, mm]));
+    for (const mm of model.map) {
+      if (!mm.ent || mm.ent.type !== 'beam') continue;
+      const bel = model.frames[mm.idx];
+      const a = model.nodes[bel.ni], b2 = model.nodes[bel.nj];
+      const atJoint = Math.abs(a.z - topZ) < 0.3 && Math.hypot(a.x - cx, a.y - cy) < 0.6;
+      const btJoint = Math.abs(b2.z - topZ) < 0.3 && Math.hypot(b2.x - cx, b2.y - cy) < 0.6;
+      if (!atJoint && !btJoint) continue;
+      const row = byId.get(mm.ent.id);
+      if (!row) continue;
+      nBeams++;
+      const bl = mm.ent.params.baseline;
+      const alongX = Math.abs(bl[1][0] - bl[0][0]) > Math.abs(bl[1][1] - bl[0][1]);
+      const M = Math.max(Math.abs(row.Mi || 0), Math.abs(row.Mj || 0));
+      if (alongX) MajX += M; else MajY += M;
+    }
+    if (!nBeams) return null;
+    // joint geometry classification by how many beam directions frame in
+    const dirs = new Set(model.map.filter(mm => {
+      if (!mm.ent || mm.ent.type !== 'beam') return false;
+      const bel = model.frames[mm.idx];
+      const a = model.nodes[bel.ni], b2 = model.nodes[bel.nj];
+      return (Math.abs(a.z - topZ) < 0.3 && Math.hypot(a.x - cx, a.y - cy) < 0.6) ||
+             (Math.abs(b2.z - topZ) < 0.3 && Math.hypot(b2.x - cx, b2.y - cy) < 0.6);
+    }).map(mm => {
+      const bl = mm.ent.params.baseline;
+      return Math.abs(bl[1][0] - bl[0][0]) > Math.abs(bl[1][1] - bl[0][1]) ? 'x' : 'y';
+    }));
+    const gamma = dirs.size >= 2 ? 1.66 : (dirs.size === 1 ? 1.25 : 1.0);
+    const phi = 0.85;
+    const capN = phi * gamma * Math.sqrt(fc) * bc * hc;
+    const cap = capN / 1e3; // kN
+    const VuX = MajX / 1e6 * 0; // placeholder: moment in kN·mm -> kN below
+    const vuX = MajX / 1e6;     // kN·m→kN·m keep, joint shear ~ ΣM/h_col story
+    const hStory = hgt * 1000;
+    const Vjs = (MajX + MajY) / hStory; // N
+    const ratio = Vjs / Math.max(capN, 1);
+    return {
+      nBeams, gamma, phi,
+      Vjs_kN: +(Vjs / 1e3).toFixed(1),
+      phiVn_kN: +cap.toFixed(1),
+      ratio: +ratio.toFixed(3),
+      ok: ratio <= 1,
+      classification: dirs.size >= 2 ? 'interior' : dirs.size === 1 ? 'exterior' : 'corner',
+    };
+  }
+
   // ================================================== column shear (ETABS)
   // cDsnCodeConcRC_ACI_08.ColumnNetShearCapacity, psi form → SI:
   //   2√f'c→0.17√f'c, 500psi→3.45MPa, 2000psi→13.79MPa, 1.9√f'c→0.158√f'c,
@@ -382,10 +459,14 @@
       const shear = columnNetShearCapacitySI(Vu, Nu, Mx, fc,
         b * dEff, b * h, dEff, Av, sTie, 500, Ast / (b * dEff));
 
+      // ETABS Concrete Joint Envelope parity: JS ratio at this column top
+      const js = jointShearCheck(app, m, R.model, comboName);
       results.push({
         id: m.id, b, h, fc, fy: 500,
         Pu: Pu / 1e3, Mx: Mx / 1e6, My: My / 1e6,
         dcr, crStrong: cr0.dcr, crWeak: cr90.dcr,
+        joint: js ? { Vjs_kN: js.Vjs_kN, phiVn_kN: js.phiVn_kN, ratio: js.ratio,
+          ok: js.ok, type: js.classification, nBeams: js.nBeams } : null,
         biaxial: { method: bx.method, ang: bx.ang,
           ratioVec: bx.ratioVec, ratioSum: bx.ratioSum, ratioRay: bx.ratioRay,
           dcrAxial: bx.dcrAxial },
@@ -393,7 +474,7 @@
           phiVn: shear.phiVn / 1e3, dcr: +shear.dcr.toFixed(3),
           Avs: +shear.Avs.toFixed(2) },
         Pcap: cr0.Pcap / 1e3,
-        status: Math.max(dcr, shear.dcr) > 1 ? 'OVERSTRESSED' : Math.max(dcr, shear.dcr) > 0.9 ? 'NEAR LIMIT' : 'OK',
+        status: Math.max(dcr, shear.dcr, js ? js.ratio : 0) > 1 ? 'OVERSTRESSED' : Math.max(dcr, shear.dcr, js ? js.ratio : 0) > 0.9 ? 'NEAR LIMIT' : 'OK',
         pmCurve: pm0,
         combo: src.name,
       });

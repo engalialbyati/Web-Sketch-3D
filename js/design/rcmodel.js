@@ -589,7 +589,22 @@
     const loads = [], memberLoads = [];
     const byId = id => app.bim.getEntityById(id);
 
+    // patterned virtual cases: 'LIVE#A'/'LIVE#B' apply the base LIVE
+    // loads to ALTERNATING loadable entities (skip-live approximation)
+    const entParity = new Map();
+    {
+      let k = 0;
+      for (const e of app.bim.entities) {
+        const loadable = (e.params.surfaceLoads && e.params.surfaceLoads.length) ||
+          (e.params.frameLoads && e.params.frameLoads.length);
+        if (loadable) entParity.set(e.id, (k++) % 2);
+      }
+    }
     for (const pat of pats) {
+      const mHash = /^(.*)#([AB])$/.exec(pat.name);
+      const basePat = mHash ? pats.find(p2 => p2.name === mHash[1]) : pat;
+      const wantParity = mHash ? (mHash[2] === 'A' ? 0 : 1) : null;
+      const patEff = basePat || pat;
       const nodal = new Map();
       const addNodal = (ni, fx, fy, fz) => {
         const cur = nodal.get(ni) || [0, 0, 0, 0, 0, 0];
@@ -600,7 +615,7 @@
 
       // self-weight: DEAD-family pattern multiplier × A × unit weight.
       // Beams: transverse UDL. Columns: axial, split half to each end node.
-      if (pat.selfWtMult) {
+      if (patEff.selfWtMult) {
         for (let i = 0; i < model.frames.length; i++) {
           const m = model.map.find(x => x.idx === i);
           if (!m) continue;
@@ -609,7 +624,7 @@
           const mo = sec.modifiers || {};
           const gamma = (mat && mat.weight ? mat.weight.value : 25) * 1000 * (mo.weight ?? 1); // N/m³
           const A = (RD().frameSectionProps(sec).A || 0) * 1e6;            // mm²
-          const w = A * gamma * 1e-9 * pat.selfWtMult;                     // N/mm
+          const w = A * gamma * 1e-9 * patEff.selfWtMult;                   // N/mm
           if (!(w > 0)) continue;
           if (m.ent.type === 'beam') {
             const frac = m.lenFrac != null ? m.lenFrac : 1; // split segments carry their share
@@ -646,7 +661,7 @@
         const m = model.map.find(x => x.idx === i);
         if (!m) continue;
         for (const J of m.ent.params.jointLoads || []) {
-          if (J.pattern !== pat.name) continue;
+          if (J.pattern !== patEff.name) continue;
           const at = J.end === 'j' ? model.frames[i].nj : model.frames[i].ni;
           addNodal(at, (J.fx || 0) * 1000, (J.fy || 0) * 1000, (J.fz || 0) * 1000);
         }
@@ -657,8 +672,9 @@
       for (const sh of model.shells) {
         const owner = app.bim.getEntityById(sh.entId);
         if (!owner) continue;
+        if (wantParity != null && entParity.get(owner.id) !== wantParity) continue;
         for (const L of owner.params.surfaceLoads || []) {
-          if (L.pattern !== pat.name) continue;
+          if (L.pattern !== patEff.name) continue;
           const p1 = model.nodes[sh.n1], p2 = model.nodes[sh.n2], p3 = model.nodes[sh.n3], p4 = model.nodes[sh.n4];
           const Acell = Math.abs(
             ((p2.x - p1.x) * (p3.y - p1.y) - (p3.x - p1.x) * (p2.y - p1.y)) / 2 +
@@ -685,8 +701,10 @@
             model.nodes[model.frames[i].nj].y - model.nodes[model.frames[i].ni].y,
             model.nodes[model.frames[i].nj].z - model.nodes[model.frames[i].ni].z);
         const loadsOn = m.ent.params.frameLoads || [];
+        const gatedOut = wantParity != null && entParity.get(m.ent.id) !== wantParity;
+        if (!gatedOut)
         for (const L of loadsOn) {
-          if (L.pattern !== pat.name) continue;
+          if (L.pattern !== patEff.name) continue;
           if (L.type === 'dist') {
             const wNmm = (L.w || 0); // kN/m ≡ N/mm
             if (L.dir === 'gravity') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - wNmm * frac };
@@ -735,6 +753,12 @@
       mk('1.4D', [{ name: DEAD.name, scale: 1.4 }]);
       mk('1.2D+1.6L', [{ name: DEAD.name, scale: 1.2 }, { name: LIVE.name, scale: 1.6 }]);
       mk('0.9D', [{ name: DEAD.name, scale: 0.9 }]);
+      // ETABS PatternLiveFactor (0.75): skip-live patterning via VIRTUAL
+      // patterned cases LIVE-A / LIVE-B — alternating loadable entities
+      // (handled in buildLoads2). The ENVELOPE design then captures the
+      // patterned governing moments, like ETABS pattern live combos.
+      mk('D+0.75L(A)', [{ name: DEAD.name, scale: 1.0 }, { name: LIVE.name + '#A', scale: 0.75 }]);
+      mk('D+0.75L(B)', [{ name: DEAD.name, scale: 1.0 }, { name: LIVE.name + '#B', scale: 0.75 }]);
     } else if (DEAD) {
       mk('1.4D', [{ name: DEAD.name, scale: 1.4 }]);
     } else {
@@ -893,6 +917,131 @@
         ratio: +(L_mm / Math.max(dmax, 1e-6)).toFixed(0),
         ok250: dmax <= L_mm / 250, ok360: dmax <= L_mm / 360,
         stations, len: X[X.length - 1],
+      });
+    }
+    return out;
+  }
+
+  // ======================================= service deflection (ACI 318-19)
+  // ETABS computes concrete deflection CRACKED with long-term multipliers
+  // (native engine; surfaces via the Flexural Stress Check tables). This is
+  // the ACI 318-19 Ch.24 implementation:
+  //   fr = 0.62λ√f'c (24.2.3.6) · Mcr = fr·Ig/yt (24.2.3.5)
+  //   Ie = Icr + (Ig − Icr)(Mcr/Ma)³ ≤ Ig (Branson)
+  //   λΔ = ξ/(1+50ρ') (24.2.4.1), ξ=2.0 (sustained ≥ 5 yr), ρ'=0
+  //   δ_LT = (1+λΔ)·δD + δL · limits L/360 (live) and L/240 (total) T.24.2.2
+  function crackedSectionProps(b, h, As, d, fc, fy, Es) {
+    const Ec = 4700 * Math.sqrt(fc);            // MPa (19.2.2)
+    const n = Math.round(Es / Ec) || 6;          // modular ratio
+    // cracked neutral axis: b(kd)²/2 = n·As·(d − kd)
+    const A = b / 2, B2 = n * As, C0 = -n * As * d;
+    const kd = (-B2 + Math.sqrt(B2 * B2 - 4 * A * C0)) / (2 * A);
+    const Icr = b * kd * kd * kd / 3 + n * As * (d - kd) * (d - kd);
+    const Ig = b * h * h * h / 12;
+    const yt = h / 2;
+    const fr = 0.62 * Math.sqrt(fc);             // MPa, normal weight
+    const Mcr = fr * Ig / yt;                    // N·mm
+    return { Ec, n, kd, Icr, Ig, Mcr, fr };
+  }
+
+  function serviceDeflections(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return null;
+    ensureAutoCombos(app);
+    const model = R.model;
+    const rowsBy = new Map();
+    for (const m of model.map) {
+      if (!m.ent || m.ent.type !== 'beam') continue;
+      if (!rowsBy.has(m.ent.id)) rowsBy.set(m.ent.id, []);
+      rowsBy.get(m.ent.id).push(m);
+    }
+    // service station moments per case name (unfactored patterns)
+    const patByName = new Map(R.patterns.map(p2 => [p2.name, p2]));
+    const DEAD = (patByName.get('DEAD') || patByName.get('Dead') || R.patterns[0] || {}).name;
+    const LIVE = ((patByName.get('LIVE') || patByName.get('Live') || {}).name) || null;
+    const d = RD().ensure(app);
+    const out = new Map();
+    for (const [entId, rows] of rowsBy) {
+      rows.sort((a, b2) => (a.x0 || 0) - (b2.x0 || 0));
+      const ent = rows[0].ent;
+      const sec = sectionOf(app, ent);
+      const mat = sec && materialOf(app, sec, ent);
+      if (!sec || !mat) continue;
+      const props = RD().frameSectionProps(sec);
+      const b = ((sec.dims || {}).b || 0.3) * 1000;
+      const h = ((sec.dims || {}).h || 0.5) * 1000;
+      const fc = mat.conc ? mat.conc.fc : 25;
+      const Es = 200000;
+      const As = Math.max(0.002 * b * h, 371);   // provided (design) steel floor
+      const dEff = h - 60;
+      const csp = crackedSectionProps(b, h, As, dEff, fc, 500, Es);
+      const I33 = (props.I33 || 0) * 1e12; // mm4
+      const EIg = csp.Ec * I33;
+      const EIcr = csp.Ec * csp.Icr;
+      // stitch entity station tables per case and integrate M/EI(x)
+      const stitch = (caseName) => {
+        const pi = R.patterns.findIndex(p2 => p2.name === caseName);
+        if (pi < 0) return null;
+        const X = [], M = [];
+        for (const m of rows) {
+          const rowP = R.patterns[pi].members[m.idx];
+          if (!rowP || !rowP.stations) continue;
+          for (const st of rowP.stations) { X.push((m.x0 || 0) + st.x); M.push(st.M); }
+        }
+        return X.length > 1 ? { X, M } : null;
+      };
+      const sD = stitch(DEAD), sL = LIVE ? stitch(LIVE) : null;
+      if (!sD) continue;
+      const L_mm = sD.X[sD.X.length - 1] * 1000;
+      if (!(L_mm > 10)) continue;
+      // node end translations for chord (uz, up+)
+      const ni = model.frames[rows[0].idx].ni;
+      const nj = model.frames[rows[rows.length - 1].idx].nj;
+      const UD = comboU(app, DEAD);
+      const UL = LIVE ? comboU(app, LIVE) : null;
+      const integ = (S, U) => {
+        if (!S) return null;
+        const xs = S.X.map(x2 => x2 * 1000);
+        const Ma = Math.max(...S.M.map(v2 => Math.abs(v2))) * 1e6;
+        const Ie = Ma >= csp.Mcr ? Math.min(
+          csp.Icr + (csp.Ig - csp.Icr) * Math.pow(csp.Mcr / Ma, 3), csp.Ig) : csp.Ig;
+        // per-station EI interpolation (crack varies with M(x))
+        const slope = [0];
+        for (let i = 0; i < xs.length - 1; i++) {
+          const M1 = Math.abs(S.M[i]) * 1e6, M2 = Math.abs(S.M[i + 1]) * 1e6;
+          const Ie1 = M1 >= csp.Mcr ? Math.min(csp.Icr + (csp.Ig - csp.Icr) * Math.pow(csp.Mcr / M1, 3), csp.Ig) : csp.Ig;
+          const Ie2 = M2 >= csp.Mcr ? Math.min(csp.Icr + (csp.Ig - csp.Icr) * Math.pow(csp.Mcr / M2, 3), csp.Ig) : csp.Ig;
+          slope.push(slope[i] + 0.5 * (M1 / (csp.Ec * Ie1) + M2 / (csp.Ec * Ie2)) * (xs[i + 1] - xs[i]));
+        }
+        const v = [0];
+        for (let i = 0; i < xs.length - 1; i++)
+          v.push(v[i] + 0.5 * (slope[i] + slope[i + 1]) * (xs[i + 1] - xs[i]));
+        const endRaw = v[v.length - 1];
+        const di = U ? (U[ni * 6 + 2] || 0) : 0, dj = U ? (U[nj * 6 + 2] || 0) : 0;
+        let dmax = 0;
+        for (let i = 0; i < xs.length; i++) {
+          const t = xs[i] / L_mm;
+          dmax = Math.max(dmax, v[i] - t * endRaw - ((1 - t) * di + t * dj));
+        }
+        return { dmax, Ie, Ma };
+      };
+      const iD = integ(sD, UD);
+      const iL = sL ? integ(sL, UL) : null;
+      const lambdaLT = 2.0 / (1 + 0);            // ξ=2, ρ'=0
+      const dD = iD ? iD.dmax : 0;
+      const dL = iL ? iL.dmax : 0;
+      const dLT = (1 + lambdaLT) * dD + dL;
+      const okL = dL <= L_mm / 360, okT = dLT <= L_mm / 240;
+      out.set(entId, {
+        id: entId, L_mm: Math.round(L_mm),
+        Mcr: +((csp.Mcr) / 1e6).toFixed(1),
+        Ma: iD ? +((iD.Ma) / 1e6).toFixed(1) : 0,
+        Ig: Math.round(I33), Icr: Math.round(csp.Icr),
+        Ie: iD ? Math.round(iD.Ie) : Math.round(I33),
+        dD: +dD.toFixed(2), dL: +dL.toFixed(2), dLT: +dLT.toFixed(2),
+        lambdaLT,
+        lim360: +(L_mm / 360).toFixed(2), lim240: +(L_mm / 240).toFixed(2),
+        okL, okT,
       });
     }
     return out;
@@ -1975,7 +2124,7 @@
     }
     return { maxU: Array.from(maxU), nSteps, dt };
   }
-  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, beamDeflections, comboU, elementDeflections, forceTable, open, openAssign,
+  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, beamDeflections, comboU, elementDeflections, serviceDeflections, forceTable, open, openAssign,
     responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign, caseU };
 })(window);
 

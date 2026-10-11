@@ -148,12 +148,13 @@
         `${(r.Pu).toFixed(0)}`, `${r.Mx.toFixed(1)} / ${r.My.toFixed(1)}`,
         esc(r.status), `${(r.shear.Vu).toFixed(0)} / ${r.shear.phiVn.toFixed(0)}`,
         shearDcrText(r),
+        r.joint ? `<b style="color:${r.joint.ok ? '#2e7d32' : '#c62828'}">${r.joint.ratio.toFixed(3)}</b> (${r.joint.type})` : '—',
         driftOf(r.id) != null ? driftOf(r.id).toFixed(2) : '—'];
     });
     return {
       name: 'Concrete Column Design Summary - ACI 318-19',
       headers: ['Story', 'Element', 'Station', 'PMM Combo', 'PMM Ratio',
-        'Pu (kN)', 'Mx/My (kN·m)', 'Status', 'Vu/φVn (kN)', 'Shear DCR', 'Lateral Drift (mm)'],
+        'Pu (kN)', 'Mx/My (kN·m)', 'Status', 'Vu/φVn (kN)', 'Shear DCR', 'JS Ratio (Joint)', 'Lateral Drift (mm)'],
       rows,
     };
   }
@@ -217,6 +218,82 @@
     };
   }
 
+  // --------------------------------------- beam service deflection check
+  // ETABS "Concrete Beam Design - Flexural Stress Check" surface: cracked
+  // Ie (Branson) + long-term multipliers per ACI 318-19 Ch. 24
+  function deflectionCheck(app) {
+    const defs = root.RCModel.serviceDeflections(app, 'ENVELOPE');
+    if (!defs || !defs.size) return { name: 'error', headers: [], rows: [['No data — run analysis']] };
+    const rows = [...defs.values()].sort((a, b) => b.dLT - a.dLT).map(v => [
+      esc(v.id),
+      v.Mcr.toFixed(1), v.Ma.toFixed(1),
+      v.Ig.toLocaleString(), v.Icr.toLocaleString(), v.Ie.toLocaleString(),
+      v.dD.toFixed(2), v.dL.toFixed(2),
+      `<b>${v.dLT.toFixed(2)}</b>`,
+      v.lim360.toFixed(2),
+      v.okL ? '<span style="color:#2e7d32">OK</span>' : '<span style="color:#c62828">OVER</span>',
+      v.lim240.toFixed(2),
+      v.okT ? '<span style="color:#2e7d32">OK</span>' : '<span style="color:#c62828">OVER</span>',
+    ]);
+    return {
+      name: 'Beam Deflection Check - Cracked & Long-Term (ACI 318-19 Ch.24)',
+      headers: ['Element', 'Mcr (kN·m)', 'Ma (kN·m)', 'Ig (mm⁴)', 'Icr (mm⁴)', 'Ie (mm⁴)',
+        'δD (mm)', 'δL (mm)', 'δLT (mm)', 'L/360 (mm)', 'δL ok', 'L/240 (mm)', 'δLT ok'],
+      rows,
+    };
+  }
+
+  // ------------------------------------------ design forces (ETABS parity)
+  // "Design Forces - Beams" / "- Columns": per-station P/V/M per combo
+  function beamDesignForces(app, comboName) {
+    const R = app.rcResults;
+    const sources = root.RCModel.designSources(app, comboName);
+    const rows = [];
+    for (const src of sources) {
+      const byId = new Map(src.members.filter(Boolean).map(m => [m.id, m]));
+      const seenEnt = new Set();
+      for (const m of R.model.map) {
+        if (!m.ent || m.ent.type !== 'beam' || seenEnt.has(m.ent.id)) continue;
+        const row = byId.get(m.ent.id);
+        if (!row || !row.stations) continue;
+        seenEnt.add(m.ent.id);
+        row.stations.forEach((st, si) => {
+          if (si % 4 !== 0 && si !== row.stations.length - 1) return; // thin the table
+          rows.push([esc(m.ent.id), esc(src.name), (st.x).toFixed(2),
+            (row.Fi / 1e3).toFixed(1), (row.Vi / 1e3).toFixed(1),
+            st.M.toFixed(1), (row.Ti / 1e6).toFixed(2)]);
+        });
+      }
+    }
+    return {
+      name: 'Design Forces - Beams',
+      headers: ['Element', 'Combo', 'Station (m)', 'P (kN)', 'V3 (kN)', 'M3 (kN·m)', 'T (kN·m)'],
+      rows: rows.slice(0, 400),
+    };
+  }
+  function columnDesignForces(app, comboName) {
+    const R = app.rcResults;
+    const sources = root.RCModel.designSources(app, comboName);
+    const rows = [];
+    for (const src of sources) {
+      const byId = new Map(src.members.filter(Boolean).map(m => [m.id, m]));
+      for (const m of R.model.map) {
+        if (!m.ent || m.ent.type !== 'column') continue;
+        const row = byId.get(m.ent.id);
+        if (!row) continue;
+        rows.push([esc(m.ent.id), esc(src.name),
+          (row.Fi / 1e3).toFixed(1),
+          (row.Vi / 1e3).toFixed(1), (row.Vi2 / 1e3).toFixed(1),
+          (row.Mi / 1e6).toFixed(1), (row.Mi2 / 1e6).toFixed(1)]);
+      }
+    }
+    return {
+      name: 'Design Forces - Columns',
+      headers: ['Element', 'Combo', 'P (kN)', 'V2 (kN)', 'V3 (kN)', 'M2 (kN·m)', 'M3 (kN·m)'],
+      rows: rows.slice(0, 400),
+    };
+  }
+
   // ============================================================ dialog
   const TABLES = [
     ['Joint Displacements', 'jointDisplacements', true],
@@ -225,6 +302,9 @@
     ['Base Reactions', 'baseReactions', true],
     ['Concrete Column Design Summary - ACI 318-19', 'columnSummary', false],
     ['Concrete Beam Design Summary - ACI 318-19', 'beamSummary', false],
+    ['Beam Deflection Check - Cracked & Long-Term (ACI 318-19 Ch.24)', 'deflectionCheck', false],
+    ['Design Forces - Beams', 'beamDesignForces', true],
+    ['Design Forces - Columns', 'columnDesignForces', true],
     ['Material List by Object Type', 'materialList', false],
   ];
 
@@ -262,5 +342,5 @@
     setTimeout(render, 0);
   }
 
-  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections };
+  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections, deflectionCheck, beamDesignForces, columnDesignForces };
 })(window);
