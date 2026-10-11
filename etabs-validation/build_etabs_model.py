@@ -70,11 +70,24 @@ def main():
             if info:
                 cp = info['row'] * 3 + info['col'] + 1
                 try:
+                    # (Name, CardinalPoint, Mirror2, StiffTransform,
+                    #  Offset1, Offset2, CSys) -> (Offset1, Offset2, ret)
                     sap.FrameObj.SetInsertionPoint(nm, cp, False, True,
-                                                   0, info.get('off2', 0), 'Global')
+                                                   0.0, float(info.get('off2', 0)),
+                                                   'Global')
                 except Exception as e:
                     print('insertion point skipped', mb['name'], str(e)[:60])
     print('members added:', len(names))
+
+    # ---------------- centerline connectivity (parity with the app engine)
+    # ETABS defaults Auto end-length offsets (half adjoining member, rigid
+    # zone factor 1); the app runs centerline stiffness (RZ = 0) and extracts
+    # design forces at faces afterwards — force the same here so the diff
+    # compares like with like.
+    for nm in names.values():
+        ret = sap.FrameObj.SetEndLengthOffset(nm, False, 0.0, 0.0, 0.0)
+        if ret != 0:
+            print('end length offset failed:', nm, ret)
 
     # ---------------- supports: fixed at the lowest nodes
     cnt, allNames, ret = sap.PointObj.GetNameList()
@@ -90,14 +103,19 @@ def main():
         sap.LoadPatterns.Add(p['name'], t, 0, True)
         sap.LoadPatterns.SetSelfWTMultiplier(p['name'], 0)
 
-    # ---------------- member loads: explicit self-weight + user loads
+    # ---------------- member loads
+    # The optional CSys/RelDist/Replace args fail to marshal on this install
+    # (every call with them returns 1), so self-weight is COMBINED with the
+    # user DEAD UDL into one call instead of relying on Replace=false.
     for mb in MEMBERS:
         nm = names[mb['name']]
         sec = next((s for s in SECTIONS if s['name'] == mb['sec']), None)
         sw = (sec['b'] * sec['h'] * 25.0) if sec else 0.0   # A * 25 kN/m3
-        sap.FrameObj.SetLoadDistributed(nm, 'DEAD', 1, 10, 0, 1, sw, sw)
+        dead = [l for l in mb['loads'] if l['pat'] == 'DEAD' and l['type'] == 'dist']
+        wtot = sw + sum(l['w'] for l in dead)
+        sap.FrameObj.SetLoadDistributed(nm, 'DEAD', 1, 10, 0, 1, wtot, wtot)
         for L2 in mb['loads']:
-            if L2['type'] == 'dist':
+            if L2['type'] == 'dist' and L2['pat'] != 'DEAD':
                 sap.FrameObj.SetLoadDistributed(nm, L2['pat'], 1, 10, 0, 1,
                                                 L2['w'], L2['w'])
             elif L2['type'] == 'point':
@@ -107,10 +125,12 @@ def main():
                                           min(max(L2['a'] / L, 0), 1), L2['P'])
 
     # ---------------- combos
+    # SetCaseList refuses every call form on this install (OAPI quirk), so the
+    # named combos stay empty — irrelevant for the diff: combo forces are exact
+    # linear superpositions of pattern forces (no P-delta / nonlinear cases
+    # here), which diff.py applies directly to ETABS's own pattern results.
     for c in COMBOS:
         sap.RespCombo.Add(c['name'], 0)
-        for it in c['cases']:
-            sap.RespCombo.SetCaseList(c['name'], 1, it['name'], it['scale'] or 1)
 
     # ---------------- save first: the ETABS solver requires a saved model
     edb = os.path.join(HERE, 'etabs-test.EDB')
@@ -125,16 +145,17 @@ def main():
     print('RunAnalysis ret', ret)
 
     # ---------------- concrete design (ACI 318-19)
+    # StartDesign returns 1 (refused) on the DO_NOT_USE_COMMERCIALLY license —
+    # on a licensed install this extracts the design summaries too.
     try: sap.DesignConcrete.SetCode('ACI 318-19')
     except Exception as e: print('code set failed:', e)
-    sap.DesignConcrete.StartDesign()
+    dret = sap.DesignConcrete.StartDesign()
+    print('StartDesign ret', dret, '(1 = refused by license)')
 
     # ---------------- extract analysis forces at member ends (i and j)
-    results = {'forces': {}, 'design': {}, 'nameMap': names}
-    sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
-    for p in PATTERNS: sap.Results.Setup.SetCaseSelectedForOutput(p['name'])
-    for c in COMBOS: sap.Results.Setup.SetComboSelectedForOutput(c['name'])
-    cases = [p['name'] for p in PATTERNS] + [c['name'] for c in COMBOS]
+    results = {'forces': {}, 'design': {}, 'nameMap': names,
+               'note': 'combo forces are superposed by diff.py from patterns'}
+    cases = [p['name'] for p in PATTERNS]
     for mb in MEMBERS:
         nm = names[mb['name']]
         for cs in cases:
@@ -143,10 +164,7 @@ def main():
                 # NumberResults, Obj, ObjSta, Elm, ElmSta, LoadCase, StepType,
                 # StepNum, P, V2, V3, T, M2, M3, ret
                 sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
-                if cs in [p['name'] for p in PATTERNS]:
-                    sap.Results.Setup.SetCaseSelectedForOutput(cs)
-                else:
-                    sap.Results.Setup.SetComboSelectedForOutput(cs)
+                sap.Results.Setup.SetCaseSelectedForOutput(cs)
                 r = sap.Results.FrameForce(nm, 1, 0, [], [], [], [], [], [],
                                            [], [], [], [], [])
                 n = r[0]
@@ -161,19 +179,39 @@ def main():
             except Exception as e:
                 results['forces'].setdefault(mb['name'], {})[cs] = {'error': str(e)}
 
-    # ---------------- design summary — raw out tuples for offline mapping
+    # ---------------- design summary — structured rows (empty on this license)
     for mb in MEMBERS:
         nm = names[mb['name']]
         try:
             if mb['kind'] == 'beam':
+                # Name, NumberItems(in), then 14 out arrays:
+                # FrameName, Location, TopCombo, TopArea, BotCombo, BotArea,
+                # VMajorCombo, VMajorArea, TLCombo, TLArea, TTCombo, TTArea,
+                # ErrorSummary, WarningSummary -> + ret
                 r3 = sap.DesignConcrete.GetSummaryResultsBeam(
                     nm, 0, [], [], [], [], [], [], [], [], [], [], [], [], [])
+                n = r3[0]
+                results['design'][mb['name']] = {
+                    'rows': n,
+                    'location': list(r3[2]), 'topCombo': list(r3[3]),
+                    'topArea': list(r3[4]), 'botCombo': list(r3[5]),
+                    'botArea': list(r3[6]), 'vmajorArea': list(r3[8]),
+                }
             else:
+                # Name, NumberItems(in), then 12 out arrays:
+                # FrameName, MyOption, Location, PMMCombo, PMMArea, PMMRatio,
+                # VMajorCombo, AVMajor, VMinorCombo, AVMinor,
+                # ErrorSummary, WarningSummary -> + ret
                 r3 = sap.DesignConcrete.GetSummaryResultsColumn(
-                    nm, 0, [], 1, [], [], [], [], [], [], [], [], [], [])
-            results['design'].setdefault(mb['name'], {})['design'] = [repr(v) for v in r3]
+                    nm, 0, [], [], [], [], [], [], [], [], [], [], [])
+                n = r3[0]
+                results['design'][mb['name']] = {
+                    'rows': n,
+                    'location': list(r3[3]), 'pmmCombo': list(r3[4]),
+                    'pmmArea': list(r3[5]), 'pmmRatio': list(r3[6]),
+                }
         except Exception as e:
-            results['design'].setdefault(mb['name'], {})['design'] = {'error': str(e)}
+            results['design'][mb['name']] = {'error': str(e)}
 
     with open(os.path.join(HERE, 'etabs-results.json'), 'w') as f2:
         json.dump(results, f2, indent=1)
