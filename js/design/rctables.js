@@ -294,6 +294,26 @@
     };
   }
 
+  // -------------------------------------------- slab design strip data
+  // ETABS "Concrete Slab Design - Flexure and Shear Data" parity
+  function slabStripData(app, comboName) {
+    const res = root.RCView.designSlabStrips(app, comboName);
+    if (res.error) return { name: 'error', headers: [], rows: [[res.error]] };
+    const rows = res.rows.map(r => [
+      esc(r.strip), esc(r.dir), r.station.toFixed(2), esc(r.combo),
+      r.mTop.toFixed(1), Math.round(r.asTop),
+      r.mBot.toFixed(1), Math.round(r.asBot),
+      r.asMin, r.vu.toFixed(1), r.avMinPerS, r.width.toFixed(1),
+    ]);
+    return {
+      name: 'Concrete Slab Design - Flexure and Shear Data',
+      headers: ['Strip', 'Dir', 'Station (m)', 'Combo',
+        'Mu Top (kN·m/m)', 'As Top (mm²/m)', 'Mu Bot (kN·m/m)', 'As Bot (mm²/m)',
+        'AsMin (mm²/m)', 'Vu (kN/m)', 'Av/s min (mm²/mm)', 'Design Width (m)'],
+      rows,
+    };
+  }
+
   // ============================================================ dialog
   const TABLES = [
     ['Joint Displacements', 'jointDisplacements', true],
@@ -305,6 +325,7 @@
     ['Beam Deflection Check - Cracked & Long-Term (ACI 318-19 Ch.24)', 'deflectionCheck', false],
     ['Design Forces - Beams', 'beamDesignForces', true],
     ['Design Forces - Columns', 'columnDesignForces', true],
+    ['Concrete Slab Design - Flexure and Shear Data', 'slabStripData', true],
     ['Material List by Object Type', 'materialList', false],
   ];
 
@@ -342,5 +363,5 @@
     setTimeout(render, 0);
   }
 
-  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections, deflectionCheck, beamDesignForces, columnDesignForces };
+  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections, deflectionCheck, beamDesignForces, columnDesignForces, slabStripData };
 })(window);

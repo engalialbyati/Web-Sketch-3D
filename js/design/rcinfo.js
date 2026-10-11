@@ -234,6 +234,20 @@
           `est. long-term ≈ <b>${dLT.toFixed(2)} mm</b> <span style="opacity:.6">(λΔ=2.0, cracked-section estimate)</span></p>`;
       }
     } catch (e) { }
+    // slab design strips (ETABS Concrete Slab Design data, governing rows)
+    try {
+      const st = root.RCView.designSlabStrips(app, comboName || 'ENVELOPE');
+      if (st && st.rows && st.rows.length) {
+        const mine = st.rows.filter(r => r.ent === ent.id)
+          .sort((a, b) => Math.max(Math.abs(b.mTop), Math.abs(b.mBot)) - Math.max(Math.abs(a.mTop), Math.abs(a.mBot)))
+          .slice(0, 4);
+        slabDefl += '<p style="font-size:12px;margin:8px 0 2px"><b>Design strips</b> — governing stations</p>' +
+          table(['Strip', 'Dir', 'Station (m)', 'Mu T/B (kN·m/m)', 'As T/B (mm²/m)', 'AsMin'],
+            mine.map(r => '<tr>' + td(esc(r.strip)) + td(r.dir) + td(r.station.toFixed(2)) +
+              td(`${r.mTop.toFixed(1)} / ${r.mBot.toFixed(1)}`) +
+              td(`${r.asTop} / ${r.asBot}`) + td(r.asMin) + '</tr>').join(''));
+      }
+    } catch (e) { }
     return table(['M11 max/min', 'M22 max/min (kN·m/m)', 'D1 bot / top', 'D2 bot / top', 'One-way shear', 'Status'],
       ['<tr>' + td(`${d.maxM11.toFixed(1)} / ${d.minM11.toFixed(1)}`) + td(`${d.maxM22.toFixed(1)} / ${d.minM22.toFixed(1)}`) +
       td(`${bars(d.botBarsD1)} / ${bars(d.topBarsD1)}`) + td(`${bars(d.botBarsD2)} / ${bars(d.topBarsD2)}`) +

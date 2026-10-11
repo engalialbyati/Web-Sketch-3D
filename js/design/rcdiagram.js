@@ -167,10 +167,12 @@
 
     view.scene.add(diagramGroup);
     view.invalidate();
-    app.setStatus(`Showing ${mode === 'M3' ? 'Moment M3' : 'Shear V3'} diagrams — case: ${comboName}`);
+    root.RCView && RCView.attachLiveRead(app, mode, comboName);
+    app.setStatus(`Showing ${mode === 'M3' ? 'Moment M3' : 'Shear V3'} diagrams — case: ${comboName} — hover a beam for values`);
   }
 
   function hideDiagrams(app) {
+    root.RCView && RCView.detachLiveRead(app);
     if (diagramGroup && app.view && app.view.scene) {
       app.view.scene.remove(diagramGroup);
       diagramGroup = null;
@@ -313,7 +315,7 @@
       const comboName = defaultCase(app);
       if (!comboName) { app.toast('Run the analysis first', true); return; }
       if (next) showDiagrams(app, next, comboName);
-      else hideDiagrams(app);
+      else { hideDiagrams(app); root.RCView && RCView.detachLiveRead(app); }
       return;
     }
     if (cat === 'showDeflection') {
@@ -412,7 +414,8 @@
         new THREE.BufferGeometry().setFromPoints([paD, pbD]), colMat));
     }
     view.scene.add(diagramGroup);
-    app.toast(`Deflected shape (×${(scale * 1000).toFixed(0)}·10³) — max δ ${maxD.toFixed(2)} mm · purple ≤ L/250 · grey = shells`);
+    root.RCView && RCView.attachLiveRead(app, 'DEF', comboName);
+    app.toast(`Deflected shape (×${(scale * 1000).toFixed(0)}·10³) — max δ ${maxD.toFixed(2)} mm · hover a beam for live values`);
   }
 
   root.RCDiagram = { showDiagrams, hideDiagrams, showDeflection, showForceDialog, open };

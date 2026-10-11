@@ -407,7 +407,7 @@ const RIBBON_TABS = {
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
     { title: 'Optimize', tools: ['dsopt', 'dsinfo'] },
-    { title: 'View', tools: ['dsv'] },
+    { title: 'View', tools: ['dsv', 'dsvline', 'dsvres'] },
     { title: 'Report', tools: ['dsreport'] },
     { title: '3D View', tools: ['dsviz'] },
   ] },
@@ -504,6 +504,8 @@ const DEFINE_BUTTONS = {
   defstoryrep: { label: 'Replicate Story', glyph: '⧉', tip: 'Clone the beams/columns/floors of one story onto selected levels (ETABS Similar Stories)', cat: 'storyReplicate' },
   dsopt: { label: 'Auto-Size', glyph: '⤢', tip: 'Iterate frame section sizes until every DCR meets the target — re-analyzes each round', cat: 'designOptimize' },
   dsv: { label: 'Design View', glyph: '◎', tip: 'Toggle Design View: show only designed elements (shear walls, columns, beams, slabs, foundations) - hide normal walls, doors, windows', cat: 'designView' },
+  dsvline: { label: 'Property Lines', glyph: '⌐', tip: 'ETABS Cline & Mid-plane representation: hide all solids, show centerlines only — the clean view for reading BMD/SFD/deflection', cat: 'centerlineView' },
+  dsvres: { label: 'Results View', glyph: '▦c', tip: 'Color the model by governing utilization (ETABS results display): beams demand, columns PMM/shear/joint, walls DCR, slabs M11 scale', cat: 'resultsView' },
   dsinfo: { label: 'Element Data', glyph: 'ⓘ', tip: 'Applied loads, analysis forces and design summary for the selected element (ETABS right-click data)', cat: 'elementInfo' },
   defetabs: { label: 'Export ETABS (dev)', glyph: '⇪', tip: 'DEV ONLY: write an OAPI script that rebuilds this model in ETABS (elements, sections, materials, loads, combos) + this engine\'s results for diffing', cat: 'exportEtabs' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
@@ -5360,6 +5362,9 @@ class App {
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
               if (defBtn.cat === 'designView') { this.toggleDesignView(); return; }
+              if (defBtn.cat === 'centerlineView' || defBtn.cat === 'resultsView') {
+                if (window.RCView) RCView.open(this, defBtn.cat); return;
+              }
               const isRCInfo = defBtn.cat === 'elementInfo';
               if (defBtn.cat === 'designView') this._btnDesignView = _defEl;
               const isRCEtabs = defBtn.cat === 'exportEtabs';
