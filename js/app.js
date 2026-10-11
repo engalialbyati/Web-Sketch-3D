@@ -380,7 +380,7 @@ const RIBBON_TABS = {
     { title: 'Functions', tools: ['defrs', 'defth'] },
     { title: 'Assignables', tools: ['defdiaph', 'defpier', 'defspan'] },
     { title: 'Datum', tools: ['defgrid'] },
-    { title: 'Advanced', tools: ['defcons'] },
+    { title: 'Advanced', tools: ['defcons', 'defetabs'] },
   ] },
   assign: { label: 'Assign', groups: [
     { title: 'Sections', tools: ['asgframe', 'asgarea', 'asgauto'] },
@@ -501,6 +501,7 @@ const DEFINE_BUTTONS = {
   defstoryrep: { label: 'Replicate Story', glyph: '⧉', tip: 'Clone the beams/columns/floors of one story onto selected levels (ETABS Similar Stories)', cat: 'storyReplicate' },
   dsopt: { label: 'Auto-Size', glyph: '⤢', tip: 'Iterate frame section sizes until every DCR meets the target — re-analyzes each round', cat: 'designOptimize' },
   dsinfo: { label: 'Element Data', glyph: 'ⓘ', tip: 'Applied loads, analysis forces and design summary for the selected element (ETABS right-click data)', cat: 'elementInfo' },
+  defetabs: { label: 'Export ETABS (dev)', glyph: '⇪', tip: 'DEV ONLY: write an OAPI script that rebuilds this model in ETABS (elements, sections, materials, loads, combos) + this engine\'s results for diffing', cat: 'exportEtabs' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
   asgarea: { label: 'Area Sections', glyph: '⇢', tip: 'Assign a defined area section to the selected walls/slabs/roofs', cat: 'assignAreas' },
@@ -5296,7 +5297,9 @@ class App {
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
               const isRCInfo = defBtn.cat === 'elementInfo';
-              const mod = isRCInfo ? window.RCInfo : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
+              const isRCEtabs = defBtn.cat === 'exportEtabs';
+              const mod = isRCInfo ? window.RCInfo : isRCEtabs ? window.RCEtabs
+                : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
               if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
             });
           continue;
