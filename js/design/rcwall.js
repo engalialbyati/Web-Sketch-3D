@@ -419,13 +419,26 @@
           const zBotBand = sill + hOp;
           if (zBotBand >= zTopBand - 50) continue;           // no spandrel depth
           const cx = pt => (pt.x - a[0]) * ux * 1000 + (pt.y - a[1]) * uy * 1000; // mm along wall (nd in m)
+          // group cells into vertical strips by center-x (mesh-size
+          // independent): each jamb cuts through its nearest strip
+          const strips = new Map();
+          for (const s3 of cells) {
+            const cxr = Math.round(cx(nd[s3.n1]));
+            if (!strips.has(cxr)) strips.set(cxr, []);
+            strips.get(cxr).push(s3);
+          }
           const jambCuts = [];
           for (const xj of [x0, x1]) {
-            // cells in the jamb column (center within ±150 mm of the cut)
-            const col = cells.filter(s3 => {
-              const c = { x: cx(nd[s3.n1]), zLo: Math.min(nd[s3.n1].z, nd[s3.n4].z) * 1000,
-                zHi: Math.max(nd[s3.n1].z, nd[s3.n4].z) * 1000 };
-              return Math.abs(c.x - xj) <= 150 && c.zHi > zBotBand && c.zLo < zTopBand;
+            let nearest = null, bestD = Infinity;
+            for (const [cxr, col2] of strips) {
+              const dd = Math.abs(cxr - xj);
+              if (dd < bestD) { bestD = dd; nearest = col2; }
+            }
+            if (!nearest) continue;
+            const col = nearest.filter(s3 => {
+              const zLo = Math.min(nd[s3.n1].z, nd[s3.n4].z) * 1000;
+              const zHi = Math.max(nd[s3.n1].z, nd[s3.n4].z) * 1000;
+              return zHi > zBotBand && zLo < zTopBand;
             });
             if (!col.length) continue;
             let Vu = 0, Mnum = 0, hTot = 0;

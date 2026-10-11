@@ -211,7 +211,7 @@
       // analytical model entirely. Only SHEAR WALLS (the wall's Shear Wall
       // checkbox) mesh as shells and carry load.
       if (ent.type === 'wall' && !ent.params.shearWall) { skipped.walls++; continue; }
-      if (ent.type !== 'slab' && ent.type !== 'roof' && ent.type !== 'wall') continue;
+      if (ent.type !== 'slab' && ent.type !== 'floor' && ent.type !== 'roof' && ent.type !== 'wall') continue;
       const mat = matFor(ent);
       if (!mat) continue;
       const Ec = RD().matE(mat), nu = mat.iso ? mat.iso.u : 0.2;
@@ -229,6 +229,26 @@
         const dx = (e[0] - b[0]) / lenM, dy = (e[1] - b[1]) / lenM;
         const nx = Math.max(1, Math.round(lenM / size));
         const nz = Math.max(1, Math.round(hgt / size));
+        // hosted openings subtracted from the mesh (ETABS parity): door and
+        // window voids become holes — cells with their center inside an
+        // opening rectangle are not created, so the global stiffness knows
+        // about the hole and the base-cut integration reads the net section
+        const openings = [];
+        for (const o of app.bim.entities) {
+          if (o.type !== 'door' && o.type !== 'window') continue;
+          if (o.params.hostWallId !== ent.id) continue;
+          const dRaw = o.params.distanceFromStart;
+          const along = Array.isArray(dRaw) ? (+dRaw[0] || 0) : (+dRaw || 0);
+          const wOp = +o.params.width || 0, hOp = +o.params.height || 0;
+          if (!(wOp > 0) || !(hOp > 0)) continue;
+          openings.push({
+            x0: along - wOp / 2, x1: along + wOp / 2,
+            z0: Math.max(0, +o.params.sillHeight || 0),
+            z1: Math.min(hgt, (+o.params.sillHeight || 0) + hOp),
+          });
+        }
+        const inOpening = (cAlong, cZ) => openings.some(o =>
+          cAlong > o.x0 && cAlong < o.x1 && cZ > o.z0 && cZ < o.z1);
         const grid = (i, j) => nodeAt(b[0] + dx * lenM * i / nx, b[1] + dy * lenM * i / nx, b[2] + hgt * j / nz);
         const g00 = grid(0, 0);
         const row = [[g00]];
@@ -239,10 +259,16 @@
             rj.push(nodeAt(b[0] + dx * lenM * i2 / nx, b[1] + dy * lenM * i2 / nx, b[2] + hgt * j2 / nz));
           row.push(rj);
         }
+        let skippedOpenings = 0;
         for (let i2 = 0; i2 < nx; i2++)
-          for (let j2 = 0; j2 < nz; j2++)
+          for (let j2 = 0; j2 < nz; j2++) {
+            // cell center inside an opening rectangle → void
+            const cAlong = (i2 + 0.5) * lenM / nx, cZ = (j2 + 0.5) * hgt / nz;
+            if (openings.length && inOpening(cAlong, cZ)) { skippedOpenings++; continue; }
             shellEls.push({ n1: row[j2][i2], n2: row[j2][i2 + 1], n3: row[j2 + 1][i2 + 1], n4: row[j2 + 1][i2],
               E: Ec, nu, t, rho, entId: ent.id });
+          }
+        if (skippedOpenings) skipped.openingCells = (skipped.openingCells || 0) + skippedOpenings;
       } else {
         const zLvl = ent.params.baseLevel ? (app.levelManager.levels.find(l => l.id === ent.params.baseLevel)?.elevation ?? 0) : 0;
         const regions = ent.params.regions || [];
@@ -281,6 +307,22 @@
           const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
           const nx = Math.max(1, Math.round((x1 - x0) / size));
           const ny = Math.max(1, Math.round((y1 - y0) / size));
+          // grid lines = uniform spacing + FORCED lines through every existing
+          // node coordinate in the footprint (columns, walls, beams meshed
+          // first). Without this, a slab whose bbox isn't a multiple of the
+          // size (roof overhangs) misses its column lines entirely and the
+          // whole panel floats on clamped singular equations (ETABS meshes
+          // at object boundaries for the same reason).
+          const gx = new Set(), gy = new Set();
+          for (let i2 = 0; i2 <= nx; i2++) gx.add(+(x0 + (x1 - x0) * i2 / nx).toFixed(4));
+          for (let j2 = 0; j2 <= ny; j2++) gy.add(+(y0 + (y1 - y0) * j2 / ny).toFixed(4));
+          for (const pn of nodes) {
+            if (pn.x >= x0 - 0.01 && pn.x <= x1 + 0.01) gx.add(+pn.x.toFixed(4));
+            if (pn.y >= y0 - 0.01 && pn.y <= y1 + 0.01) gy.add(+pn.y.toFixed(4));
+          }
+          const gxA = [...gx].sort((a, b) => a - b);
+          const gyA = [...gy].sort((a, b) => a - b);
+          const NX = gxA.length - 1, NY = gyA.length - 1;
           const inside = (px, py) => {
             let c = false;
             for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
@@ -290,18 +332,18 @@
             return c;
           };
           const grid = [];
-          for (let i2 = 0; i2 <= nx; i2++) {
+          for (let i2 = 0; i2 <= NX; i2++) {
             grid.push([]);
-            for (let j2 = 0; j2 <= ny; j2++) {
-              const px = x0 + (x1 - x0) * i2 / nx, py = y0 + (y1 - y0) * j2 / ny;
+            for (let j2 = 0; j2 <= NY; j2++) {
+              const px = gxA[i2], py = gyA[j2];
               // keep nodes near/inside the polygon: center test for cells,
               // nodes kept if inside or on the bbox edge of a kept cell
-              grid[i2].push(inside(px, py) || i2 === 0 || j2 === 0 || i2 === nx || j2 === ny
+              grid[i2].push(inside(px, py) || i2 === 0 || j2 === 0 || i2 === NX || j2 === NY
                 ? shellNode(px, py, zLvl) : null);
             }
           }
-          for (let i2 = 0; i2 < nx; i2++)
-            for (let j2 = 0; j2 < ny; j2++) {
+          for (let i2 = 0; i2 < NX; i2++)
+            for (let j2 = 0; j2 < NY; j2++) {
               const a = grid[i2][j2], b2 = grid[i2 + 1][j2], c2 = grid[i2 + 1][j2 + 1], dd = grid[i2][j2 + 1];
               if (a == null || b2 == null || c2 == null || dd == null) continue;
               // drop panel thickness override: check if cell center is inside a drop panel
@@ -416,16 +458,36 @@
     }
 
     // drilling constraint: nodes used only by shells (not by any frame) have
-    // no rz stiffness from shell elements — pin rz to avoid a singular solve
+    // no stiffness for the rotation about the shell NORMAL — floors/roofs
+    // (normal z) need rz pinned, walls need rx (x-normal) or ry (y-normal).
+    // Pinning the wrong component leaves a free rotation with a clamped
+    // pivot: astronomic garbage displacements next to real results.
     const usedByFrame = new Set();
     for (const f of frames) { usedByFrame.add(f.ni); usedByFrame.add(f.nj); }
+    const shellNormal = new Map(); // node → normal axis: 1=rx, 2=ry, 3=rz
     const usedByShell = new Set();
-    for (const sh of shellEls) for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) usedByShell.add(ni);
-    for (const ni of usedByShell) {
-      if (usedByFrame.has(ni)) continue;
+    for (const sh of shellEls) {
+      const p1 = nodes[sh.n1], p3 = nodes[sh.n3];
+      const ex = { x: nodes[sh.n2].x - p1.x, y: nodes[sh.n2].y - p1.y, z: nodes[sh.n2].z - p1.z };
+      const ey = { x: nodes[sh.n4].x - p1.x, y: nodes[sh.n4].y - p1.y, z: nodes[sh.n4].z - p1.z };
+      const nx2 = Math.abs(ex.y * ey.z - ex.z * ey.y);
+      const ny2 = Math.abs(ex.z * ey.x - ex.x * ey.z);
+      const nz2 = Math.abs(ex.x * ey.y - ex.y * ey.x);
+      // fixed[] index of the rotation about the normal: rx=3, ry=4, rz=5
+      const axis = nx2 > ny2 && nx2 > nz2 ? 3 : ny2 >= nz2 ? 4 : 5;
+      for (const ni of [sh.n1, sh.n2, sh.n3, sh.n4]) {
+        usedByShell.add(ni);
+        const prev = shellNormal.get(ni);
+        // mixed connections (L-wall corner): keep the first, it only widens
+        // the constrained set conservatively
+        if (prev == null) shellNormal.set(ni, axis);
+      }
+    }
+    for (const [ni, axis] of shellNormal) {
+      if (usedByFrame.has(ni)) continue; // frames supply all 6 dofs
       const n = nodes[ni];
-      if (!n.fixed) n.fixed = [0, 0, 0, 0, 0, 1];
-      else n.fixed[5] = 1;
+      if (!n.fixed) n.fixed = [0, 0, 0, 0, 0, 0];
+      n.fixed[axis] = 1;
     }
 
     // supports: columns reaching the lowest base elevation

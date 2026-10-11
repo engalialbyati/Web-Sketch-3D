@@ -135,7 +135,7 @@
 
     // for each slab entity, get shell forces and design
     for (const ent of app.bim.entities) {
-      if (ent.type !== 'slab' && ent.type !== 'roof') continue;
+      if (ent.type !== 'slab' && ent.type !== 'floor' && ent.type !== 'roof') continue;
       const matName = ent.params.materialOverwrite || 'CONC25';
       const mat = d.materials.find(x => x.name === matName) || d.materials.find(x => x.type === 'concrete');
       if (!mat || !mat.conc) continue;

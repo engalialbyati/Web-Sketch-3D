@@ -1793,7 +1793,7 @@
   // element at once.
   // ==========================================================================
 
-  const STRUCTURAL_TYPES = ['wall', 'slab', 'roof', 'beam', 'column'];
+  const STRUCTURAL_TYPES = ['wall', 'slab', 'floor', 'roof', 'beam', 'column'];
 
   // classifying signature of a drawn element: { registry, designType, dims, base }
   // dims are MILLIMETRES (display) — sections store metres internally
@@ -1823,7 +1823,7 @@
       return { registry: 'areaSections', designType: 'wall', dims: { thickness: t / 1000 },
         type: 'wall', base: 'W' + t, label: 'W' + t };
     }
-    // slab / roof → area section, type 'slab' (ETABS models roofs as slabs)
+    // slab / floor / roof → area section, type 'slab' (ETABS models roofs as slabs)
     const t = mm(p.thickness);
     if (!t) return null;
     const roof = ent.type === 'roof';
