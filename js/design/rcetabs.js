@@ -26,8 +26,26 @@
       if (e.type === 'beam' && Array.isArray(e.params.baseline)) {
         const bl = e.params.baseline;
         const sec = d.frameSections.find(s => s.name === e.params.designSection);
+        // SNAP for ETABS parity: draw the member joint-to-joint (column
+        // base/top nodes) and carry the drawn offset as insertion offsets —
+        // otherwise ETABS would see two disconnected joints, same as the
+        // pre-fix analyzer
+        const cols = app.bim.entities.filter(x => x.type === 'column' && Array.isArray(x.params.base));
+        const snap = (pt) => {
+          let best = null, bd = 0.5;
+          for (const c of cols) {
+            const cb = c.params.base, hgt = +c.params.height || 3;
+            for (const cz of [cb[2], cb[2] + hgt]) {
+              if (Math.abs(cz - pt[2]) > 1e-4) continue;
+              const dd = Math.hypot(cb[0] - pt[0], cb[1] - pt[1]);
+              if (dd <= bd) { bd = dd; best = [cb[0], cb[1], cz]; }
+            }
+          }
+          return best || pt;
+        };
+        const sa = snap(bl[0]), sb = snap(bl[bl.length - 1]);
         out.members.push({ kind: 'beam', name: e.id, sec: sec ? sec.name : null,
-          a: bl[0], b: bl[bl.length - 1],
+          a: sa, b: sb,
           loads: (e.params.frameLoads || []).map(L => ({ pat: L.pattern, type: L.type, w: L.w || 0, P: L.P || 0, a: L.a || 0 })) });
       } else if (e.type === 'column' && Array.isArray(e.params.base)) {
         const p = e.params;
@@ -37,7 +55,8 @@
       }
     }
     // insertion points: cardinal row (0=Bottom,1=Center,2=Top) and column
-    // (0=Left,1=Center,2=Right) from the placement params the rebuilds use
+    // (0=Left,1=Center,2=Right) from the placement params the rebuilds use;
+    // ETABS SetInsertionPoint(Name, CP, Mirror2, Stiff, Off1, Off2, CSys)
     out.insertions = {};
     for (const e of app.bim.entities) {
       if (e.type !== 'beam' || !Array.isArray(e.params.baseline)) continue;
@@ -46,8 +65,21 @@
       const lat = +e.params.offsetLateral || 0;
       const row = j === 'Bottom' ? 0 : j === 'Center' ? 1 : 2;
       const col = (ll === 'left' || lat < 0) ? 0 : (ll === 'right' || lat > 0) ? 2 : 1;
-      if (row === 1 && col === 1) continue; // centered = centroid, no call needed
-      out.insertions[e.id] = { row, col };
+      // drawn-offset snap → ETABS local 2-axis offset (transverse horizontal)
+      const cols = app.bim.entities.filter(x => x.type === 'column' && Array.isArray(x.params.base));
+      const p0 = e.params.baseline[0];
+      let off2 = 0;
+      for (const c of cols) {
+        const cb = c.params.base;
+        if (Math.abs(cb[2] + (+c.params.height || 3) - p0[2]) > 1e-4) continue;
+        if (Math.hypot(cb[0] - p0[0], cb[1] - p0[1]) <= 0.5) {
+          off2 = (ll === 'left' ? -(+e.params.webWidth || 0.3) / 2
+            : ll === 'right' ? (+e.params.webWidth || 0.3) / 2 : 0) + lat;
+          break;
+        }
+      }
+      if (row === 1 && col === 1 && Math.abs(off2) < 1e-9) continue;
+      out.insertions[e.id] = { row, col, off2 };
     }
     for (const p of d.loadPatterns) out.patterns.push({ name: p.name, type: p.type });
     for (const c of d.combos) out.combos.push({ name: c.name, cases: c.cases });
@@ -141,12 +173,14 @@ def main():
         names[mb['name']] = nm
         if mb['kind'] == 'beam':
             # ETABS insertion point from the app's placement params —
-            # cardinal 1-9 (bottom-left .. top-right), StiffTransform = True
+            # cardinal 1-9 (bottom-left .. top-right), StiffTransform = True,
+            # plus the drawn-offset as a local 2-axis offset (meters)
             info = INSERTIONS.get(mb['name'])
             if info:
                 cp = info['row'] * 3 + info['col'] + 1
                 try:
-                    sap.FrameObj.SetInsertionPoint(nm, cp, False, True, 0, 0, 'Global')
+                    sap.FrameObj.SetInsertionPoint(nm, cp, False, True,
+                                                   0, info.get('off2', 0), 'Global')
                 except Exception as e:
                     print('insertion point skipped', mb['name'], e)
     print('members added:', len(names))

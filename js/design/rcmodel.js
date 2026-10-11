@@ -58,6 +58,31 @@
       return idx;
     };
 
+    // ---- reserve column nodes FIRST so offset beams can snap to them.
+    // ETABS body-constraint semantics: a beam drawn with its line offset
+    // from the column (insertion-point drawing) still connects to the joint
+    // through a RIGID link — the offset becomes an insertion arm.
+    const SNAP_TOL = 0.5;  // meters, plan
+    const snapArm = new Map(); // member ent id → [[sx,sy,sz], [..]] per end (m)
+    const colNodes = new Set(); // node indices reserved for columns
+    for (const ent of ents) {
+      if (ent.type !== 'column' || !Array.isArray(ent.params.base)) continue;
+      const [x, y, z] = ent.params.base;
+      const hgt = +ent.params.height || 3;
+      colNodes.add(nodeAt(x, y, z));
+      colNodes.add(nodeAt(x, y, z + hgt));
+    }
+    const snapToColumnNode = (px, py, pz) => {
+      let best = null, bestD = SNAP_TOL;
+      for (const ni of colNodes) {
+        const n = nodes[ni];
+        if (Math.abs(n.z - pz) > 1e-4) continue;
+        const dd = Math.hypot(n.x - px, n.y - py);
+        if (dd <= bestD) { bestD = dd; best = n; }
+      }
+      return best; // null = no column node within tolerance
+    };
+
     for (const ent of ents) {
       if (ent.type !== 'beam' && ent.type !== 'column') { skipped.walls++; continue; }
       const sec = sectionOf(app, ent);
@@ -76,8 +101,19 @@
       let ni, nj;
       if (ent.type === 'beam' && Array.isArray(ent.params.baseline) && ent.params.baseline.length >= 2) {
         const [p1, p2] = ent.params.baseline;
-        ni = nodeAt(p1[0], p1[1], p1[2]);
-        nj = nodeAt(p2[0], p2[1], p2[2]);
+        // snap to a reserved column node when the drawn line is offset:
+        // the ELEMENT connects at the joint; the offset becomes a rigid
+        // insertion arm so the physical (eccentric) section still governs
+        const snapArmFor = (pt) => {
+          const n = snapToColumnNode(pt[0], pt[1], pt[2]);
+          if (!n) return { idx: nodeAt(pt[0], pt[1], pt[2]), arm: [0, 0, 0] };
+          return { idx: nodes.indexOf(n), arm: [(pt[0] - n.x) * 1000, (pt[1] - n.y) * 1000, (pt[2] - n.z) * 1000] };
+        };
+        const eI = snapArmFor(p1);
+        const eJ = snapArmFor(p2);
+        ni = eI.idx; nj = eJ.idx;
+        if (eI.arm[0] || eI.arm[1] || eI.arm[2] || eJ.arm[0] || eJ.arm[1] || eJ.arm[2])
+          snapArm.set(ent.id, [eI.arm, eJ.arm]);
       } else if (ent.type === 'column' && Array.isArray(ent.params.base)) {
         const [x, y, z] = ent.params.base;
         const hgt = +ent.params.height || 3;
@@ -321,13 +357,15 @@
           const ny = ((m.ent.params.baseline[1][0] - m.ent.params.baseline[0][0]) / L2);
           ins = [nx * lat * 1000, ny * lat * 1000, dz * 1000];
         }
-        // total rigid arm per end = connectivity offset (×RZF) + insertion;
-        // both in GLOBAL mm, arm points from the node to the member axis
+        // total rigid arm per end = connectivity offset (×RZF) + insertion
+        // + drawn-offset snap (baseline → column joint); all GLOBAL mm,
+        // arm points from the node to the member axis
+        const sA = snapArm.get(m.ent.id) || [[0, 0, 0], [0, 0, 0]];
         const fx = (b.x - a.x) / L, fy2 = (b.y - a.y) / L, fz = (b.z - a.z) / L;
-        frames[m.idx].armI = [fx * frames[m.idx].eoI + ins[0],
-          fy2 * frames[m.idx].eoI + ins[1], fz * frames[m.idx].eoI + ins[2]];
-        frames[m.idx].armJ = [-fx * frames[m.idx].eoJ + ins[0],
-          -fy2 * frames[m.idx].eoJ + ins[1], -fz * frames[m.idx].eoJ + ins[2]];
+        frames[m.idx].armI = [fx * frames[m.idx].eoI + ins[0] + sA[0][0],
+          fy2 * frames[m.idx].eoI + ins[1] + sA[0][1], fz * frames[m.idx].eoI + ins[2] + sA[0][2]];
+        frames[m.idx].armJ = [-fx * frames[m.idx].eoJ + ins[0] + sA[1][0],
+          -fy2 * frames[m.idx].eoJ + ins[1] + sA[1][1], -fz * frames[m.idx].eoJ + ins[2] + sA[1][2]];
       }
     }
 
