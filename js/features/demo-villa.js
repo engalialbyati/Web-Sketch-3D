@@ -128,7 +128,7 @@
 
     // ------------------------------------------------------ plot + road
     stage(() => {
-      reg('floor', { baseLevel: 'lvl_1', thickness: 0.06, fixed: true,
+      reg('slab', { baseLevel: 'lvl_1', thickness: 0.06, fixed: true,
         regions: [{ outer: [[FX0, FY0, 0.02], [FX0 + PW, FY0, 0.02], [FX0 + PW, FY0 + PD, 0.02], [FX0, FY0 + PD, 0.02]], holes: [] }] },
         () => { const f = m.addFaceFromRings([G.v(FX0, FY0, 0.02), G.v(FX0 + PW, FY0, 0.02), G.v(FX0 + PW, FY0 + PD, 0.02), G.v(FX0, FY0 + PD, 0.02)]); m.pushPull(f, -0.06); },
         () => 'top');

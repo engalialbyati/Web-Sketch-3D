@@ -268,7 +268,7 @@
               return [+(q.x + dx / l * 0.003).toFixed(6), +(q.y + dy / l * 0.003).toFixed(6), z];
             });
           });
-          reg('floor', { regions: [{ outer, holes }], thickness: SLAB_T, baseLevel: lvl(s + 1) },
+          reg('slab', { regions: [{ outer, holes }], thickness: SLAB_T, baseLevel: lvl(s + 1) },
             () => {
               const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
                 holes.map(hg => hg.map(q => G.v(...q))));

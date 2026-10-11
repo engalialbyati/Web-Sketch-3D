@@ -4089,6 +4089,14 @@ class Model {
     const known = new Set(this.layers.map(l => l.id));
     for (const ent of this.bimEntities)
       if (!known.has(ent.layerId)) ent.layerId = '0';
+    // TYPE MIGRATION (floor → slab): 'floor' was a parallel BIM type for
+    // horizontal plates; design/analysis treats every horizontal plate as a
+    // SLAB (ETABS models roofs as slabs too). Legacy models migrate once on
+    // load — new creation paths register 'slab' directly.
+    let migFloor = 0;
+    for (const ent of this.bimEntities)
+      if (ent.type === 'floor') { ent.type = 'slab'; migFloor++; }
+    if (migFloor && window.console) console.info('[migration] floor → slab:', migFloor, 'element(s)');
     __eid = mx + 1;
     this.currentGid = 0;
     this.invalidateVertexHash();

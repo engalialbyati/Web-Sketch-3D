@@ -1037,7 +1037,7 @@ class ConvertTool extends Tool {
           : Math.abs(c.z - (zTop - th)) < 1e-6 ? 'bottom' : 'edge';
       }
       const newEdges = [...m.edges.keys()].filter(id => !edgesBefore.has(id));
-      const ent = app.bim.create(mode, {
+      const ent = app.bim.create(mode === 'floor' ? 'slab' : mode, {
         baseLevel: app.bimOptions.baseLevel, levelId: app.bimOptions.baseLevel,
         thickness: th, source: 'convert',
         // the custom shape itself is the regeneration source

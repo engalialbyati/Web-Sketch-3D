@@ -1165,7 +1165,7 @@
           regions: [{ outer, holes: [] }], thickness: fmt(T), baseLevel: lvl,
         };
         try {
-          reg('floor', p, () => {
+          reg('slab', p, () => {
             const f = m.addFaceFromRings(outer.map(q => G.v(...q)));
             if (!f) throw new Error('slab face degenerate');
             if (!m.pushPull(f, -T)) throw new Error('slab sweep failed');

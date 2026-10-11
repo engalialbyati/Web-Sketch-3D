@@ -105,7 +105,7 @@
           });
 
         // SOG apron
-        reg('floor', { thickness: 0.12, baseLevel: 'l0', regions: [{ outer: [
+        reg('slab', { thickness: 0.12, baseLevel: 'l0', regions: [{ outer: [
           [13, -3.2, 0.12], [17, -3.2, 0.12], [17, -0.8, 0.12], [13, -0.8, 0.12]], holes: [] }] },
           () => {
             const f = m.addFaceFromRings([
@@ -219,7 +219,7 @@
             });
           })];
           if (circle) holes.push(circle);
-          reg('floor', { thickness: 0.15, baseLevel: lvlUp, regions: [{ outer, holes }] },
+          reg('slab', { thickness: 0.15, baseLevel: lvlUp, regions: [{ outer, holes }] },
             () => {
               const f = m.addFaceFromRings(outer.map(q => G.v(...q)),
                 holes.map(hg => hg.map(q => G.v(...q))));
