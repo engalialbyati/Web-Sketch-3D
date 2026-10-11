@@ -305,8 +305,10 @@
         [J.inv[2]*d[0][0] + J.inv[3]*d[1][0], J.inv[2]*d[0][1] + J.inv[3]*d[1][1], J.inv[2]*d[0][2] + J.inv[3]*d[1][2], J.inv[2]*d[0][3] + J.inv[3]*d[1][3]],
       ];
     };
-    // constitutive
-    const d0 = E / (1 - nu * nu);
+    // constitutive — membrane rigidity carries the thickness (plane stress:
+    // Et/(1−ν²)); without it walls/slabs are t-independent-soft in plane and
+    // diaphragm loads never reach the frames
+    const d0 = E * t / (1 - nu * nu);
     const Dm = [[d0, d0*nu, 0], [d0*nu, d0, 0], [0, 0, d0*(1-nu)/2]];                 // membrane
     const Db = [[d0*t*t*t/12, d0*nu*t*t*t/12, 0],
                 [d0*nu*t*t*t/12, d0*t*t*t/12, 0],
@@ -385,6 +387,11 @@
   // 6-dof global set — shared by assembleAndSolve and computeReactions so
   // both assemble the IDENTICAL stiffness (reaction equilibrium depends on it)
   function scatterShellK(K, sh, nodes) {
+    scatterShellKInto((i, j, v) => { K[i][j] += v; }, sh, nodes);
+  }
+  // the shared scatter body — `add(i, j, v)` targets either the dense matrix
+  // or the skyline (the sparse solver accumulates into the lower triangle)
+  function scatterShellKInto(add, sh, nodes) {
     const p1 = nodes[sh.n1], p2 = nodes[sh.n2], p3 = nodes[sh.n3], p4 = nodes[sh.n4];
     if (!p4) return;
     const q = shellQ4(sh.E, sh.nu, sh.t, p1, p2, p3, p4);
@@ -415,7 +422,7 @@
         for (let k = 0; k < 20; k++) s2 += T[k][i] * Kt[k][j];
         const gn = Math.floor(i / 6), gd = i % 6;
         const gn2 = Math.floor(j / 6), gd2 = j % 6;
-        K[ns[gn] * 6 + gd][ns[gn2] * 6 + gd2] += s2;
+        add(ns[gn] * 6 + gd, ns[gn2] * 6 + gd2, s2);
       }
   }
 
@@ -442,7 +449,7 @@
     return T;
   }
 
-  function assembleAndSolve(nodesIn, frames, shells, loads, opts = {}) {
+  function assembleAndSolveDense(nodesIn, frames, shells, loads, opts = {}) {
     const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
     const nNodes = nodes.length;
     const nDof = nNodes * 6;
@@ -611,6 +618,294 @@
       return { el: fi.el, L: fi.L, forces: f, wl: fi.feq ? { wy: fi.wlWy, wz: fi.wlWz, L: fi.L } : null };
     });
     return { U, frames: results, nodes: nodesIn, nDof };
+  }
+
+  // ====================================================== skyline solver
+  // ETABS/SAP-style profile storage: per column j only the entries from the
+  // first structural nonzero down to the diagonal. Building stiffness is
+  // ~99.9% zeros — the dense solver paid n³ for all of them, the skyline
+  // pays n·(average column height)². Factorize ONCE, back-substitute per
+  // load pattern: the stiffness never changes between patterns.
+  function assembleAndSolveMulti(nodesIn, frames, shells, nodalLoadsArr, memberLoadsArr, opts = {}) {
+    const nodes = nodesIn.map(n => ({ x: n.x * 1000, y: n.y * 1000, z: n.z * 1000, fixed: n.fixed }));
+    const nNodes = nodes.length;
+    const nDof = nNodes * 6;
+    const nPat = Math.max(1, nodalLoadsArr.length);
+
+    // ---- frame element data (identical math to the dense path)
+    const frameInfo = [];
+    frames.forEach((el, elIdx) => {
+      const a = nodes[el.ni], b = nodes[el.nj];
+      const L = G.dist(a, b);
+      if (L < 1e-6) return;
+      const aI = el.eoI || 0, aJ = el.eoJ || 0;
+      const gI = el.armI || null, gJ = el.armJ || null;
+      let Kl, Lf = L, dIl = null, dJl = null;
+      if (aI > 0.5 || aJ > 0.5 || gI || gJ) {
+        Lf = (aI > 0.5 || aJ > 0.5) ? Math.max(L - aI - aJ, L * 0.1) : L;
+        const Kf = frameK(el.E, el.A, el.Iy, el.Iz, el.J, Lf, el.G, el.As2, el.As3);
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const KgF = frameKg(opts.geo[elIdx], Lf);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kf[i][j] += KgF[i][j];
+        }
+        const axx = (b.x - a.x) / L, axy = (b.y - a.y) / L, axz = (b.z - a.z) / L;
+        const dIg = gI ? [gI[0], gI[1], gI[2]] : [0, 0, 0];
+        const dJg = gJ ? [gJ[0], gJ[1], gJ[2]] : [0, 0, 0];
+        if (aI > 0.5) { dIg[0] += axx * aI; dIg[1] += axy * aI; dIg[2] += axz * aI; }
+        if (aJ > 0.5) { dJg[0] -= axx * aJ; dJg[1] -= axy * aJ; dJg[2] -= axz * aJ; }
+        const R0 = rotationMatrix(a, b);
+        const toL = v => [R0[0][0] * v[0] + R0[0][1] * v[1] + R0[0][2] * v[2],
+          R0[1][0] * v[0] + R0[1][1] * v[1] + R0[1][2] * v[2],
+          R0[2][0] * v[0] + R0[2][1] * v[1] + R0[2][2] * v[2]];
+        dIl = toL(dIg); dJl = toL(dJg);
+        const Tr = rigidEndT(dIl, dJl);
+        Kl = [];
+        for (let i = 0; i < 12; i++) Kl.push(new Float64Array(12));
+        for (let i = 0; i < 12; i++)
+          for (let j = 0; j < 12; j++) {
+            let s = 0;
+            for (let k = 0; k < 12; k++)
+              for (let k2 = 0; k2 < 12; k2++) s += Tr[k][i] * Kf[k][k2] * Tr[k2][j];
+            Kl[i][j] = s;
+          }
+      } else {
+        Kl = frameK(el.E, el.A, el.Iy, el.Iz, el.J, L, el.G, el.As2, el.As3);
+        if (opts.geo && opts.geo[elIdx] != null && opts.geo[elIdx] !== 0) {
+          const Kg = frameKg(opts.geo[elIdx], L);
+          for (let i = 0; i < 12; i++)
+            for (let j = 0; j < 12; j++) Kl[i][j] += Kg[i][j];
+        }
+      }
+      const R = rotationMatrix(a, b);
+      const Kg = transformFrame(Kl, R);   // GLOBAL-frame 12×12 for scattering
+      const dofs = [];
+      for (const ni of [el.ni, el.nj])
+        for (let d = 0; d < 6; d++) dofs.push(ni * 6 + d);
+      // per-pattern equivalent end loads (UDL on the flexible span + points,
+      // rigid-arm map, release condensation)
+      const KlPre = Kl;
+      if (el.releases && el.releases.length) {
+        Kl = applyReleases(Kl, null, el.releases).K;
+      }
+      const feqs = new Array(nPat).fill(null);
+      for (let p = 0; p < nPat; p++) {
+        const ml = (memberLoadsArr && memberLoadsArr[p] && memberLoadsArr[p][elIdx]) || null;
+        if (!ml) continue;
+        let feq0;
+        if (dIl) {
+          const pts = (ml.points || []).map(pt => ({ P: pt.P, a: pt.a - aI }))
+            .filter(pt => pt.a > 0 && pt.a < Lf);
+          feq0 = consistentUDL(ml.wy || 0, ml.wz || 0, Lf, pts);
+          const Tr = rigidEndT(dIl, dJl);
+          const feq2 = new Float64Array(12);
+          for (let i = 0; i < 12; i++)
+            for (let k = 0; k < 12; k++) feq2[i] += Tr[k][i] * feq0[k];
+          feq0 = feq2;
+        } else {
+          feq0 = consistentUDL(ml.wy || 0, ml.wz || 0, L, ml.points);
+        }
+        if (el.releases && el.releases.length)
+          feq0 = applyReleases(KlPre, feq0, el.releases).feq;
+        feqs[p] = feq0;
+      }
+      frameInfo.push({ el, dofs, Kl, Kg, R, L, feqs,
+        wlWy: 0, wlWz: 0, hasWl: feqs.some(Boolean) });
+    });
+
+    // ---- symbolic skyline: column heights from the element connectivity
+    const height = new Int32Array(nDof);
+    const couple = (i, j) => {
+      if (i === j) return;
+      if (i < j) { const dd = j - i; if (dd > height[j]) height[j] = dd; }
+      else { const dd = i - j; if (dd > height[i]) height[i] = dd; }
+    };
+    for (const fi of frameInfo)
+      for (let i = 0; i < 12; i++)
+        for (let j = 0; j < 12; j++) couple(fi.dofs[i], fi.dofs[j]);
+    for (const sh of shells) {
+      const ns = [sh.n1, sh.n2, sh.n3, sh.n4];
+      for (let a = 0; a < 4; a++)
+        for (let b = 0; b < 4; b++)
+          for (let da = 0; da < 6; da++)
+            for (let db = 0; db < 6; db++) couple(ns[a] * 6 + da, ns[b] * 6 + db);
+    }
+    for (const rl of opts.rigidLinks || [])
+      for (const dof of rl.dofs) couple(rl.master * 6 + dof, rl.slave * 6 + dof);
+    const xdiag = new Int32Array(nDof);
+    let tot = 0;
+    for (let j = 0; j < nDof; j++) { xdiag[j] = tot; tot += height[j]; }
+    const val = new Float64Array(tot);   // strict lower triangle, column-major
+    const diag = new Float64Array(nDof);
+
+    // ---- numeric assembly (lower triangle only; the (i<j) mirror of each
+    // symmetric pair is skipped — its (j>i) iteration adds it once)
+    const skyAdd = (i, j, v) => {
+      if (i === j) { diag[i] += v; return; }
+      if (i < j) return;
+      const c = i - j;
+      if (c <= height[i]) val[xdiag[i] + j - (i - height[i])] += v;
+    };
+    for (const fi of frameInfo)
+      for (let i = 0; i < 12; i++)
+        for (let j = 0; j < 12; j++)
+          skyAdd(fi.dofs[i], fi.dofs[j], fi.Kg[i][j]);
+    for (const sh of shells) scatterShellKInto(skyAdd, sh, nodes);
+    for (const sp of opts.nodalSprings || [])
+      for (let d = 0; d < 6; d++) {
+        if (!sp.k || !sp.k[d]) continue;
+        diag[sp.ni * 6 + d] += sp.k[d];
+      }
+    for (const rl of opts.rigidLinks || []) {
+      let kref = 0;
+      for (let i = 0; i < nDof; i++) kref = Math.max(kref, diag[i]);
+      const kp = 1e8 * Math.max(kref, 1);
+      for (const dof of rl.dofs) {
+        const m = rl.master * 6 + dof, s2 = rl.slave * 6 + dof;
+        diag[m] += kp; diag[s2] += kp;
+        skyAdd(m, s2, -kp);
+      }
+    }
+
+    // ---- snapshot the unfactored matrix (reactions read the true K)
+    const val0 = Float64Array.from(val);
+    const diag0 = Float64Array.from(diag);
+
+    // ---- boundary conditions: wipe fixed rows/cols inside the skyline
+    const F = nodalLoadsArr.length ? nodalLoadsArr : [new Map()];
+    const fvecs = F.map(lv => {
+      const f = new Float64Array(nDof);
+      for (const [ni, vals] of lv)
+        for (let d = 0; d < 6; d++) f[ni * 6 + d] += (vals[d] || 0);
+      return f;
+    });
+    for (const fi of frameInfo)
+      for (let p = 0; p < nPat; p++) {
+        if (!fi.feqs[p]) continue;
+        const f = fvecs[p];
+        for (let b = 0; b < 4; b++)
+          for (let i = 0; i < 3; i++) {
+            let gv = 0;
+            for (let j = 0; j < 3; j++) gv += fi.R[j][i] * fi.feqs[p][b * 3 + j];
+            f[fi.dofs[b * 3 + i]] += gv;
+          }
+      }
+    for (let ni2 = 0; ni2 < nNodes; ni2++) {
+      const fix = nodes[ni2].fixed;
+      if (!fix) continue;
+      for (let d = 0; d < 6; d++) {
+        if (!fix[d]) continue;
+        const dof = ni2 * 6 + d;
+        for (let ii = 0; ii < height[dof]; ii++) val[xdiag[dof] + ii] = 0;
+        for (let c = dof + 1; c < nDof; c++) {
+          const off = c - dof;
+          if (off <= height[c]) val[xdiag[c] + dof - (c - height[c])] = 0;
+        }
+        diag[dof] = 1;
+        for (const f of fvecs) f[dof] = 0;
+      }
+    }
+
+    // ---- factor UᵀDU in place (Crout on the upper-triangle skyline:
+    // column j stores rows top..j; U has unit diagonal, D the pivots)
+    for (let j = 0; j < nDof; j++) {
+      const h = height[j], top = j - h;
+      for (let ii = 0; ii < h; ii++) {
+        const i = top + ii;             // i < j
+        let s = val[xdiag[j] + ii];
+        const hi = height[i], topi = i - hi;
+        const k0 = topi > top ? topi : top;
+        for (let k = k0; k < i; k++)
+          s -= val[xdiag[i] + k - topi] * diag[k] * val[xdiag[j] + k - top];
+        val[xdiag[j] + ii] = s / diag[i];
+      }
+      let d = diag[j];
+      for (let k = top; k < j; k++) {
+        const uk = val[xdiag[j] + k - top];
+        d -= uk * uk * diag[k];
+      }
+      if (Math.abs(d) < 1e-14) d = 1e-14; // near-singular guard (dense parity)
+      diag[j] = d;
+    }
+    // solve Uᵀ D U x = f: forward gather (Uᵀy=f, column i), diagonal,
+    // backward scatter (Ux=z, column i)
+    const skySolve = f => {
+      const y = new Float64Array(nDof);
+      for (let i = 0; i < nDof; i++) {
+        let s = f[i];
+        const top = i - height[i];
+        for (let ii = 0; ii < height[i]; ii++)
+          s -= val[xdiag[i] + ii] * y[top + ii];
+        y[i] = s;
+      }
+      const x = new Float64Array(nDof);
+      const pend = new Float64Array(nDof);
+      for (let i = nDof - 1; i >= 0; i--) {
+        x[i] = y[i] / diag[i] - pend[i];
+        const xi = x[i];
+        if (xi !== 0) {
+          const top = i - height[i];
+          for (let ii = 0; ii < height[i]; ii++)
+            pend[top + ii] += val[xdiag[i] + ii] * xi;
+        }
+      }
+      return x;
+    };
+
+    // ---- per-pattern solve + member end forces + reactions
+    const Uarr = [], framesArr = [], reactionsArr = [];
+    for (let p = 0; p < fvecs.length; p++) {
+      const U = skySolve(fvecs[p]);
+      Uarr.push(U);
+      framesArr.push(frameInfo.map(fi => {
+        const ug = new Float64Array(12);
+        for (let i = 0; i < 12; i++) ug[i] = U[fi.dofs[i]] || 0;
+        const ud = new Float64Array(12);
+        for (let b = 0; b < 4; b++)
+          for (let i = 0; i < 3; i++) {
+            let s = 0;
+            for (let j = 0; j < 3; j++) s += fi.R[i][j] * ug[b * 3 + j];
+            ud[b * 3 + i] = s;
+          }
+        const f = new Float64Array(12);
+        for (let i = 0; i < 12; i++)
+          for (let j = 0; j < 12; j++)
+            f[i] += fi.Kl[i][j] * ud[j];
+        const feq = fi.feqs[p];
+        if (feq) for (let i = 0; i < 12; i++) f[i] -= feq[i];
+        return { el: fi.el, L: fi.L, forces: f, wl: fi.hasWl ? { wy: fi.wlWy, wz: fi.wlWz, L: fi.L } : null };
+      }));
+      // reactions: R = K0·u − f over the fixed dofs (row gather from the skyline)
+      const f = fvecs[p];
+      const out = [];
+      for (let ni2 = 0; ni2 < nNodes; ni2++) {
+        if (!nodes[ni2].fixed) continue;
+        const R = [0, 0, 0, 0, 0, 0];
+        for (let d = 0; d < 6; d++) {
+          if (!nodes[ni2].fixed[d]) continue;
+          const dof = ni2 * 6 + d;
+          let s = diag0[dof] * (U[dof] || 0);
+          const h = height[dof], top = dof - h;
+          for (let ii = 0; ii < h; ii++) s += val0[xdiag[dof] + ii] * (U[top + ii] || 0);
+          for (let c = dof + 1; c < nDof; c++) {
+            const off = c - dof;
+            if (off <= height[c]) s += val0[xdiag[c] + dof - (c - height[c])] * (U[c] || 0);
+          }
+          R[d] = s - f[dof];
+        }
+        out.push({ node: ni2, R });
+      }
+      reactionsArr.push(out);
+    }
+    return { U: Uarr, frames: framesArr, reactions: reactionsArr, nodes: nodesIn, nDof };
+  }
+
+  // legacy-compatible single-pattern entry (same shape as the dense original)
+  function assembleAndSolve(nodesIn, frames, shells, loads, opts = {}) {
+    const ml = opts.memberLoads || null;
+    const m = assembleAndSolveMulti(nodesIn, frames, shells, loads,
+      loads.map(() => ml), opts);
+    return { U: m.U, frames: m.frames[0], nodes: nodesIn, nDof: m.nDof };
   }
 
   // Reactions: for fixed dofs, R = K·u - f (computed from the ORIGINAL K,
@@ -1406,7 +1701,8 @@
       const d0 = sh.E / (1 - sh.nu * sh.nu);
       const t3 = sh.t ** 3;
       const Db = [[d0*t3/12, d0*sh.nu*t3/12, 0], [d0*sh.nu*t3/12, d0*t3/12, 0], [0, 0, d0*(1-sh.nu)*t3/24]];
-      const Dm = [[d0, d0*sh.nu, 0], [d0*sh.nu, d0, 0], [0, 0, d0*(1-sh.nu)/2]];
+      // recovery Dm must match the stiffness's membrane rigidity (Et/(1−ν²))
+      const Dm = [[d0*sh.t, d0*sh.nu*sh.t, 0], [d0*sh.nu*sh.t, d0*sh.t, 0], [0, 0, d0*(1-sh.nu)*sh.t/2]];
       const dnC = dNs(0, 0);
       // center shape values (SRI 1-point, same as the stiffness's shear part)
       const nC = shape(0, 0).N;
@@ -1439,5 +1735,5 @@
     });
   }
 
-  window.FEA = { shellForces, shellQ4, assembleAndSolve, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
+  window.FEA = { shellForces, shellQ4, scatterShellK, assembleAndSolve, assembleAndSolveMulti, assembleAndSolveDense, computeReactions, frameK, frameKg, consistentUDL, applyReleases, rotationMatrix, transformFrame, shellK, solveLDLT, lumpedMass, modalAnalysis, ritzModalAnalysis };
 })();

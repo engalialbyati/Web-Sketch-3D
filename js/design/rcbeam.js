@@ -357,7 +357,15 @@
         },
       });
     }
-    return { results, comboName, rebarDb };
+    // auto-meshed beams arrive as several segment rows per entity — the
+    // entity gets ONE record: its governing segment (worst demand)
+    const env = new Map();
+    const score = r => (r.MuTop + r.MuBot) / 1e6 + r.Vu / 1e3;
+    for (const rec of results) {
+      const prev = env.get(rec.id);
+      if (!prev || score(rec) > score(prev)) env.set(rec.id, rec);
+    }
+    return { results: [...env.values()], comboName, rebarDb };
   }
 
   // sectionOf/materialOf are in rcmodel.js — re-export

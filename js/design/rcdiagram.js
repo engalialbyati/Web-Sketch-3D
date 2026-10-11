@@ -71,7 +71,7 @@
       for (const pat of R.patterns) {
         if (pat.name !== comboName) continue;
         for (const m of pat.members) {
-          if (m.stations) members.push({ idx: 0, id: m.id, stations: m.stations });
+          if (m.stations) members.push({ idx: 0, id: m.id, x0: m.x0 || 0, stations: m.stations });
         }
       }
     }
@@ -126,7 +126,7 @@
       const nSt = stations.length;
       for (let si = 0; si < nSt; si++) {
         const st = stations[si];
-        const t = st.x / len; // station position as fraction of length
+        const t = (md.x0 + st.x) / len; // station position as fraction of length
         const cx = ax + dx * t, cy = ay + dy * t, cz = az + dz * t;
         const val = mode === 'M3' ? st.M : st.V;
         const offset = (val / maxVal) * scaleLen;
@@ -151,7 +151,7 @@
       const fillGeo = [];
       for (let si = 0; si < nSt; si++) {
         const st = stations[si];
-        const t = st.x / len;
+        const t = (md.x0 + st.x) / len;
         const cx = ax + dx * t, cy = ay + dy * t, cz = az + dz * t;
         const val = mode === 'M3' ? st.M : st.V;
         const offset = (val / maxVal) * scaleLen;

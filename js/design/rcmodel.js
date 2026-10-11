@@ -73,11 +73,15 @@
       colNodes.add(nodeAt(x, y, z + hgt));
     }
     const snapToColumnNode = (px, py, pz) => {
+      // 3-D snap: plan offset AND story-level z mismatches (a beam picked at
+      // mid-depth, or slabs' level-plane nodes) still reach the joint — the
+      // offset becomes the insertion arm, exactly like ETABS connectivity.
+      // Pure-plan snapping left beams that hang below the level plane
+      // disconnected from their columns (0.3 m gaps in demo5-style models).
       let best = null, bestD = SNAP_TOL;
       for (const ni of colNodes) {
         const n = nodes[ni];
-        if (Math.abs(n.z - pz) > 1e-4) continue;
-        const dd = Math.hypot(n.x - px, n.y - py);
+        const dd = Math.hypot(n.x - px, n.y - py, n.z - pz);
         if (dd <= bestD) { bestD = dd; best = n; }
       }
       return best; // null = no column node within tolerance
@@ -447,6 +451,71 @@
       n.fixed = n.fixed ? n.fixed.map((v, k) => (k === 5 ? v : v || 1)) : [1, 1, 1, 0, 1, 1];
     }
 
+    // ---- ETABS auto-mesh: split beams at every shell-mesh node on their
+    // axis. The slab mesh shares the node dedupe map, so each split node IS
+    // a slab joint — slab tributary loads then flow into the beams through
+    // real connected joints instead of bypassing them (the wall/slab diaphragm
+    // action ETABS gets from its automatic frame meshing).
+    {
+      const TOL = 0.01;   // 1 cm — mesh nodes sit exactly on the beam axis
+      const frames2 = [], map2 = [];
+      for (let fi = 0; fi < frames.length; fi++) {
+        const el = frames[fi], m = map[fi];
+        const beamEnt = m && m.ent && m.ent.type === 'beam' && !el.dummy;
+        let cuts = null, Lm = 0;
+        if (beamEnt) {
+          const a = nodes[el.ni], b = nodes[el.nj];
+          Lm = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+          if (Lm > 1e-6) {
+            const ux = (b.x - a.x) / Lm, uy = (b.y - a.y) / Lm, uz = (b.z - a.z) / Lm;
+            const raw = [];
+            for (let ni = 0; ni < nodes.length; ni++) {
+              const p = nodes[ni];
+              const t = (p.x - a.x) * ux + (p.y - a.y) * uy + (p.z - a.z) * uz;
+              if (t <= 0.05 || t >= Lm - 0.05) continue;    // skip the end joints
+              const dx = p.x - a.x - t * ux, dy = p.y - a.y - t * uy, dz = p.z - a.z - t * uz;
+              if (Math.hypot(dx, dy, dz) > TOL) continue;
+              raw.push({ t, ni });
+            }
+            raw.sort((p, q) => p.t - q.t);
+            cuts = [];
+            for (const s of raw)
+              if (!cuts.length || s.t - cuts[cuts.length - 1].t > 0.05) cuts.push(s);
+          }
+        }
+        if (!cuts || !cuts.length) {
+          frames2.push(el);
+          map2.push({ ...m, idx: frames2.length - 1 });  // re-stamp: earlier splits shift indices
+          continue;
+        }
+        // segments: end offsets/arms/releases stay on their outer segments;
+        // interior joints are continuity points (no offsets, no releases)
+        const pts = [...cuts.map(s => ({ ni: s.ni, t: s.t })), { ni: el.nj, t: null }];
+        let prev = { ni: el.ni, t: 0 };
+        for (let sgi = 0; sgi < pts.length; sgi++) {
+          const Q = pts[sgi];
+          const segLen = (Q.t ?? Lm) - prev.t;
+          const first = sgi === 0, last = sgi === pts.length - 1;
+          const seg = { ...el, ni: prev.ni, nj: Q.ni };
+          if (!first) { delete seg.eoI; delete seg.armI; }
+          if (!last) { delete seg.eoJ; delete seg.armJ; }
+          if (seg.releases && seg.releases.length) {
+            const keep = [];
+            if (first && seg.releases.includes(5)) keep.push(5);
+            if (last && seg.releases.includes(11)) keep.push(11);
+            seg.releases = keep.length ? keep : null;
+          }
+          frames2.push(seg);
+          map2.push({ ...m, idx: frames2.length - 1,
+            offI: first ? m.offI : 0, offJ: last ? m.offJ : 0,
+            lenFrac: segLen / Lm, a0: prev.t, x0: prev.t, segLen });
+          prev = Q;
+        }
+      }
+      frames.length = 0; for (const f of frames2) frames.push(f);
+      map.length = 0; for (const mm of map2) map.push(mm);
+    }
+
     return { nodes, frames, shells: shellEls, map, skipped, patternsData: d, mesh: dMesh };
   }
 
@@ -480,8 +549,10 @@
           const A = (RD().frameSectionProps(sec).A || 0) * 1e6;            // mm²
           const w = A * gamma * 1e-9 * pat.selfWtMult;                     // N/mm
           if (!(w > 0)) continue;
-          if (m.ent.type === 'beam') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - w };
-          else {
+          if (m.ent.type === 'beam') {
+            const frac = m.lenFrac != null ? m.lenFrac : 1; // split segments carry their share
+            ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - w * frac };
+          } else {
             const a = model.nodes[model.frames[i].ni], b = model.nodes[model.frames[i].nj];
             const lenMM = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) * 1000;
             const half = w * lenMM / 2; // N — line load × length in mm
@@ -540,17 +611,24 @@
         }
       }
 
-      // element loads assigned on members
+      // element loads assigned on members. Split beams (auto-mesh): each
+      // segment row carries its lenFrac of a UDL and its own slice of the
+      // point positions (a0 = the segment's offset along the entity)
       for (let i = 0; i < model.frames.length; i++) {
         const m = model.map.find(x => x.idx === i);
         if (!m) continue;
+        const frac = m.lenFrac != null ? m.lenFrac : 1, a0m = m.a0 || 0;
+        const segLenM = m.segLen != null ? m.segLen
+          : Math.hypot(model.nodes[model.frames[i].nj].x - model.nodes[model.frames[i].ni].x,
+            model.nodes[model.frames[i].nj].y - model.nodes[model.frames[i].ni].y,
+            model.nodes[model.frames[i].nj].z - model.nodes[model.frames[i].ni].z);
         const loadsOn = m.ent.params.frameLoads || [];
         for (const L of loadsOn) {
           if (L.pattern !== pat.name) continue;
           if (L.type === 'dist') {
             const wNmm = (L.w || 0); // kN/m ≡ N/mm
-            if (L.dir === 'gravity') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - wNmm };
-            else if (L.dir === 'up') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) + wNmm };
+            if (L.dir === 'gravity') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) - wNmm * frac };
+            else if (L.dir === 'up') ml[i] = { ...(ml[i] || {}), wy: (ml[i]?.wy || 0) + wNmm * frac };
             else {
               // lateral (global X/Y): nodal half-length each side
               const a = model.nodes[model.frames[i].ni], b = model.nodes[model.frames[i].nj];
@@ -562,9 +640,11 @@
             }
           } else if (L.type === 'point') {
             if (m.ent.type !== 'beam') continue; // point loads on beams only (v1)
+            const aLoc = (L.a || 0) - a0m;       // entity a → segment-local
+            if (aLoc <= 0 || aLoc >= segLenM) continue;
             ml[i] = ml[i] || {};
             ml[i].points = ml[i].points || [];
-            ml[i].points.push({ P: (L.P || 0) * 1000, a: (L.a || 0) * 1000 }); // kN→N, m→mm
+            ml[i].points.push({ P: (L.P || 0) * 1000, a: aLoc * 1000 }); // kN→N, m→mm
           }
         }
       }
@@ -595,22 +675,33 @@
     // previous pass feed the geometric stiffness, 3 iterations to settle
     const results = { patterns: [], combos: [], model, ms: 0, nDof: model.nodes.length * 6, nodes: model.nodes.length };
     const nStations = 11;
+    // NO P-Delta: ONE skyline assembly + factorization serves every pattern
+    // (the stiffness is pattern-independent — only the RHS changes); the
+    // per-pattern factorization the dense solver needed was ~half the
+    // runtime. P-Delta keeps the legacy iterate path.
+    const multi = base.pDelta ? null : FE().assembleAndSolveMulti(
+      model.nodes, model.frames, model.shells, loads, memberLoads,
+      { nodalSprings: base.nodalSprings });
     for (let p = 0; p < loads.length; p++) {
       let geo = null, U = null, forces = null, reactions = null;
-      for (let it = 0; it < 3; it++) {
-        const r = FE().assembleAndSolve(model.nodes, model.frames, model.shells, [loads[p]],
-          { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
-        U = r.U[0]; forces = r.frames;
-        if (!base.pDelta) break;
-        // update member axial forces for the next geometric pass
-        geo = forces.map(f => (f.forces[0] + f.forces[6]) / 2);
+      if (multi) {
+        U = multi.U[p]; forces = multi.frames[p]; reactions = multi.reactions[p];
+      } else {
+        for (let it = 0; it < 3; it++) {
+          const r = FE().assembleAndSolve(model.nodes, model.frames, model.shells, [loads[p]],
+            { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
+          U = r.U[0]; forces = r.frames;
+          if (!base.pDelta) break;
+          // update member axial forces for the next geometric pass
+          geo = forces.map(f => (f.forces[0] + f.forces[6]) / 2);
+        }
+        // support reactions: R = K·u − f at fixed dofs (re-assemble w/o destroy)
+        reactions = FE().computeReactions(model.nodes, model.frames, model.shells, [loads[p]],
+          [U], { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
       }
+
       // shell element forces (walls + slabs) from the converged displacement field
       const shellRes = model.shells.length ? FE().shellForces(model.nodes, model.shells, U) : [];
-
-      // support reactions: R = K·u − f at fixed dofs (re-assemble w/o destroy)
-      reactions = FE().computeReactions(model.nodes, model.frames, model.shells, [loads[p]],
-        [U], { memberLoads: memberLoads[p] || null, geo, nodalSprings: base.nodalSprings });
 
       // displacements (mm) from the last solve of this pattern
       results.U = U;
@@ -662,6 +753,8 @@
           type: model.map[i].ent ? model.map[i].ent.type : '?',
           offI: (model.map[i].offI || 0) * 1000, // mm — auto end offsets
           offJ: (model.map[i].offJ || 0) * 1000,
+          x0: model.map[i].x0 || 0,              // m along the entity (split beams)
+          segLen: model.map[i].segLen ?? null,
           stations,
         };
       });
@@ -741,9 +834,13 @@
       results.combos.push({ name: cb.name, members, shells, reactions });
     }
 
-    // modal: run when a modal load case is defined (numModes honored)
+    // modal: NOT part of the static solve. The factory default load case
+    // list ships a 'Modal' entry, which used to run a DENSE Guyan eigen
+    // on every analysis (minutes on meshed buildings). The Response
+    // Spectrum dialog computes modes on demand — opt back in here with
+    // data.run = true on the modal case only when a report needs them.
     const modalCase = d.loadCases.find(c => c.type === 'modal');
-    if (modalCase) {
+    if (modalCase && modalCase.data && modalCase.data.run) {
       try {
         const m = FE().modalAnalysis(model.nodes, model.frames, [], (modalCase.data && modalCase.data.numModes) || 6);
         results.modal = (m.modes || []).slice(0, 12).map(md => ({ T: md.T, f: md.f || (md.T ? 1 / md.T : 0) }));
