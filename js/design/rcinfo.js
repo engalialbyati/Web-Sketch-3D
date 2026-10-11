@@ -163,7 +163,7 @@
         ['<tr>' + ['M11', 'M22', 'M12', 'Q11', 'Q22', 'N11', 'N22', 'N12'].map(k => row(k)).join('') + '</tr>']);
   }
 
-  function renderDesign(ent, d) {
+  function renderDesign(ent, d, app, comboName) {
     if (!d) return '';
     if (d.error) return `<p style="font-size:11px;color:#c62828;margin:2px 0 0">${esc(d.error)}</p>`;
     const badge = ok => ok
@@ -199,11 +199,18 @@
     }
     if (ent.type === 'column') {
       const dcr = d.dcr != null ? d.dcr : 0;
+      let colDefl = '';
+      try {
+        const ed = root.RCModel.elementDeflections(app, comboName || 'ENVELOPE');
+        const c2 = ed && ed.columns.find(x => x.id === ent.id);
+        if (c2) colDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Lateral drift:</b> ' +
+          `base ${c2.latB.toFixed(2)} mm · top ${c2.latT.toFixed(2)} mm · Δ = ${c2.drift.toFixed(2)} mm over ${c2.h} mm</p>`;
+      } catch (e) { }
       return table(['Pu (kN)', 'Mx / My (kN·m)', 'DCR', 'Pcap (kN)', 'Status'],
         ['<tr>' + td(d.Pu.toFixed(0)) + td(`${d.Mx.toFixed(1)} / ${d.My.toFixed(1)}`) +
         td(`<b style="color:${dcr > 1 ? '#c62828' : '#2e7d32'}">${dcr.toFixed(2)}</b>`) +
         td(d.Pcap != null ? d.Pcap.toFixed(0) : '—') +
-        td(`<b>${esc(d.status || '')}</b>`) + '</tr>']);
+        td(`<b>${esc(d.status || '')}</b>`) + '</tr>']) + colDefl;
     }
     if (ent.type === 'wall') {
       return table(['Station', 'P (kN)', 'M (kN·m)', 'V (kN)', 'DCR', 'Avh/s (mm²/mm)', 'Status'],
@@ -211,13 +218,20 @@
         td(`<b style="color:${d.dcr > 1 ? '#c62828' : '#2e7d32'}">${(d.dcr || 0).toFixed(2)}</b>`) +
         td(d.shear ? d.shear.Avhs.toFixed(4) : '—') + td(`<b>${esc(d.status || '')}</b>`) + '</tr>']);
     }
-    // slab / roof
+    // slab / floor / roof
     const ow = d.owShear;
+    let slabDefl = '';
+    try {
+      const ed = root.RCModel.elementDeflections(app, comboName || 'ENVELOPE');
+      const s2 = ed && ed.slabs.find(x => x.id === ent.id);
+      if (s2) slabDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Deflection:</b> ' +
+        `max |UZ| = ${s2.maxUz.toFixed(2)} mm · relative (max−min) = ${s2.rel.toFixed(2)} mm</p>`;
+    } catch (e) { }
     return table(['M11 max/min', 'M22 max/min (kN·m/m)', 'D1 bot / top', 'D2 bot / top', 'One-way shear', 'Status'],
       ['<tr>' + td(`${d.maxM11.toFixed(1)} / ${d.minM11.toFixed(1)}`) + td(`${d.maxM22.toFixed(1)} / ${d.minM22.toFixed(1)}`) +
       td(`${bars(d.botBarsD1)} / ${bars(d.topBarsD1)}`) + td(`${bars(d.botBarsD2)} / ${bars(d.topBarsD2)}`) +
       td(ow ? `${(ow.Vu / 1e3).toFixed(0)} vs ${(ow.Vc / 1e3).toFixed(0)} kN/m ${badge(ow.ok)}` : '—') +
-      td('') + '</tr>']);
+      td('') + '</tr>']) + slabDefl;
   }
 
   // ---------------------------------------------------------- dialog
@@ -243,7 +257,7 @@
         `<p style="margin:0 0 6px"><b>${esc(id.type)} ${esc(id.id)}</b> · section <b>${esc(id.section)}</b> (${esc(id.dims)}) · material ${esc(id.material)}</p>` +
         '<p style="margin:8px 0 2px;font-weight:bold;font-size:11px;opacity:.8">APPLIED LOADS</p>' + renderLoads(appliedLoads(app, ent)) +
         '<p style="margin:10px 0 2px;font-weight:bold;font-size:11px;opacity:.8">ANALYSIS — ' + esc(caseName || 'not run') + '</p>' + renderAnalysis(ent, f) +
-        (caseName ? '<p style="margin:10px 0 2px;font-weight:bold;font-size:11px;opacity:.8">DESIGN — ' + esc(caseName) + '</p>' + renderDesign(ent, des) : '') +
+        (caseName ? '<p style="margin:10px 0 2px;font-weight:bold;font-size:11px;opacity:.8">DESIGN — ' + esc(caseName) + '</p>' + renderDesign(ent, des, app, caseName) : '') +
         '</div>';
     };
 

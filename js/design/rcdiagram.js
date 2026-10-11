@@ -374,8 +374,45 @@
       curve.renderOrder = 5;
       diagramGroup.add(curve);
     }
+    // shells (slabs/floors/roofs/walls): displaced quad outlines
+    const model = app.rcResults.model;
+    const U = root.RCModel.comboU(app, comboName);
+    if (U) {
+      const segs = [];
+      const nShells = model.shells.length;
+      for (let si = 0; si < nShells; si++) {
+        const sh = model.shells[si];
+        const ns = [sh.n1, sh.n2, sh.n3, sh.n4];
+        const P = ns.map(ni => {
+          const p = model.nodes[ni];
+          const off = (U[ni * 6 + 2] || 0) * scale;
+          return new THREE.Vector3(p.x + 0, p.y + 0, p.z - off);
+        });
+        for (let k2 = 0; k2 < 4; k2++) {
+          segs.push(P[k2], P[(k2 + 1) % 4]);
+        }
+      }
+      const shellLines = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(segs),
+        new THREE.LineBasicMaterial({ color: 0x90a4ae, transparent: true, opacity: 0.35 }));
+      diagramGroup.add(shellLines);
+    }
+    // columns: displaced chords
+    const colMat = new THREE.LineBasicMaterial({ color: 0xd84315 });
+    for (const m of model.map) {
+      if (!m.ent || m.ent.type !== 'column') continue;
+      const el = model.frames[m.idx];
+      const a = model.nodes[el.ni], b = model.nodes[el.nj];
+      // displaced chord: ux/uy at both ends
+      const paD = new THREE.Vector3(a.x + (U[el.ni * 6] || 0) * scale,
+        a.y + (U[el.ni * 6 + 1] || 0) * scale, a.z);
+      const pbD = new THREE.Vector3(b.x + (U[el.nj * 6] || 0) * scale,
+        b.y + (U[el.nj * 6 + 1] || 0) * scale, b.z);
+      diagramGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([paD, pbD]), colMat));
+    }
     view.scene.add(diagramGroup);
-    app.toast(`Deflected shape (×${(scale * 1000).toFixed(0)}·10³) — max δ ${maxD.toFixed(2)} mm · purple ≤ L/250`);
+    app.toast(`Deflected shape (×${(scale * 1000).toFixed(0)}·10³) — max δ ${maxD.toFixed(2)} mm · purple ≤ L/250 · grey = shells`);
   }
 
   root.RCDiagram = { showDiagrams, hideDiagrams, showDeflection, showForceDialog, open };

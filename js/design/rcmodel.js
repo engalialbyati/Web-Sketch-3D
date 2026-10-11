@@ -898,6 +898,102 @@
     return out;
   }
 
+  // ============================================== all-element deflections
+  // ETABS parity: displacement results exist for EVERY element — the
+  // deformed shape and the Story Drifts / Diaphragm Displacement tables
+  // read the same joint displacement vector. Here:
+  //   slabs   — max |Uz| over the mesh nodes + relative (max − min), the
+  //             service-deflection number for the panel
+  //   columns — lateral (ux,uy) at the top relative to the base = drift
+  //   stories — ETABS "Story Drifts": ΔX/ΔY between story levels ÷ height
+  const _deflCache = new Map();
+  function elementDeflections(app, comboName) {
+    const R = app.rcResults;
+    if (!R) return null;
+    const key = (comboName || 'ENVELOPE') + '|' + R.ms + '|' + R.nDof;
+    if (_deflCache.has(key)) return _deflCache.get(key);
+    const U = comboU(app, comboName);
+    if (!U) return null;
+    const model = R.model, nd = model.nodes;
+    const at = (ni, c) => U[ni * 6 + c] || 0;
+
+    // ---- slabs / floors / roofs: vertical displacement surface
+    const slabs = [];
+    {
+      const byEnt = new Map();
+      for (const sh of model.shells) {
+        if (!sh.entId) continue;
+        const ent = app.bim.getEntityById(sh.entId);
+        if (!ent || !['slab', 'floor', 'roof'].includes(ent.type)) continue;
+        if (!byEnt.has(sh.entId)) byEnt.set(sh.entId, new Set());
+        const set2 = byEnt.get(sh.entId);
+        for (const nn of [sh.n1, sh.n2, sh.n3, sh.n4]) set2.add(nn);
+      }
+      for (const [id, set2] of byEnt) {
+        let maxUz = -Infinity, minUz = Infinity;
+        for (const ni of set2) {
+          const v = at(ni, 2);
+          if (v > maxUz) maxUz = v;
+          if (v < minUz) minUz = v;
+        }
+        if (maxUz === -Infinity) continue;
+        slabs.push({ id, maxUz: +maxUz.toFixed(3),
+          rel: +(maxUz - minUz).toFixed(3), nNodes: set2.size });
+      }
+      slabs.sort((a, b) => b.rel - a.rel);
+    }
+
+    // ---- columns: lateral (hypot ux,uy) top vs base
+    const columns = [];
+    for (const m of model.map) {
+      if (!m.ent || m.ent.type !== 'column') continue;
+      const el = model.frames[m.idx];
+      const a = nd[el.ni], b = nd[el.nj];
+      const h = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z) * 1000; // mm
+      const latB = Math.hypot(at(el.ni, 0), at(el.ni, 1));
+      const latT = Math.hypot(at(el.nj, 0), at(el.nj, 1));
+      columns.push({ id: m.ent.id, h: Math.round(h),
+        latB: +latB.toFixed(3), latT: +latT.toFixed(3),
+        drift: +(latT - latB).toFixed(3) });
+    }
+
+    // ---- story drifts (ETABS "Story Drifts"): Δ between adjacent levels
+    const stories = [];
+    const levels = (app.levelManager && app.levelManager.levels ||
+      app.model.levels || []).slice().sort((a, b) => a.elevation - b.elevation);
+    const atLevel = (elev, comp) => {
+      let s = 0, n = 0;
+      for (let ni = 0; ni < nd.length; ni++) {
+        if (Math.abs(nd[ni].z - elev) > 0.05) continue;
+        // only nodes that have translational mass/stiffness participation —
+        // skip orphan drilling-pinned nodes (they carry u = 0)
+        s += at(ni, comp); n++;
+      }
+      return n ? s / n : null;
+    };
+    const driftAt = (zTop, zBot) => {
+      const tx = atLevel(zTop, 0), bx = atLevel(zBot, 0);
+      const ty = atLevel(zTop, 1), by = atLevel(zBot, 1);
+      if (tx == null || bx == null || ty == null || by == null) return null;
+      return { dx: +(tx - bx).toFixed(3), dy: +(ty - by).toFixed(3) };
+    };
+    for (let s2 = 0; s2 < levels.length - 1; s2++) {
+      const zBot = +levels[s2].elevation.toFixed(4);
+      const zTop = +levels[s2 + 1].elevation.toFixed(4);
+      const d = driftAt(zTop, zBot);
+      if (!d) continue;
+      const hMm = (zTop - zBot) * 1000;
+      stories.push({ story: levels[s2 + 1].name, zBot, zTop,
+        driftX: d.dx, driftY: d.dy,
+        ratioX: +(d.dx / hMm).toFixed(5), ratioY: +(d.dy / hMm).toFixed(5),
+        limit: +((zTop - zBot) * 1000 / 500).toFixed(1) }); // L/500 reference
+    }
+
+    const out = { slabs, columns, stories };
+    _deflCache.set(key, out);
+    return out;
+  }
+
   function runAnalysis(app, opts = {}) {
     const model = buildModel(app);
     if (!model.frames.length && !model.shells.length)
@@ -1879,7 +1975,7 @@
     }
     return { maxU: Array.from(maxU), nSteps, dt };
   }
-  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, beamDeflections, comboU, forceTable, open, openAssign,
+  root.RCModel = { buildModel, buildLoads, buildLoads2, augmentModel, runAnalysis, ensureAutoCombos, designSources, beamDeflections, comboU, elementDeflections, forceTable, open, openAssign,
     responseSpectrumAnalysis, timeHistoryAnalysis, storyResults, optimizeDesign, caseU };
 })(window);
 

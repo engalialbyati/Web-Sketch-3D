@@ -139,18 +139,21 @@
     };
     const rows = res.results.map(r => {
       const color = r.dcr > 1 ? '#c62828' : r.dcr > 0.9 ? '#f57f17' : '#2e7d32';
+      const ed = root.RCModel.elementDeflections(app, 'ENVELOPE');
+      const driftOf = id => { const c2 = ed.columns.find(x => x.id === id); return c2 ? c2.drift : null; };
       return [
         lvlName(window.app.bim.getEntityById(r.id) || {}),
         esc(r.id), 'Top', esc(r.combo || '—'),
         `<b style="color:${r.dcr > 1 ? '#c62828' : '#2e7d32'}">${r.dcr.toFixed(3)}</b>`,
         `${(r.Pu).toFixed(0)}`, `${r.Mx.toFixed(1)} / ${r.My.toFixed(1)}`,
         esc(r.status), `${(r.shear.Vu).toFixed(0)} / ${r.shear.phiVn.toFixed(0)}`,
-        shearDcrText(r)];
+        shearDcrText(r),
+        driftOf(r.id) != null ? driftOf(r.id).toFixed(2) : '—'];
     });
     return {
       name: 'Concrete Column Design Summary - ACI 318-19',
       headers: ['Story', 'Element', 'Station', 'PMM Combo', 'PMM Ratio',
-        'Pu (kN)', 'Mx/My (kN·m)', 'Status', 'Vu/φVn (kN)', 'Shear DCR'],
+        'Pu (kN)', 'Mx/My (kN·m)', 'Status', 'Vu/φVn (kN)', 'Shear DCR', 'Lateral Drift (mm)'],
       rows,
     };
   }
@@ -186,9 +189,39 @@
     };
   }
 
+  // ------------------------------------------------ story drifts (ETABS)
+  // "Story Drifts": Story, Direction, Drift, Drift Ratio per level pair
+  function storyDrifts(app, comboName) {
+    const ed = root.RCModel.elementDeflections(app, comboName);
+    if (!ed || !ed.stories.length) return { name: 'Story Drifts', headers: ['Story'], rows: [['No displacement data']] };
+    const rows = [];
+    for (const st of ed.stories) {
+      const rx = Math.abs(st.ratioX), ryy = Math.abs(st.ratioY);
+      rows.push([st.story, 'X', st.driftX.toFixed(2), (rx * 100).toFixed(4) + '%',
+        Math.abs(st.driftX) > st.limit ? '<span style="color:#c62828">OVER L/500</span>' : '<span style="color:#2e7d32">OK</span>']);
+      rows.push([st.story, 'Y', st.driftY.toFixed(2), (ryy * 100).toFixed(4) + '%',
+        Math.abs(st.driftY) > st.limit ? '<span style="color:#c62828">OVER L/500</span>' : '<span style="color:#2e7d32">OK</span>']);
+    }
+    return { name: 'Story Drifts', headers: ['Story', 'Direction', 'Drift (mm)', 'Drift/Height', 'L/500 Ref'], rows };
+  }
+
+  // ------------------------------------------------ slab deflections
+  // max |Uz| over the slab mesh + relative (max − min) = panel service δ
+  function slabDeflections(app, comboName) {
+    const ed = root.RCModel.elementDeflections(app, comboName);
+    if (!ed || !ed.slabs.length) return { name: 'Slab Deflections', headers: ['Slab'], rows: [['No displacement data']] };
+    return {
+      name: 'Slab Deflections',
+      headers: ['Slab', 'Max |UZ| (mm)', 'Relative δ max−min (mm)', 'Mesh Nodes'],
+      rows: ed.slabs.map(sl => [sl.id, sl.maxUz.toFixed(3), sl.rel.toFixed(3), sl.nNodes]),
+    };
+  }
+
   // ============================================================ dialog
   const TABLES = [
     ['Joint Displacements', 'jointDisplacements', true],
+    ['Story Drifts', 'storyDrifts', true],
+    ['Slab Deflections', 'slabDeflections', true],
     ['Base Reactions', 'baseReactions', true],
     ['Concrete Column Design Summary - ACI 318-19', 'columnSummary', false],
     ['Concrete Beam Design Summary - ACI 318-19', 'beamSummary', false],
@@ -229,5 +262,5 @@
     setTimeout(render, 0);
   }
 
-  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary };
+  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections };
 })(window);
