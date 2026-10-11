@@ -169,7 +169,7 @@ def main():
     for mb in MEMBERS:
         a, b = mb['a'], mb['b']
         nm, ret = sap.FrameObj.AddByCoord(a[0], a[1], a[2], b[0], b[1], b[2],
-                                          mb['sec'], mb['name'])
+                                          '', mb['sec'], mb['name'])
         names[mb['name']] = nm
         if mb['kind'] == 'beam':
             # ETABS insertion point from the app's placement params —
@@ -216,12 +216,16 @@ def main():
 
     # ---------------- combos
     for c in COMBOS:
-        sap.Combo.Add(c['name'], 0)
+        sap.RespCombo.Add(c['name'], 0)
         for it in c['cases']:
-            sap.Combo.SetCaseList(c['name'], 1, it['name'], it['scale'] or 1)
+            sap.RespCombo.SetCaseList(c['name'], 1, it['name'], it['scale'] or 1)
+
+    # ---------------- save first: the ETABS solver requires a saved model
+    edb = os.path.join(HERE, 'etabs-test.EDB')
+    sap.File.Save(edb)
 
     # ---------------- analyze (Modal off — no mass source in this validation)
-    ret, cnt, cases = sap.LoadCases.GetNameList()
+    cnt, cases, ret = sap.LoadCases.GetNameList()
     for i in range(cnt):
         if cases[i] == 'Modal':
             sap.Analyze.SetRunCaseFlag(cases[i], False)
@@ -234,7 +238,7 @@ def main():
     sap.DesignConcrete.StartDesign()
 
     # ---------------- extract analysis forces at member ends (i and j)
-    results = {'forces': {}, 'design': {}}
+    results = {'forces': {}, 'design': {}, 'nameMap': names}
     sap.Results.Setup.DeselectAllCasesAndCombosForOutput()
     for p in PATTERNS: sap.Results.Setup.SetCaseSelectedForOutput(p['name'])
     for c in COMBOS: sap.Results.Setup.SetComboSelectedForOutput(c['name'])
@@ -274,7 +278,7 @@ def main():
 
     with open(os.path.join(HERE, 'etabs-results.json'), 'w') as f2:
         json.dump(results, f2, indent=1)
-    sap.File.Save(os.path.join(HERE, 'etabs-test.EDB'))
+    sap.File.Save(edb)
     print('SAVED', os.path.join(HERE, 'etabs-results.json'))
 
 if __name__ == '__main__':
@@ -322,5 +326,5 @@ if __name__ == '__main__':
     ]);
   }
 
-  root.RCEtabs = { open, serializeModel, serializeResults, buildScript, selfWeight };
+  root.RCEtabs = { open, serializeModel, serializeResults, buildScript };
 })(window);
