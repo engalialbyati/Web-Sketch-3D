@@ -5361,8 +5361,23 @@ class App {
               const isRCInfo = defBtn.cat === 'elementInfo';
               if (defBtn.cat === 'designView') this._btnDesignView = _defEl;
               const isRCEtabs = defBtn.cat === 'exportEtabs';
+              // design/analysis dialogs living in their own modules — each
+              // guards its open() on exactly these category names; without
+              // this map they fall through to RCDefine and do nothing
+              const DESIGN_MOD = {
+                showDiagrams: 'RCDiagram', showForceDialog: 'RCDiagram',
+                beamDesign: 'RCBeam', columnDesign: 'RCColumn',
+                wallDesign: 'RCWall', slabDesign: 'RCSlab',
+                designReport: 'RCReport',
+              };
+              if (defBtn.cat === 'toggleRebarViz') {
+                if (window.RCViz) window.RCViz.toggle(this);
+                return;
+              }
               const mod = isRCInfo ? window.RCInfo : isRCEtabs ? window.RCEtabs
-                : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab : window.RCDefine;
+                : isRCModel ? window.RCModel : isRCColSlab ? window.RCColSlab
+                : DESIGN_MOD[defBtn.cat] ? window[DESIGN_MOD[defBtn.cat]]
+                : window.RCDefine;
               if (mod) (mod.openAssign ? (['assignJointLoads', 'assignPointSpring'].includes(defBtn.cat) ? mod.openAssign : mod.open) : mod.open)(this, defBtn.cat);
             });
           continue;
