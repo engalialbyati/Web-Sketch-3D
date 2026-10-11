@@ -38,3 +38,7 @@ test/_*
 _mnl66_details.json
 scratch/
 
+etabs-validation/etabs-test.$et*
+etabs-validation/etabs-test.LOG
+etabs-validation/etabs-test.OUT
+etabs-validation/probe*.py
