@@ -89,9 +89,11 @@
     const sqrtFc = Math.sqrt(fc);
     const beta = Math.max(b_col, h_col) / Math.min(b_col, h_col);
     const alphaS = location === 'interior' ? 40 : 30;
-    const Vc1 = (2 + 4 / beta) * sqrtFc * bo * d;
-    const Vc2 = (alphaS * d / bo + 2) * sqrtFc * bo * d;
-    const Vc3 = 4 * sqrtFc * bo * d;
+    // ACI 318-19 Table 22.6.5.2 (SI): 0.17(1+2/β), 0.083(αs·d/bo+2), 0.33 —
+    // the psi forms (2+4/β)(αs d/bo+2) 4 were overstating MPa results ×12
+    const Vc1 = 0.17 * (1 + 2 / beta) * sqrtFc * bo * d;
+    const Vc2 = 0.083 * (alphaS * d / bo + 2) * sqrtFc * bo * d;
+    const Vc3 = 0.33 * sqrtFc * bo * d;
     const Vc = Math.min(Vc1, Vc2, Vc3); // N (bo and d in mm)
     const phiVc = phi * Vc;
     // Vu (total force at critical section, not stress)

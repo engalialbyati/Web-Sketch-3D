@@ -285,9 +285,9 @@
     // two-way (punching) shear around the column
     const bo = 2 * ((bCol + dFtg) + (hCol + dFtg));
     const beta = Math.max(bCol, hCol) / Math.min(bCol, hCol);
-    const Vc1p = (2 + 4 / beta) * Math.sqrt(fc) * bo * dFtg;
-    const Vc2p = (40 * dFtg / bo + 2) * Math.sqrt(fc) * bo * dFtg;
-    const Vc3p = 4 * Math.sqrt(fc) * bo * dFtg;
+    const Vc1p = 0.17 * (1 + 2 / beta) * Math.sqrt(fc) * bo * dFtg;   // SI 22.6.5.2(a)
+    const Vc2p = 0.083 * (40 * dFtg / bo + 2) * Math.sqrt(fc) * bo * dFtg; // (b)
+    const Vc3p = 0.33 * Math.sqrt(fc) * bo * dFtg;   // SI 22.6.5.2(c)
     const phiVcPunch = 0.75 * Math.min(Vc1p, Vc2p, Vc3p);
     const PuPunch = qu * (L * B - (bCol + dFtg) * (hCol + dFtg));
     const punchOK = PuPunch <= phiVcPunch;
