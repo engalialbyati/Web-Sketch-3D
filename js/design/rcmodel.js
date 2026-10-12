@@ -273,31 +273,48 @@
         const zLvl = ent.params.baseLevel ? (app.levelManager.levels.find(l => l.id === ent.params.baseLevel)?.elevation ?? 0) : 0;
         const regions = ent.params.regions || [];
 
-        // collect drop panel regions from this slab's stripLabels or standalone DP entities
+        // Drop-panel regions (ETABS eCSIObjectTypes.DropPanel parity) — two
+        // sources, both LOCAL to this slab (the old registry fallback pushed
+        // a PHANTOM 2x2x350 drop at (0,0) for every DP section in Define,
+        // silently thickening the slab corner):
+        //   1. a slab patch ASSIGNED a droppanel area section (Assign ▸ Area
+        //      Sections) — center from its region bbox, dims from the section
+        //   2. a column of family 'drop_panel' (Families ▸ structural) — its
+        //      head widens dropWidth x dropDepth by dropThickness over this
+        //      slab (total = slab t + drop head), so the mesh, self-weight
+        //      and punching-d all see the drop
         const dropPanels = [];
+        const tMM = t; // this slab's thickness, mm
         for (const dpEnt of app.bim.entities) {
           if (dpEnt.type !== 'slab') continue;
           if (!dpEnt.params.designSection) continue;
           const dpSec = d.areaSections.find(a => a.name === dpEnt.params.designSection);
           if (!dpSec || dpSec.type !== 'droppanel') continue;
-          // drop panel entity stores its plan center + dims
-          const dpBase = dpEnt.params.base || [0, 0, zLvl];
+          // center from the patch's own region bbox (slabs have no base point)
+          let cx = null, cy = null;
+          const reg0 = (dpEnt.params.regions || [])[0];
+          if (reg0 && Array.isArray(reg0.outer) && reg0.outer.length >= 3) {
+            const xs2 = reg0.outer.map(q => q[0]), ys2 = reg0.outer.map(q => q[1]);
+            cx = (Math.min(...xs2) + Math.max(...xs2)) / 2;
+            cy = (Math.min(...ys2) + Math.max(...ys2)) / 2;
+          } else if (Array.isArray(dpEnt.params.base)) { cx = dpEnt.params.base[0]; cy = dpEnt.params.base[1]; }
+          if (cx == null) continue;
           dropPanels.push({
-            x: dpBase[0], y: dpBase[1], z: zLvl,
-            planL: (dpSec.dpDims ? dpSec.dpDims.planL : 2) / 1,
+            x: cx, y: cy, z: zLvl,
+            planL: (dpSec.dpDims ? dpSec.dpDims.planL : 2),
             planW: (dpSec.dpDims ? dpSec.dpDims.planW : 2),
             totalT: (dpSec.dpDims ? dpSec.dpDims.totalT : 0.35) * 1000,
           });
         }
-        // also check for standalone DP1-type areaSections assigned via designSection
-        const dpSections = d.areaSections.filter(a => a.type === 'droppanel');
-        for (const dps of dpSections) {
-          if (!dps.dpDims) continue;
+        for (const col of app.bim.entities) {
+          if (col.type !== 'column' || col.params.family !== 'drop_panel') continue;
+          if (!Array.isArray(col.params.base)) continue;
+          if (Math.abs(col.params.base[2] + (+col.params.height || 3) - zLvl) > 0.05) continue;
           dropPanels.push({
-            x: 0, y: 0, z: zLvl,
-            planL: dps.dpDims.planL || 2,
-            planW: dps.dpDims.planW || 2,
-            totalT: dps.dpDims.totalT * 1000 || 350,
+            x: col.params.base[0], y: col.params.base[1], z: zLvl,
+            planL: +col.params.dropWidth || 0.9,
+            planW: +col.params.dropDepth || 0.9,
+            totalT: tMM + (+col.params.dropThickness || 0.15) * 1000,
           });
         }
         for (const reg of regions) {
