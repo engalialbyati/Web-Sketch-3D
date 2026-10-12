@@ -156,6 +156,7 @@
       const ok = applyResultsColors(app);
       if (!ok) { app.toast('No design results to color', true); return; }
       app.view.rebuild();
+      app.view.invalidate && app.view.invalidate();
       if (!legendEl) {
         legendEl = document.createElement('div');
         legendEl.style.cssText = 'position:fixed;right:12px;bottom:44px;z-index:9999;background:rgba(255,255,255,.94);' +
@@ -343,10 +344,117 @@
     return { rows, comboName: comboName || 'ENVELOPE' };
   }
 
+  // ------------------------------------------- slab design window (ETABS)
+  // ETABS "Slab Design" form parity: a popup with the strip design table
+  // (Object, Combo, Station, FTop/FBot combo+area, VMaj) while the strips
+  // are DRAWN ON THE MODEL colored by flexural utilization, refreshed by
+  // the Design button in the form.
+  let stripGroup = null;
+
+  function clearStrips(app) {
+    if (stripGroup) { app.view.scene.remove(stripGroup); stripGroup = null; }
+  }
+
+  function drawStrips(app, rows) {
+    const THREE = root.THREE;
+    clearStrips(app);
+    if (!THREE) return;
+    stripGroup = new THREE.Group();
+    stripGroup.name = 'rcSlabStrips';
+    // utilization scale per row: demand / worst demand of its slab+dir
+    const worst = new Map();
+    for (const r of rows) {
+      const k = r.strip;
+      worst.set(k, Math.max(worst.get(k) || 0, Math.abs(r.mTop), Math.abs(r.mBot)));
+    }
+    const R = app.rcResults, nd = R.model.nodes;
+    const model = R.model;
+    for (const r of rows) {
+      const ent = app.bim.getEntityById(r.ent);
+      if (!ent || !ent.params.regions || !ent.params.regions.length) continue;
+      const zLvl = (ent.params.regions[0].outer || [[0, 0, 0]])[0][2] + 0.03;
+      const o = ent.params.regions[0].outer;
+      const xs = o.map(q => q[0]), ys = o.map(q => q[1]);
+      const x0 = Math.min(...xs), x1 = Math.max(...xs);
+      const y0 = Math.min(...ys), y1 = Math.max(...ys);
+      const u = worst.get(r.strip) > 1e-6
+        ? Math.max(Math.abs(r.mTop), Math.abs(r.mBot)) / worst.get(r.strip) : 0;
+      const col = dcrColor(u * 1.0);
+      const mat = new THREE.LineBasicMaterial({ color: col });
+      const pts = r.dir === 'GlobalX'
+        ? [[r.station, y0, zLvl], [r.station, y1, zLvl]]
+        : [[x0, r.station, zLvl], [x1, r.station, zLvl]];
+      stripGroup.add(new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(
+          pts.map(q => new THREE.Vector3(q[0], q[1], q[2]))), mat));
+    }
+    app.view.scene.add(stripGroup);
+    app.view.invalidate();
+  }
+
+  function slabDesignWindow(app) {
+    const R = app.rcResults;
+    if (!R || !R.model || !R.model.shells.length) { app.toast('Run the analysis first', true); return; }
+    const names = R.combos.length ? R.combos.map(c => c.name) : R.patterns.map(p => p.name);
+    const esc2 = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    const html = [
+      '<div style="display:flex;align-items:center;gap:10px;margin:0 0 6px">',
+      '<span style="font-size:12px;opacity:.75">Combo</span>',
+      `<select id="sdw-combo" style="padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">` +
+      '<option value="ENVELOPE">ENVELOPE - governing</option>' +
+      names.map(n => `<option value="${esc2(n)}">${esc2(n)}</option>`).join('') + '</select>',
+      '<span style="flex:1"></span>',
+      '<span style="font-size:11px;opacity:.6">strips drawn on the model · green→red = flexural demand</span>',
+      '</div>',
+      '<div id="sdw-body" style="max-height:56vh;overflow:auto"></div>',
+    ].join('');
+    app.dialog('Slab Design — Flexure and Shear Data', html, [
+      ['Design', () => { render(true); return false; }],
+      ['Hide Strips', () => { clearStrips(app); }],
+      ['Close', () => { clearStrips(app); }],
+    ]);
+    const render = (draw) => {
+      const combo = document.getElementById('sdw-combo').value;
+      const res = designSlabStrips(app, combo);
+      if (res.error) {
+        document.getElementById('sdw-body').innerHTML = `<p style="color:#c62828;font-size:12px">${esc2(res.error)}</p>`;
+        return;
+      }
+      // governing rows only (worst station per strip+layer) to stay readable
+      const gov = new Map();
+      for (const r of res.rows) {
+        const prev = gov.get(r.strip);
+        const dem = Math.max(Math.abs(r.mTop), Math.abs(r.mBot));
+        if (!prev || dem > prev.dem) gov.set(r.strip, { ...r, dem });
+      }
+      const rows = [...gov.values()].map(r => '<tr>' +
+        `<td style="padding:2px 8px">${esc2(r.ent)}</td>` +
+        `<td>${esc2(r.dir)}</td>` +
+        `<td>${r.station.toFixed(2)}</td>` +
+        `<td>${esc2(r.combo)}</td>` +
+        `<td>${r.mTop.toFixed(1)}</td><td><b>${r.asTop}</b></td>` +
+        `<td>${r.mBot.toFixed(1)}</td><td><b>${r.asBot}</b></td>` +
+        `<td>${r.asMin}</td><td>${r.vu.toFixed(1)}</td>` +
+        '</tr>').join('');
+      document.getElementById('sdw-body').innerHTML =
+        '<table style="width:100%;border-collapse:collapse;font-size:11.5px">' +
+        '<thead><tr style="text-align:left;opacity:.7">' +
+        ['Object', 'Dir', 'Station (m)', 'Combo', 'Mu Top (kN·m/m)', 'As Top (mm²/m)',
+         'Mu Bot (kN·m/m)', 'As Bot (mm²/m)', 'AsMin (mm²/m)', 'Vu (kN/m)']
+          .map(h => `<th style="padding:3px 8px;border-bottom:1px solid #d7dde3">${h}</th>`).join('') +
+        `</tr></thead><tbody>${rows}</tbody></table>` +
+        `<p style="font-size:11px;opacity:.65;margin:6px 0 0">${gov.size} strips · governing station per strip · full station list in Show Tables ▸ "Concrete Slab Design"</p>`;
+      if (draw) drawStrips(app, res.rows);
+    };
+    document.getElementById('sdw-combo').addEventListener('change', () => render(true));
+    render(true);
+  }
+
   function open(app, cat) {
     if (cat === 'centerlineView') { toggleCenterline(app); return; }
     if (cat === 'resultsView') { toggleResultsView(app); return; }
+    if (cat === 'slabDesignView') { slabDesignWindow(app); return; }
   }
 
-  root.RCView = { open, toggleCenterline, toggleResultsView, attachLiveRead, detachLiveRead, designSlabStrips };
+  root.RCView = { open, toggleCenterline, toggleResultsView, attachLiveRead, detachLiveRead, designSlabStrips, slabDesignWindow, drawStrips, clearStrips };
 })(window);

@@ -403,7 +403,7 @@ const RIBBON_TABS = {
     { title: 'Beam Design', tools: ['dsbbeam'] },
     { title: 'Column Design', tools: ['dscbcol'] },
     { title: 'Wall Design', tools: ['dswwall'] },
-    { title: 'Slab Design', tools: ['dsbslab'] },
+    { title: 'Slab Design', tools: ['dsbslab', 'dsbslabv'] },
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
     { title: 'Optimize', tools: ['dsopt', 'dsinfo'] },
@@ -497,6 +497,7 @@ const DEFINE_BUTTONS = {
   dsviz: { label: 'Show Rebar', glyph: '▤', tip: 'Toggle 3D rebar visualization on the model (longitudinal bars + stirrups)', cat: 'toggleRebarViz' },
   dsreport: { label: 'Design Report', glyph: '═', tip: 'Generate printable design summary report (all members, ACI refs, DCRs)', cat: 'designReport' },
   dsbslab: { label: 'Slab Design', glyph: '▦■', tip: 'ACI 318-19 Ch.7 slab design: flexure from shell forces + punching shear', cat: 'slabDesign' },
+  dsbslabv: { label: 'Slab Design View', glyph: '▦▶', tip: 'ETABS Slab Design form: strip design data window + strips drawn on the model colored by demand', cat: 'slabDesignView' },
   dswwall: { label: 'Wall Design', glyph: '◫', tip: 'ACI 318-19 Ch.11 wall design: P-M interaction + in-plane shear', cat: 'wallDesign' },
   dspunch: { label: 'Punching Check', glyph: '⊙▪', tip: 'Two-way punching at column tops from combo forces — drop-panel aware (ACI 22.6)', cat: 'punchingDesign' },
   dssbe: { label: 'SBE Check', glyph: '◫▪', tip: 'ACI 18.10.6 special boundary elements: stress-limit + NA-depth methods', cat: 'sbeCheck' },
@@ -5362,7 +5363,7 @@ class App {
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
               if (defBtn.cat === 'designView') { this.toggleDesignView(); return; }
-              if (defBtn.cat === 'centerlineView' || defBtn.cat === 'resultsView') {
+              if (defBtn.cat === 'centerlineView' || defBtn.cat === 'resultsView' || defBtn.cat === 'slabDesignView') {
                 if (window.RCView) RCView.open(this, defBtn.cat); return;
               }
               const isRCInfo = defBtn.cat === 'elementInfo';
