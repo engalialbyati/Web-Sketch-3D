@@ -2526,7 +2526,11 @@ class Viewport {
     } else if (this.renderer.clippingPlanes && this.renderer.clippingPlanes.length) {
       this.renderer.clippingPlanes = [];
     }
-    this.renderer.render(this.scene, this.activeCamera());
+    if (window.RCWindows && window.RCWindows.isMultiViewActive()) {
+      window.RCWindows.renderMultiViews(this.renderer, this.scene, this);
+    } else {
+      this.renderer.render(this.scene, this.activeCamera());
+    }
     // HUD
     const ctx = this.hudCtx;
     const w = this.hud.width, h = this.hud.height;
