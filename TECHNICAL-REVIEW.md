@@ -328,3 +328,139 @@ slope.push(slope[i] + 0.5 * (M1/(Ec*Ie1) + M2/(Ec*Ie2)) * dx);   // M/EI double 
 
 *Generated 2026-10-12 against commit 6d0934c + the punching fix. Every snippet above is
 verbatim from the working tree at review time.*
+
+
+---
+
+# 6. APPENDIX A — Worked numeric examples (hand-checks you can repeat)
+
+## A.1 Beam service deflection — beam 300×600, L = 6 m, f'c = 25, fy = 500
+
+```
+Ec  = 4700·√25            = 23 500 MPa            (§19.2.2.1.b)
+Ig  = 300·600³/12         = 5.4×10⁹ mm⁴
+yt  = 300 mm
+fr  = 0.62·√25            = 3.10 MPa              (§24.2.3.6)
+Mcr = fr·Ig/yt            = 3.10·5.4e9/300
+                          = 55.8×10⁶ N·mm = 55.8 kN·m   (§24.2.3.5)
+Ma (demo, 1.0D)           ≈ 15 kN·m  <  Mcr  →  UNCRACKED, Ie = Ig
+```
+Because Ma < Mcr the Branson term (Mcr/Ma)³ is skipped and the elastic line integrates
+with gross EI. From the app run (verified in browser): **δD = 2.02 mm, δL = 0.38 mm**;
+long-term (§24.2.4.1, ξ = 2.0, ρ' = 0 → λΔ = 2.0):
+```
+δLT = (1 + 2.0)·2.02 + 0.38 = 6.44 mm
+Limits (Table 24.2.2): L/360 = 16.67 mm (δL 0.38 OK) · L/240 = 25 mm (δLT 6.44 OK)
+```
+Cracked branch check (a beam with Ma = 80 kN·m > Mcr): Icr from kd-solve ≈ 7.46×10⁸ mm⁴,
+Ie = Icr + (Ig−Icr)(55.8/80)³ ≈ 2.6×10⁹ mm⁴ — the code evaluates this **per station**
+(`rcmodel.js` serviceDeflections integ loop), which is why the integration uses
+station-pair EI averages, not one global Ie.
+
+## A.2 Punching — interior column 400×400, d = 165, f'c = 25 (the regression lock)
+
+```
+b1 = b2 = 400+165 = 565 · bo = 2(565+565) = 2260 mm          (§22.6.4.1)
+β = 1, αs = 40 (interior)
+Vc(a) = 0.17(1+2/1)·√25·2260·165 = 2.55·372 900  = 950.9 kN
+Vc(b) = 0.083(40·165/2260 + 2)·5·372 900        = 761.4 kN
+Vc(c) = 0.33·√25·2260·165     = 1.65·372 900    = 615.3 kN  ← governs
+φVc  = 0.75·615.3                                = 461.5 kN  (Table 21.2.2 φ=0.75)
+```
+This exact value is asserted in `scratch/test-shell-integration.js` — the test that
+caught the psi/SI bug (the old code computed 5.5 MN here).
+
+## A.3 Column PM point (one sweep station)
+
+400×400, 8Ø20 (Ast = 2513 mm²), cover 40: c = 150 mm station:
+```
+a   = 0.85·150 = 127.5 mm
+Cc  = 0.85·25·400·127.5                = 1083.8 kN
+εs  = 0.003(320−150)/150 = 0.0034 > εy → steel yields; top bars in block: −0.85f'c·As
+φ(εt = 0.0034 > εty+0.003? borderline)  → φ ≈ 0.87 (transition §21.2.2)
+P   ≈ Cc + ΣFs ≈ 1150 kN, M from lever arms about centroid
+```
+The sweep runs tension → pure compression with the non-monotonic repair and the
+0.80P0 anchor (§22.4.2) — `rccolumn.js:56 generatePMCurve`.
+
+## A.4 Wall base integration (pier forces)
+
+For the demo shaft wall the base cut integrates the shell row:
+P = Σ(−N22)·w = tributary gravity · V = ΣN12·w · M = Σ(−N22)(x−x̄)w — validated
+against support reactions (0.9 % equilibrium at 1 m mesh).
+
+---
+
+# 7. APPENDIX B — Units & the psi→SI conversion table
+
+All internals are N·mm·MPa. Every √f'c coefficient in the codebase, with its psi origin:
+
+| psi form (ACI US) | SI form (code) | ratio | Used in |
+|---|---|---|---|
+| 2√f'c | 0.17√f'c | ×0.083 | beam/slab one-way Vc (§22.5.5.1) |
+| 4√f'c | 0.33√f'c | ×0.083 | punching (c) (Table 22.6.5.2) |
+| 6√f'c | 0.50√f'c | ×0.083 | punching (a) at β=1 |
+| 8√f'c | 0.66√f'c | ×0.083 | Vs cap, wall cap |
+| 10√f'c | 0.83√f'c | ×0.083 | Vc max |
+| (2+4/β)√f'c | 0.17(1+2/β)√f'c | ×0.083 | punching (a) — the fixed line |
+| 3.5√f'c | 0.29√f'c | ×0.083 | column Vc branch (ETABS port) |
+| 7.5√f'c fr | 0.62√f'c | ×0.083 | modulus of rupture (§24.2.3.6) |
+| 500/2000/2500 psi axial terms | 3.45/13.79/17.24 MPa | ×0.00689 | column Vc(Nu) |
+
+**This table is why the review found the punching bug**: the (2+4/β) family is the only
+place where psi coefficients had leaked into MPa arithmetic.
+
+---
+
+# 8. APPENDIX C — Data flow (Define → results)
+
+```
+DEFINE registries ──┐
+                    ├─► buildModel (rcmodel.js:46)
+ASSIGN stamps ──────┤     nodes/frames/shells · end offsets · snapping · beam auto-mesh
+                    │     wall openings voided · drilling constraints by shell normal
+                    ▼
+        assembleAndSolveMulti (fea.js)  ── skyline UᵀDU factor ONCE
+                    │                     per-pattern solves + reactions from K₀ snapshot
+                    ▼
+        rcResults { patterns[].members/stations, combos[], reactions[], shells[], U }
+                    ▼
+   DESIGN  (ENVELOPE over combos via designSources)
+     beams  → As/stirrups/dev/torsion        (ACI 9/22/25)
+     cols   → fiber PM + biaxial + shear + joint
+     walls  → pier PM + αc shear + spandrels
+     slabs  → flexure strips + one-way + punching
+     defl.  → Ch.24 cracked Ie + λΔ  (serviceDeflections)
+                    ▼
+   DISPLAY (diagrams, deflected shape, Show Tables, Element Data,
+            Property Lines, Results View, Slab Design window)
+```
+
+---
+
+# 9. APPENDIX D — Unused Define values: proposed wiring
+
+| Value | Proposed consumer |
+|---|---|
+| `iso.a` thermal | thermal strain load case → nodal ΔT loads |
+| `conc.strainAtFc/strainUltimate` | replace Whitney with Hognestad in PM fiber (research) |
+| `autoSeismic {ss,s1,tl,r,ie…}` | ASCE 7-16 Eq. 12.8-x base-shear → static X/Y lateral patterns |
+| `autoWind {speed,exposure…}` | ASCE 7-16 Ch.27 qz → wall projected pressure loads |
+| `tendonProps/linkProps/cables` | new element kernels (tendon = prestress losses; links = nonlinear) |
+| `diaphragms` | rigid-tie master/slave sets in augmentModel (solver hook exists) |
+| `tempProps` | f'c(t), creep coefficient for λΔ > 2.0 |
+
+---
+
+# 10. APPENDIX E — ACI 318-19 clause index (as cited in this review)
+
+§5.3.1(b) pattern live · §6.2.5 min eccentricity · §6.6.3.1.1 stiffness modifiers ·
+T7.6.1.1 / §7.7.2.3 slab min-steel/spacing · §8.2.3 drop-panel critical section ·
+§8.5.3.1 γv · §9.3.3.1 tension-controlled · §9.6.1.2 As,min · §9.6.3.4 Av,min ·
+§9.7.5.1 torsion longitudinal · §9.7.6.2 stirrup spacing · T10.6.1.1 column ρ limits ·
+§11.5.4.3 wall αc shear · T11.6.1 wall min steel · §11.6.3 Vu>0.5φVc · §13.3 mats ·
+§16.3.1(10.17.1) bearing · §18.10.6 SBE · §19.2.2.1.b Ec · T21.2.2 φ ·
+§22.2.2.1 εcu · §22.2.2.4.1 α · T22.2.2.4.3 β1 · §22.3 flexural strength ·
+§22.4.2 axial cap · §22.5.1.2 Vs cap · §22.5.5.1 Vc · §22.7.4/22.7.5/22.7.6 torsion ·
+T22.6.5.2 punching Vc · §24.2.2 deflection limits · §24.2.3.5 Mcr/Ie · §24.2.3.6 fr ·
+§24.2.4.1 λΔ · §25.4.2.1/25.4.2.3 development.
