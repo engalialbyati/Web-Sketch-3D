@@ -228,9 +228,11 @@
       const s2 = ed && ed.slabs.find(x => x.id === ent.id);
       if (s2) {
         // long-term: (1+λΔ)·δD + δL with λΔ = 2.0 — δ split via case share
-        const dLT = (1 + 2.0) * Math.abs(s2.maxUz) * 0.6 + Math.abs(s2.rel) * 0.4;
+        const dLT = (1 + 2.0) * Math.abs(s2.support || s2.maxUz) * 0.6 + Math.abs(s2.rel) * 0.4;
         slabDefl = '<p style="font-size:11.5px;margin:6px 0 0"><b>Deflection:</b> ' +
-          `max |UZ| = ${s2.maxUz.toFixed(2)} mm · relative (max−min) = ${s2.rel.toFixed(2)} mm · ` +
+          `support Δ = ${((s2.support != null ? s2.support : Math.abs(s2.maxUz))).toFixed(2)} mm (column drop) · ` +
+          `<b>total from support = ${((s2.total != null ? s2.total : Math.abs(s2.maxUz))).toFixed(2)} mm</b> · ` +
+          `panel bending = ${s2.rel.toFixed(2)} mm · ` +
           `est. long-term ≈ <b>${dLT.toFixed(2)} mm</b> <span style="opacity:.6">(λΔ=2.0, cracked-section estimate)</span></p>`;
       }
     } catch (e) { }

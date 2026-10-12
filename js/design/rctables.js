@@ -213,8 +213,8 @@
     if (!ed || !ed.slabs.length) return { name: 'Slab Deflections', headers: ['Slab'], rows: [['No displacement data']] };
     return {
       name: 'Slab Deflections',
-      headers: ['Slab', 'Max |UZ| (mm)', 'Relative δ max−min (mm)', 'Mesh Nodes'],
-      rows: ed.slabs.map(sl => [sl.id, sl.maxUz.toFixed(3), sl.rel.toFixed(3), sl.nNodes]),
+      headers: ['Slab', 'Support Δ (mm)', 'Total max |UZ| (mm) — read from support', 'Panel bending (mm)', 'Mesh Nodes'],
+      rows: ed.slabs.map(sl => [sl.id, sl.support.toFixed(3), `<b>${sl.total.toFixed(3)}</b>`, sl.rel.toFixed(3), sl.nNodes]),
     };
   }
 

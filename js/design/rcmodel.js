@@ -1086,8 +1086,16 @@
           if (v < minUz) minUz = v;
         }
         if (maxUz === -Infinity) continue;
-        slabs.push({ id, maxUz: +maxUz.toFixed(3),
-          rel: +(maxUz - minUz).toFixed(3), nNodes: set2.size });
+        // three datums, explicit:
+        //   support = displacement of the stiffest edge (smallest |uz| ≈ the
+        //             column-shortening the panel rides on, e.g. 25 mm)
+        //   total   = extreme |uz| at midspan = support + bending (e.g. 35)
+        //   rel     = panel bending only (total − support, e.g. 10)
+        const absMax = Math.max(Math.abs(maxUz), Math.abs(minUz));
+        const absMin = Math.min(Math.abs(maxUz), Math.abs(minUz));
+        slabs.push({ id, maxUz: +maxUz.toFixed(3), minUz: +minUz.toFixed(3),
+          support: +absMin.toFixed(3), total: +absMax.toFixed(3),
+          rel: +(absMax - absMin).toFixed(3), nNodes: set2.size });
       }
       slabs.sort((a, b) => b.rel - a.rel);
     }
