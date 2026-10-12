@@ -42,3 +42,5 @@ etabs-validation/etabs-test.$et*
 etabs-validation/etabs-test.LOG
 etabs-validation/etabs-test.OUT
 etabs-validation/probe*.py
+test_shot.png
+report_screenshots/
