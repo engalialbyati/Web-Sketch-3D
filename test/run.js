@@ -13,7 +13,7 @@ const SUITE = [
   'draw', 'engine', 'flooropen', 'geometry', 'gridcells', 'gridwall',
   'edgeoffset', 'rebar', 'columnrebar', 'elementrebar', 'rebardoc', 'beamconn', 'wallopening', 'fndkinds', 'sog', 'story5', 'multiface', 'faceorient', 'lineheal', 'looseface', 'edgesel', 'nestface', 'thicken', 'hostedcuts', 'ifcexport', 'annotate', 'room', 'deletebatch', 'independence', 'layers', 'linestyle', 'mirrorarray',
   'model', 'revitmethod', 'script', 'selectmode', 'slabtop', 'stairs',
-  'structural', 'trim', 'wallbottom', 'wallface', 'walljoin', 'wallstub',
+  'structural', 'trim', 'wallbottom', 'wallface', 'walljoin', 'wallstub', 'etabsview',
 ];
 
 (async () => {

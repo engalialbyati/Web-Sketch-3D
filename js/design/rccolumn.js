@@ -534,8 +534,8 @@
     const esc = s2 => String(s2).replace(/&/g, '&amp;').replace(/</g, '&lt;');
     const rows = result.results.map(r => {
       const color = r.dcr > 1 ? '#c62828' : r.dcr > 0.9 ? '#f57f17' : '#2e7d32';
-      return '<tr>' +
-        `<td style="padding:3px 6px">${esc(r.id)}</td>` +
+      return `<tr style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background='#f0f4f8'" onmouseout="this.style.background=''" title="Click to view Member Design Details" onclick="if(window.RCEtabsView)window.RCEtabsView.openMemberDesignWindow(window.app||window._app,'${esc(r.id)}','${esc(comboName)}')">` +
+        `<td style="padding:3px 6px;color:#0b57d0;font-weight:bold;text-decoration:underline">${esc(r.id)}</td>` +
         `<td>${r.b}×${r.h}</td>` +
         `<td>${r.Pu.toFixed(0)}</td>` +
         `<td>${r.Mx.toFixed(1)}</td>` +

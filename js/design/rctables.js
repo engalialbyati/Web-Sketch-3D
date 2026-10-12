@@ -341,7 +341,10 @@
       `<select id="at-case" style="flex:1;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">${caseOptions(app)}</select></div>`,
       '<div id="at-body" style="margin-top:6px"></div>',
     ].join('');
-    app.dialog('Show Tables — Analysis & Design Data', html, [['Close', null]]);
+    app.dialog('Show Tables — Analysis & Design Data', html, [
+      ['Export CSV', () => exportCSV(app)],
+      ['Close', null],
+    ]);
     const render = () => {
       const tName = document.getElementById('at-table').value;
       const cName = document.getElementById('at-case').value;
@@ -363,5 +366,52 @@
     setTimeout(render, 0);
   }
 
-  root.RCTables = { open, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections, deflectionCheck, beamDesignForces, columnDesignForces, slabStripData };
+  function exportCSV(app) {
+    const tSelect = document.getElementById('at-table');
+    const cSelect = document.getElementById('at-case');
+    if (!tSelect) return;
+    const tName = tSelect.value;
+    const cName = cSelect ? cSelect.value : '';
+    const tDef = TABLES.find(t2 => t2[1] === tName);
+    if (!tDef) return;
+    let t;
+    try {
+      t = root.RCTables[tDef[1]](app, cName);
+    } catch (e) {
+      app.toast('Failed to generate table data: ' + e.message, true);
+      return;
+    }
+    if (!t || !t.headers || !t.rows) {
+      app.toast('No table data to export', true);
+      return;
+    }
+    const escapeCsv = (v) => {
+      if (v == null) return '';
+      const s = String(v).replace(/"/g, '""');
+      return /[",\n\r]/.test(s) ? `"${s}"` : s;
+    };
+    const lines = [];
+    lines.push(t.headers.map(escapeCsv).join(','));
+    for (const row of t.rows) {
+      const cleanRow = row.map(cell => {
+        const raw = String(cell == null ? '' : cell).replace(/<[^>]*>/g, '');
+        return escapeCsv(raw);
+      });
+      lines.push(cleanRow.join(','));
+    }
+    const csvContent = lines.join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const safeName = (t.name || 'Table').replace(/[^a-zA-Z0-9_\-]/g, '_');
+    a.download = `${safeName}_${cName || 'export'}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    app.toast(`Exported ${lines.length - 1} rows to ${a.download}`);
+  }
+
+  root.RCTables = { open, exportCSV, jointDisplacements, baseReactions, materialList, columnSummary, beamSummary, storyDrifts, slabDeflections, deflectionCheck, beamDesignForces, columnDesignForces, slabStripData };
 })(window);

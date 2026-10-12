@@ -484,8 +484,8 @@
       const topBarStr = r.topBars ? `${r.topBars.count}Ø${r.topBars.dia}` : '—';
       const botBarStr = r.botBars ? `${r.botBars.count}Ø${r.botBars.dia}` : '—';
       const dblMark = r.topDoubly || r.botDoubly ? ' ★' : '';
-      return '<tr>' +
-        `<td style="padding:3px 6px">${esc(r.id)}</td>` +
+      return `<tr style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background='#f0f4f8'" onmouseout="this.style.background=''" title="Click to view Member Design Details" onclick="if(window.RCEtabsView)window.RCEtabsView.openMemberDesignWindow(window.app||window._app,'${esc(r.id)}','${esc(comboName)}')">` +
+        `<td style="padding:3px 6px;color:#0b57d0;font-weight:bold;text-decoration:underline">${esc(r.id)}</td>` +
         `<td>${r.b}×${r.h}</td>` +
         `<td>${r.MuTop/1e6 > 0.01 ? (r.MuTop/1e6).toFixed(1) : '—'}</td>` +
         `<td>${r.MuBot/1e6 > 0.01 ? (r.MuBot/1e6).toFixed(1) : '—'}</td>` +

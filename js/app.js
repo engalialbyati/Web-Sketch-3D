@@ -396,8 +396,9 @@ const RIBBON_TABS = {
   analyze: { label: 'Analyze', groups: [
     { title: 'Run', tools: ['anlrun'] },
     { title: 'Dynamics', tools: ['anlrs', 'anlth'] },
-    { title: 'Diagrams', tools: ['anldiagram', 'anlforce', 'anldefl'] },
-    { title: 'Results', tools: ['anlforces', 'anlstory', 'anltables'] },
+    { title: 'Diagrams & Shape', tools: ['anlundef', 'anldefl', 'anldiagram', 'anlforce', 'anlshell', 'anlreact'] },
+    { title: 'Results & Tables', tools: ['anltables', 'anlstory', 'anlforces'] },
+    { title: 'Windows', tools: ['winlayout'] },
   ] },
   rcdesign: { label: 'Design', groups: [
     { title: 'Beam Design', tools: ['dsbbeam'] },
@@ -406,10 +407,9 @@ const RIBBON_TABS = {
     { title: 'Slab Design', tools: ['dsbslab', 'dsbslabv'] },
     { title: 'Connections', tools: ['dspunch', 'dssbe'] },
     { title: 'Foundation', tools: ['dsfoot'] },
-    { title: 'Optimize', tools: ['dsopt', 'dsinfo'] },
-    { title: 'View', tools: ['dsv', 'dsvline', 'dsvres'] },
-    { title: 'Report', tools: ['dsreport'] },
-    { title: '3D View', tools: ['dsviz'] },
+    { title: 'Display Results', tools: ['dsinfo', 'dsdet', 'dsvres', 'dsv', 'dsvline'] },
+    { title: 'Report', tools: ['dsreport', 'dsviz'] },
+    { title: 'Windows', tools: ['winlayout'] },
   ] },
   draw: { label: 'Draw', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
@@ -486,10 +486,13 @@ const DEFINE_BUTTONS = {
   anlrun: { label: 'Run Analysis', glyph: '▶', tip: 'Solve every load pattern and combination — member forces stored for design', cat: 'runAnalysis' },
   anlrs: { label: 'Response Spectrum', glyph: '∿', tip: 'Modal superposition on an RS function — period, frequency, Sa per mode (5% damping)', cat: 'rsAnalysis' },
   anlth: { label: 'Time History', glyph: '〰', tip: 'Newmark-β direct integration of a time-history case — peak node displacements', cat: 'thAnalysis' },
-  anldiagram: { label: 'Show Diagrams', glyph: '∠', tip: 'Toggle moment/shear diagrams on beams in the 3D viewport (cycles: off → M3 → V3 → off)', cat: 'showDiagrams' },
-  anlforce: { label: 'Force Dialog', glyph: '≡', tip: 'Per-member BMD/SFD canvas with values', cat: 'showForceDialog' },
+  anldiagram: { label: 'Frame Diagrams', glyph: '∠', tip: 'ETABS Member Force Diagram — M3, M2, V2, V3, P, T with Fill and Show Values', cat: 'showDiagrams' },
+  anlforce: { label: 'Member Diagram', glyph: '≡', tip: 'ETABS Diagrams for Frame Object — interactive location scrubber & synchronized plots', cat: 'showForceDialog' },
   anlforces: { label: 'Force Table', glyph: '▦', tip: 'Member end forces per combination (P, V, M)', cat: 'forceTable' },
-  anldefl: { label: 'Deflection', glyph: '⌒', tip: 'Deflected shape — beam elastic lines from M/EI, auto-scaled; purple ≤ L/250', cat: 'showDeflection' },
+  anlundef: { label: 'Undeformed Shape', glyph: '⬜', tip: 'ETABS Show Undeformed Shape (F4) — clear deformed wireframe, force diagrams, contours and reactions', cat: 'clearOverlays' },
+  anldefl: { label: 'Deformed Shape', glyph: '⌒', tip: 'ETABS Deformed Shape — case, scale, undeformed wireframe, contours & live animation', cat: 'showDeflection' },
+  anlshell: { label: 'Shell Forces', glyph: '▦∿', tip: 'ETABS Shell Forces & Stresses — M11/M22/M12/Q/N contours with color spectrum legend', cat: 'shellForces' },
+  anlreact: { label: 'Reactions', glyph: '↑↓', tip: 'ETABS Support Reactions — 3D vector arrows for FX, FY, FZ with value badges', cat: 'supportReactions' },
   anltables: { label: 'Show Tables', glyph: '▤▤', tip: 'ETABS Show Tables — Joint Displacements, Base Reactions, Column/Beam Design Summaries, Material List as database tables', cat: 'analysisTables' },
   anlstory: { label: 'Story Results', glyph: '⇤⇥', tip: 'Per-story inter-story drift and story shear (ASCE 7 Table 12.12-1)', cat: 'storyResults' },
   dsbbeam: { label: 'Beam Design', glyph: '■', tip: 'ACI 318-19 beam design: As required, shear, DCR per station', cat: 'beamDesign' },
@@ -507,7 +510,9 @@ const DEFINE_BUTTONS = {
   dsv: { label: 'Design View', glyph: '◎', tip: 'Toggle Design View: show only designed elements (shear walls, columns, beams, slabs, foundations) - hide normal walls, doors, windows', cat: 'designView' },
   dsvline: { label: 'Property Lines', glyph: '⌐', tip: 'ETABS Cline & Mid-plane representation: hide all solids, show centerlines only — the clean view for reading BMD/SFD/deflection', cat: 'centerlineView' },
   dsvres: { label: 'Results View', glyph: '▦c', tip: 'Color the model by governing utilization (ETABS results display): beams demand, columns PMM/shear/joint, walls DCR, slabs M11 scale', cat: 'resultsView' },
-  dsinfo: { label: 'Element Data', glyph: 'ⓘ', tip: 'Applied loads, analysis forces and design summary for the selected element (ETABS right-click data)', cat: 'elementInfo' },
+  dsinfo: { label: 'Display Design Info', glyph: 'ⓘ', tip: 'ETABS Display Design Info — Longitudinal As (mm²), Rebar %, Shear Av/s, P-M-M Capacity Ratios', cat: 'displayDesignInfo' },
+  dsdet: { label: 'Design Details', glyph: '▣📈', tip: 'ETABS Concrete Member Design Details — full code check & interactive CSiCol P-M interaction curve', cat: 'memberDesignDetails' },
+  winlayout: { label: 'Windows', glyph: '⊞', tip: 'ETABS Window Management — Single, Split V, Split H, 4 Quad Views, Arrange Windows', cat: 'windowLayout' },
   defetabs: { label: 'Export ETABS (dev)', glyph: '⇪', tip: 'DEV ONLY: write an OAPI script that rebuilds this model in ETABS (elements, sections, materials, loads, combos) + this engine\'s results for diffing', cat: 'exportEtabs' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
   asgframe: { label: 'Frame Sections', glyph: '⇢', tip: 'Assign a defined frame section to the selected beams/columns (type-mismatched elements are skipped, ETABS-style)', cat: 'assignFrames' },
@@ -549,6 +554,8 @@ const DEFINE_BUTTONS = {
   defspan: { label: 'Spandrels', glyph: '▬', tip: 'Spandrel Labels — beam strips', cat: 'spandrels' },
   defgrid: { label: 'Grid Systems', glyph: '#', tip: 'Grid Systems — edit the grid lines', cat: 'grids' },
   defcons: { label: 'Constraints', glyph: '⊞', tip: 'Joint Constraints — body/diaphragm/rod/weld/equal/line/plate', cat: 'constraints' },
+  deflink: { label: 'Link Properties', glyph: '⚯', tip: 'Link/Support Properties — linear, multilinear, damper, isolator links', cat: 'links' },
+  deftend: { label: 'Tendon Properties', glyph: '∿', tip: 'Tendon Properties — post-tensioning strand diameter, area, prestress', cat: 'tendons' },
 };
 
 // ---------------------------------------------------------------------------
@@ -3134,6 +3141,8 @@ class App {
     this.db = null;             // persistent relational store (db.js) — async
     if (typeof this._initDb === 'function') this._initDb();
     if (window.Engine) Engine.bind(this);
+    if (window.RCWindows) window.RCWindows.init(this);
+    if (window.RCEtabsView) window.RCEtabsView.init(this);
 
     this.view.setShadows(true);
     this.view.setFog(true);
@@ -4965,6 +4974,8 @@ class App {
     this.lockAxis = null;
     this.clearAxisLocks();
     this.mode = 'design';
+    document.querySelectorAll('#modetabs .mtab').forEach(b =>
+      b.classList.toggle('active', b.dataset.mode === 'design'));
     document.querySelectorAll('.mode-pill').forEach(b =>
       b.classList.toggle('active', b.dataset.mode === 'design'));
     document.body.classList.remove('mode-bim');
@@ -5360,10 +5371,51 @@ class App {
           const defBtn = DEFINE_BUTTONS[id];
           const _defEl = mk(`<span class="def-glyph">${defBtn.glyph}</span><span class="def-label">${defBtn.label}</span>`,
             defBtn.tip, 'tbtn-def', '{}', () => {
+              if (defBtn.cat === 'showDeflection') {
+                if (window.RCEtabsView) window.RCEtabsView.openDeformedDialog(this);
+                else if (window.RCDiagram) window.RCDiagram.open(this, 'showDeflection');
+                return;
+              }
+              if (defBtn.cat === 'showDiagrams') {
+                if (window.RCEtabsView) window.RCEtabsView.openForceDiagramDialog(this);
+                else if (window.RCDiagram) window.RCDiagram.open(this, 'showDiagrams');
+                return;
+              }
+              if (defBtn.cat === 'showForceDialog') {
+                if (window.RCEtabsView) window.RCEtabsView.openFrameDiagramWindow(this);
+                else if (window.RCDiagram) window.RCDiagram.open(this, 'showForceDialog');
+                return;
+              }
+              if (defBtn.cat === 'clearOverlays') {
+                if (window.RCEtabsView) window.RCEtabsView.clearOverlays(this);
+                return;
+              }
+              if (defBtn.cat === 'shellForces') {
+                if (window.RCEtabsView) (window.RCEtabsView.openShellForcesDialog || window.RCEtabsView.showShellForces)(this);
+                return;
+              }
+              if (defBtn.cat === 'supportReactions') {
+                if (window.RCEtabsView) (window.RCEtabsView.openSupportReactionsDialog || window.RCEtabsView.showSupportReactions)(this);
+                return;
+              }
+              if (defBtn.cat === 'displayDesignInfo') {
+                if (window.RCEtabsView) window.RCEtabsView.openDisplayDesignInfoDialog(this);
+                return;
+              }
+              if (defBtn.cat === 'memberDesignDetails') {
+                if (window.RCEtabsView) window.RCEtabsView.openMemberDesignWindow(this);
+                return;
+              }
+              if (defBtn.cat === 'windowLayout') {
+                if (window.RCWindows) window.RCWindows.openLayoutDialog(this);
+                return;
+              }
               const isRCModel = ['runAnalysis', 'forceTable', 'assignJointLoads', 'assignPointSpring', 'rsAnalysis', 'thAnalysis', 'storyResults', 'storyReplicate', 'designOptimize'].includes(defBtn.cat);
               const isRCColSlab = ['punchingDesign', 'sbeCheck', 'footingDesign'].includes(defBtn.cat);
-              if (defBtn.cat === 'designView') { this.toggleDesignView(); return; }
-              if (defBtn.cat === 'centerlineView' || defBtn.cat === 'resultsView' || defBtn.cat === 'slabDesignView') {
+              if (defBtn.cat === 'slabDesign' || defBtn.cat === 'slabDesignView') {
+                if (window.RCEtabsView) { window.RCEtabsView.openSlabDesignDialog(this); return; }
+              }
+              if (defBtn.cat === 'centerlineView' || defBtn.cat === 'resultsView') {
                 if (window.RCView) RCView.open(this, defBtn.cat); return;
               }
               const isRCInfo = defBtn.cat === 'elementInfo';
@@ -6699,6 +6751,16 @@ class App {
         return;
       }
 
+      // F4 shows Undeformed Shape (ETABS convention) — clears deformed shape, force diagrams, shell contours, reactions
+      if (k === 'F4') {
+        ev.preventDefault();
+        if (window.RCEtabsView) {
+          window.RCEtabsView.clearOverlays(this);
+          this.toast('Show Undeformed Shape (F4)');
+        }
+        return;
+      }
+
       // F9 toggles grid snapping (AutoCAD convention) — the status-bar
       // SNAP chip mirrors the state
       if (k === 'F9') {
@@ -6883,6 +6945,17 @@ class App {
       // ETABS-style element data: applied loads + analysis + design on pick
       if (pent && window.RCInfo && ['beam', 'column', 'wall', 'slab', 'roof'].includes(pent.type)) {
         items.push(['RC Element Data — loads · analysis · design', () => RCInfo.openForEntity(this, pent.id)]);
+      }
+      if (pent && ['beam', 'column'].includes(pent.type) && window.RCEtabsView) {
+        items.push(['Diagrams for Frame Object (Analysis Results)…', () => window.RCEtabsView.openFrameDiagramWindow(this, pent)]);
+        items.push(['Concrete Member Design Information (ACI 318-19)…', () => window.RCEtabsView.openMemberDesignWindow(this, pent)]);
+      }
+      if (pent && ['slab', 'floor', 'roof'].includes(pent.type) && window.RCEtabsView) {
+        items.push(['Concrete Slab Design Details (ACI 318-19)…', () => window.RCEtabsView.openSlabDesignDetailWindow(this, pent)]);
+        items.push(['Display Slab Design Info…', () => window.RCEtabsView.openSlabDesignDialog(this)]);
+      }
+      if (pent && ['beam', 'column', 'wall', 'slab', 'floor', 'roof'].includes(pent.type) && window.RCEtabsView) {
+        items.push(['Display Design Info…', () => window.RCEtabsView.openDisplayDesignInfoDialog(this)]);
       }
       // the whole body from one click: swept/extruded solids grabbed as one
       // (same as triple-clicking) — ready to group or convert to an element
