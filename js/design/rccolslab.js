@@ -93,14 +93,56 @@
 
       const result = root.RCSlab.punchingShear(Pu, Mux, Muy, bCol, hCol, dEff, fc, location);
 
+      // ACI 22.6.4 / ETABS drop-panel practice: with a drop, BOTH critical
+      // sections are checked — (a) at the column face with the TOTAL depth
+      // (above) and (b) at the DROP EDGE with the slab-only depth; the drop
+      // must extend > d/2 beyond the face for (a) to apply there.
+      let dropEdge = null;
+      if (hasDP) {
+        // find the drop region over this column (droppanel entity, drop
+        // column family, or an assigned DP patch) for its plan size
+        let dpl = null, dpw = null;
+        for (const dp2 of app.bim.entities) {
+          if (dp2.type === 'droppanel' && Array.isArray(dp2.params.base)
+            && Math.hypot(dp2.params.base[0] - cx, dp2.params.base[1] - cy) < 0.05
+            && Math.abs((dp2.params.base[2] || 0) + (+dp2.params.dropDepth || 0) - topZ) < 0.45) {
+            dpl = +dp2.params.planL || 1.8; dpw = +dp2.params.planW || 1.8; break;
+          }
+        }
+        if (!dpl) {
+          // mesh-derived extent: thickest cells around the column give the box
+          const thick = atTop.filter(sh => sh.t > atTop[0].t + 1e-6);
+          if (thick.length) {
+            let xa = Infinity, xb = -Infinity, ya = Infinity, yb = -Infinity;
+            for (const sh of thick) {
+              const mx = (nd[sh.n1].x + nd[sh.n3].x) / 2, my = (nd[sh.n1].y + nd[sh.n3].y) / 2;
+              xa = Math.min(xa, mx); xb = Math.max(xb, mx); ya = Math.min(ya, my); yb = Math.max(yb, my);
+            }
+            dpl = (xb - xa) + (x1 - x0) / 100; dpw = (yb - ya) + (y1 - y0) / 100; // + cell margin
+          }
+        }
+        if (dpl && dpw) {
+          const dSlab = atTop[0].t - cover - barDia / 2;
+          // treat the drop edge as a larger rectangular 'column': b1 = plan
+          // size + 2·(d/2) perimeter offset
+          const bDrop = Math.max(dpl * 1000, bCol + 2 * dSlab);
+          const hDrop = Math.max(dpw * 1000, hCol + 2 * dSlab);
+          dropEdge = root.RCSlab.punchingShear(Pu, Mux, Muy, bDrop, hDrop, dSlab, fc, location);
+        }
+      }
+      const dcrGov = Math.max(result.dcr, dropEdge ? dropEdge.dcr : 0);
+
       results.push({
         id: ent.id, bCol, hCol,
         slabT: Math.round(atTop[0].t), tAtCol: Math.round(tAtCol),
         dEff: Math.round(dEff), hasDP, location,
         Pu: Pu / 1e3, Mux: Mux / 1e6,
-        dcr: result.dcr, bo: result.bo, gammaV: result.gammaV,
-        status: result.dcr > 1 ? 'OVERSTRESSED' : 'OK',
-        note: hasDP ? 'Effective depth at drop panel — perimeter about the column face (thickened region)' : '',
+        dcr: +dcrGov.toFixed(3), bo: result.bo, gammaV: result.gammaV,
+        dcrFace: result.dcr, dcrDropEdge: dropEdge ? dropEdge.dcr : null,
+        boDrop: dropEdge ? dropEdge.bo : null,
+        status: dcrGov > 1 ? 'OVERSTRESSED' : 'OK',
+        note: hasDP ? 'two perimeters: column face (d total) ' + result.dcr.toFixed(2)
+          + (dropEdge ? ' · drop edge (d slab) ' + dropEdge.dcr.toFixed(2) : '') : '',
       });
     }
 

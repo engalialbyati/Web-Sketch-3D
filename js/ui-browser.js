@@ -245,6 +245,10 @@
       }
       app.setTool('wall');
       app.toast(`Wall tool — ${fam ? fam.name + ': ' : ''}${type.name}`);
+    } else if (catName === 'Drop Panel') {
+      if (p.planL > 0) { app.bimOptions.dropPanel = { planL: p.planL, planW: p.planW || p.planL, dropDepth: p.dropDepth || 0.15 }; }
+      app.setTool('droppanel');
+      app.toast(`Drop Panel tool — ${type.name}: click over a column`);
     } else if (catName === 'Floor' || catName === 'Slab' || catName === 'Foundation') {
       app.setTool('floor');
       app.toast(`${catName} tool — ${type.name}`);
@@ -362,7 +366,7 @@
   const CAT_COLORS = {
     cat_wall: '#7b3fa0', cat_floor: '#0e8385', cat_slab: '#5b6470',
     cat_window: '#3e66c4', cat_door: '#a3502e', cat_foundation: '#8d6e63', cat_column: '#2e7d32',
-    cat_framing: '#b35900',
+    cat_framing: '#b35900', cat_droppanel: '#5e35b1',
   };
 
   // eye / lock toggles shared by every project row (elements, grids, levels)

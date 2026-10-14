@@ -1793,7 +1793,7 @@
   // element at once.
   // ==========================================================================
 
-  const STRUCTURAL_TYPES = ['wall', 'slab', 'floor', 'roof', 'beam', 'column'];
+  const STRUCTURAL_TYPES = ['wall', 'slab', 'floor', 'roof', 'beam', 'column', 'droppanel'];
 
   // classifying signature of a drawn element: { registry, designType, dims, base }
   // dims are MILLIMETRES (display) — sections store metres internally
@@ -1823,6 +1823,18 @@
       return { registry: 'areaSections', designType: 'wall', dims: { thickness: t / 1000 },
         type: 'wall', base: 'W' + t, label: 'W' + t };
     }
+    // DROP PANEL (standalone tool): auto-section into the droppanel
+    // registry by dims — planL x planW x totalT (slab t + drop depth).
+    // Sync Model → Define and every placement stamp params.designSection.
+    if (ent.type === 'droppanel') {
+      const pl = +(p.planL || 1.8).toFixed(2), pw = +(p.planW || 1.8).toFixed(2);
+      const dd = +(p.dropDepth || 0.15).toFixed(2), tt = +((p.slabT || 0.2) + (p.dropDepth || 0.15)).toFixed(2);
+      return { registry: 'areaSections', designType: 'droppanel',
+        dims: { thickness: (p.dropDepth || 0.15) }, type: 'droppanel',
+        base: 'DP' + Math.round(pl * 100) + 'x' + Math.round(pw * 100) + 'x' + Math.round(tt * 100),
+        label: 'DP ' + pl + '×' + pw + ' +' + dd + ' (total ' + tt + ' m)',
+        dpDims: { planL: pl, planW: pw, totalT: tt, slabT: +(p.slabT || 0.2).toFixed(2) } };
+    }
     // slab / floor / roof → area section, type 'slab' (ETABS models roofs as slabs)
     const t = mm(p.thickness);
     if (!t) return null;
@@ -1840,6 +1852,12 @@
       const a = frameSectionProps(s), b = frameSectionProps({ type: s.type, dims: info.dims });
       return Math.abs(dd.h - info.dims.h) < 1e-6 && Math.abs(a.I33 - b.I33) < 1e-9
         && Math.abs(a.A - b.A) < 1e-9;
+    }
+    if (info.type === 'droppanel') {
+      const a2 = s.dpDims || {}, b2 = info.dpDims || {};
+      return Math.abs((a2.planL || 0) - (b2.planL || 0)) < 1e-6
+        && Math.abs((a2.planW || 0) - (b2.planW || 0)) < 1e-6
+        && Math.abs((a2.totalT || 0) - (b2.totalT || 0)) < 1e-6;
     }
     return Math.abs((s.thickness || 0) - info.dims.thickness) < 1e-6;
   }
@@ -1871,8 +1889,9 @@
           modifiers: { a: 1, as2: 1, as3: 1, torsion: 1, i22: 1, i33: 1, mass: 1, weight: 1 },
           autoBase: info.base, autoList: [], autoStart: '',
           rebar: JSON.parse(JSON.stringify(d.frameSections[0].rebar)) }
-      : { name: uniqueName(list, info.base), type: info.type, material: defaultConcrete(d),
-          thickness: info.dims.thickness, ribs: null, autoBase: info.base };
+      : Object.assign({ name: uniqueName(list, info.base), type: info.type, material: defaultConcrete(d),
+          thickness: info.dims.thickness, ribs: null, autoBase: info.base },
+          info.dpDims ? { dpDims: { ...info.dpDims } } : {});
     list.push(s);
     ent.params.designSection = s.name;
     return s.name;

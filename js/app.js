@@ -422,7 +422,7 @@ const RIBBON_TABS = {
   model: { label: 'Model', groups: [
     { title: 'Select', tools: ['select', 'edgeselect'] },
     { title: '3D Forms', tools: ['pushpull', 'extrude', 'revolve', 'followme'] },
-    { title: 'Building', tools: ['wall', 'floor', 'column', 'beam', 'roof', 'stairs'] },
+    { title: 'Building', tools: ['wall', 'floor', 'column', 'beam', 'droppanel', 'roof', 'stairs'] },
     { title: 'Solids', tools: ['solid-union', 'solid-subtract', 'solid-trim', 'solid-intersect', 'solid-split', 'solid-shell'] },
     { title: 'Transform', tools: ['move', 'align', 'rotate', 'scale', 'mirror', 'array', 'resize'] },
     { title: 'Tools', tools: ['paint', 'eraser', 'trim'] },
@@ -2671,6 +2671,43 @@ class BimEntityManager {
     return { made, picked: picked.length, paramsOnly, skippedWalls };
   }
 
+  // Drop panel rebuild from params (Entity Info edits): a fresh box
+  // centered at base, top at base.z (flush under the slab soffit), extruded
+  // DOWN by dropDepth. Same claim rule as placement (unstamped new faces).
+  rebuildDropPanelEntity(id) {
+    const ent = this.entities.find(e2 => e2.id === id);
+    if (!ent || !ent.params || !Array.isArray(ent.params.base)) return false;
+    const app = window.app;
+    const p = ent.params;
+    const m = this.model, G = window.G;
+    const [cx, cy, zTop] = p.base;
+    const pl = +p.planL || 1.8, pw = +p.planW || 1.8, dd = +p.dropDepth || 0.15;
+    return app.transaction.run('drop panel edit', mm => {
+      this.detach(id);
+      const before = new Set(m.faces.keys());
+      mm.bimHold = true;
+      try {
+        const ring = [
+          G.v(cx - pl / 2, cy - pw / 2, zTop), G.v(cx + pl / 2, cy - pw / 2, zTop),
+          G.v(cx + pl / 2, cy + pw / 2, zTop), G.v(cx - pl / 2, cy + pw / 2, zTop)];
+        const f = m.addFaceFromRings(ring);
+        if (!f) throw new Error('degenerate');
+        if (!m.pushPull(f, -dd)) throw new Error('extrude failed');
+      } finally { mm.bimHold = false; }
+      const newFaces = [...m.faces.keys()].filter(fid => !before.has(fid))
+        .map(fid => m.faces.get(fid)).filter(f2 => f2 && !f2.userData);
+      const roles = {};
+      for (const f2 of newFaces) {
+        const c = m.faceCentroid(f2);
+        roles[f2.id] = Math.abs(c.z - zTop) < 1e-6 ? 'top'
+          : Math.abs(c.z - (zTop - dd)) < 1e-6 ? 'bottom' : 'side';
+      }
+      ent.faces = newFaces.map(f2 => f2.id);
+      for (const f2 of newFaces) f2.userData = { bimEntityId: id, bimType: 'droppanel', role: roles[f2.id] };
+      return true;
+    }) === true;
+  }
+
   rebuildColumnEntity(id) {
     const ent = this.getEntityById(id);
     if (!ent || ent.type !== 'column') return false;
@@ -3754,6 +3791,7 @@ class App {
     const DESIGNED = ent => !!ent && (
       ent.type === 'column' || ent.type === 'beam' ||
       ent.type === 'slab' || ent.type === 'floor' ||
+      ent.type === 'droppanel' ||
       ent.type === 'foundation' ||
       (ent.type === 'wall' && ent.params && ent.params.shearWall));
     v.elementFilter = ent => DESIGNED(ent);
@@ -9561,6 +9599,7 @@ class App {
           value: p.locationLine || 'center',
           options: [['center', 'Center'], ['left', 'Left Face'], ['right', 'Right Face']] } : null]; break;
       case 'floor': case 'slab': list = [num('thickness', 'Thickness m', 0.01)]; break;
+      case 'droppanel': list = [num('planL', 'Plan L m', 0.05), num('planW', 'Plan W m', 0.05), num('dropDepth', 'Drop Depth m', 0.05)]; break;
       case 'door': case 'window':
         list = [num('width', 'Width m', 0.05), num('height', 'Height m', 0.05), num('sillHeight', 'Sill m', 0.05)];
         break;
@@ -9652,6 +9691,7 @@ class App {
       case 'column': return !!this.bim.rebuildColumnEntity(ent.id);
       case 'beam': return !!this.bim.rebuildBeamEntity(ent.id);
       case 'floor': case 'slab': return !!this.bim.rebuildFloorEntity(ent.id);
+      case 'droppanel': return !!this.bim.rebuildDropPanelEntity(ent.id);
       case 'door': case 'window': {
         const host = this.bim.getEntityById(p.hostWallId);
         return !!host && !!this.bim.rebuildWallWithHosts(host.id);

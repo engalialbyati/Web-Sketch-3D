@@ -44,6 +44,7 @@
   // returns { nodes, frames, memberLoads, patterns, skipped, map } — the
   // map ties each analyzed frame element back to its bim entity.
   function buildModel(app) {
+
     const d = RD().ensure(app);
     const ents = app.bim.entities.filter(e => e.type === 'beam' || e.type === 'column');
     const nodes = [], nodeKey = new Map(), frames = [], map = [];
@@ -211,6 +212,14 @@
       // analytical model entirely. Only SHEAR WALLS (the wall's Shear Wall
       // checkbox) mesh as shells and carry load.
       if (ent.type === 'wall' && !ent.params.shearWall) { skipped.walls++; continue; }
+      if (ent.type === 'droppanel') continue; // thickness modifier, not a panel
+      if (ent.type === 'slab') {
+        // a slab patch ASSIGNED a droppanel section is a MARKER for the
+        // covering slab's thickened zone — meshing it too would double the
+        // stiffness and weight (the pre-existing latent bug)
+        const s2 = d.areaSections.find(a => a.name === ent.params.designSection);
+        if (s2 && s2.type === 'droppanel') continue;
+      }
       if (ent.type !== 'slab' && ent.type !== 'floor' && ent.type !== 'roof' && ent.type !== 'wall') continue;
       const mat = matFor(ent);
       if (!mat) continue;
@@ -286,6 +295,18 @@
         const dropPanels = [];
         const tMM = t; // this slab's thickness, mm
         for (const dpEnt of app.bim.entities) {
+          if (dpEnt.type === 'droppanel') {
+            // STANDALONE Drop Panel entity (Drop Panel tool): thicken the
+            // covering slab — never meshed as its own patch (no double count)
+            if (Math.abs((dpEnt.params.base ? dpEnt.params.base[2] : -1) + (+dpEnt.params.dropDepth || 0) - zLvl) > 0.45) continue;
+            dropPanels.push({
+              x: dpEnt.params.base[0], y: dpEnt.params.base[1], z: zLvl,
+              planL: +dpEnt.params.planL || 1.8,
+              planW: +dpEnt.params.planW || 1.8,
+              totalT: tMM + (+dpEnt.params.dropDepth || 0.15) * 1000,
+            });
+            continue;
+          }
           if (dpEnt.type !== 'slab') continue;
           if (!dpEnt.params.designSection) continue;
           const dpSec = d.areaSections.find(a => a.name === dpEnt.params.designSection);
@@ -363,9 +384,10 @@
             for (let j2 = 0; j2 < NY; j2++) {
               const a = grid[i2][j2], b2 = grid[i2 + 1][j2], c2 = grid[i2 + 1][j2 + 1], dd = grid[i2][j2 + 1];
               if (a == null || b2 == null || c2 == null || dd == null) continue;
-              // drop panel thickness override: check if cell center is inside a drop panel
+              // drop panel thickness override: cell center vs drop footprint.
+              // a/b2/c2/dd are node INDICES — coordinates live in nodes[]
               let cellT = t;
-              const cellCx = (a.x + c2.x) / 2, cellCy = (a.y + c2.y) / 2;
+              const cellCx = (nodes[a].x + nodes[c2].x) / 2, cellCy = (nodes[a].y + nodes[c2].y) / 2;
               for (const dp of dropPanels) {
                 const inDP = Math.abs(cellCx - dp.x) <= dp.planL / 2 && Math.abs(cellCy - dp.y) <= dp.planW / 2;
                 if (inDP) { cellT = dp.totalT; break; }
