@@ -117,12 +117,46 @@
       const a = acc.get(key) || { type: ent.type, sec: secName, mat: matName, n: 0, vol: 0 };
       a.n++; a.vol += vol;
       acc.set(key, a);
+      void 0;
+    }
+    // QUANTITY-SURVEY ADJUSTMENT: columns bill only their clear length
+    // (slab + drop panels deducted, counted once); drop panels appear as
+    // their own line with true shape areas (circle/ellipse honored)
+    const app2 = window.app;
+    for (const [k2, a2] of [...acc.entries()]) {
+      if (a2.type === 'column' && app2 && app2.takeoffColumnLength) {
+        let clear = 0;
+        for (const e of app2.bim.entities)
+          if (e.type === 'column') clear += app2.takeoffColumnLength(e).len;
+        const gross = a2.vol;
+        const areaPer = gross / Math.max(a2.n, 1) / (() => {
+          // average column height from entities
+          const cols = app2.bim.entities.filter(e => e.type === 'column');
+          const hts = cols.map(e => +e.params.height || 3);
+          return hts.reduce((x, y) => x + y, 0) / Math.max(hts.length, 1);
+        })();
+        a2.vol = areaPer * (clear / Math.max(a2.n, 1));
+        a2.deduct = +(gross - a2.vol).toFixed(2);
+      }
+      if (a2.type === 'droppanel') {
+        // recompute with true shape area instead of the mesh bbox
+        let trueVol = 0;
+        for (const e of app2.bim.entities) {
+          if (e.type !== 'droppanel') continue;
+          const p2 = e.params;
+          const shp = p2.shape || 'rect';
+          const area = shp === 'rect' ? (p2.planL || 1.8) * (p2.planW || 1.8)
+            : Math.PI / 4 * (p2.planL || 1.8) * (p2.planW || 1.8);
+          trueVol += area * (+p2.dropDepth || 0.15);
+        }
+        a2.vol = trueVol;
+      }
     }
     return {
       name: 'Material List by Object Type',
-      headers: ['Type', 'Section', 'Material', 'Count', 'Total Volume (m³)'],
+      headers: ['Type', 'Section', 'Material', 'Count', 'Total Volume (m³)', 'Deducted (m³)'],
       rows: [...acc.values()].sort((a, b) => b.vol - a.vol)
-        .map(a => [a.type, a.sec, a.mat, a.n, `<b>${a.vol.toFixed(2)}</b>`]),
+        .map(a => [a.type, a.sec, a.mat, a.n, `<b>${a.vol.toFixed(2)}</b>`, a.deduct != null ? a.deduct : '']),
     };
   }
 

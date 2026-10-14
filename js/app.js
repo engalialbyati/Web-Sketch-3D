@@ -2682,14 +2682,24 @@ class BimEntityManager {
     const m = this.model, G = window.G;
     const [cx, cy, zTop] = p.base;
     const pl = +p.planL || 1.8, pw = +p.planW || 1.8, dd = +p.dropDepth || 0.15;
+    const shp = p.shape || 'rect';
+    const makeRing = () => {
+      if (shp === 'rect')
+        return [G.v(cx - pl / 2, cy - pw / 2, zTop), G.v(cx + pl / 2, cy - pw / 2, zTop),
+          G.v(cx + pl / 2, cy + pw / 2, zTop), G.v(cx - pl / 2, cy + pw / 2, zTop)];
+      const pts = [];
+      for (let i = 0; i < 32; i++) {
+        const a = 2 * Math.PI * i / 32;
+        pts.push(G.v(cx + (pl / 2) * Math.cos(a), cy + (pw / 2) * Math.sin(a), zTop));
+      }
+      return pts;
+    };
     return app.transaction.run('drop panel edit', mm => {
       this.detach(id);
       const before = new Set(m.faces.keys());
       mm.bimHold = true;
       try {
-        const ring = [
-          G.v(cx - pl / 2, cy - pw / 2, zTop), G.v(cx + pl / 2, cy - pw / 2, zTop),
-          G.v(cx + pl / 2, cy + pw / 2, zTop), G.v(cx - pl / 2, cy + pw / 2, zTop)];
+        const ring = makeRing();
         const f = m.addFaceFromRings(ring);
         if (!f) throw new Error('degenerate');
         if (!m.pushPull(f, -dd)) throw new Error('extrude failed');
@@ -4805,6 +4815,47 @@ class App {
     this.toast(`${n} element${n === 1 ? '' : 's'} moved to layer "${ly.name}"`);
   }
   /** Quantities for the properties panel and the database record. */
+  // QUANTITY TAKEOFF DEDUCTION (ETABS-style priority): concrete is counted
+  // once — the column's billable length runs from base to the SOFFIT of the
+  // slab (minus drop panels) covering its top; slabs and drop panels carry
+  // their own volumes. Analysis and design are NOT affected: the model and
+  // the FEA keep the full drawn height (buildModel reads base+height).
+  takeoffColumnLength(ent) {
+    const p = ent.params || {};
+    const base = Array.isArray(p.base) ? p.base : null;
+    if (!base) return { len: +p.height || 3, deduct: 0 };
+    const topZ = base[2] + (+p.height || 3);
+    let deduct = 0;
+    const cx = base[0], cy = base[1];
+    for (const o of this.bim.entities) {
+      if (o.type === 'slab' || o.type === 'floor' || o.type === 'roof') {
+        const zLvl = o.params.baseLevel != null ? this.levelManager.getElevation(o.params.baseLevel)
+          : (Array.isArray((o.params.regions || [])[0]?.outer) ? o.params.regions[0].outer[0][2] : 0);
+        if (Math.abs(zLvl - topZ) > 0.05) continue;
+        const covers = (o.params.regions || []).some(reg => {
+          const ring = reg.outer || [];
+          let inside = false;
+          for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, yi] = ring[i], [xj, yj] = ring[j];
+            if (((yi > cy) !== (yj > cy)) && (cx < (xj - xi) * (cy - yi) / (yj - yi) + xi)) inside = !inside;
+          }
+          return inside;
+        });
+        if (covers) deduct += (o.params.thickness || 0.2);
+      } else if (o.type === 'droppanel' && Array.isArray(o.params.base)) {
+        // drop sits under the slab soffit: base[2] = zLvl - slabT
+        const zb = o.params.base[2];
+        if (zb + 1e-6 < topZ && zb + (+o.params.dropDepth || 0.15) + 1e-6 >= topZ - 0.5) {
+          // plan containment by bounding box (any shape)
+          const half = Math.max(+o.params.planL || 1.8, +o.params.planW || 1.8) / 2;
+          if (Math.hypot(o.params.base[0] - cx, o.params.base[1] - cy) <= half)
+            deduct += (+o.params.dropDepth || 0.15);
+        }
+      }
+    }
+    return { len: Math.max(0.1, (+p.height || 3) - deduct), deduct: +deduct.toFixed(3) };
+  }
+
   elementQuantities(ent) {
     const m = this.model;
     const faces = ent.faces.map(id => m.faces.get(id)).filter(Boolean);
@@ -4816,6 +4867,14 @@ class App {
     }
     let volume = null;
     if (faces.length && m.shellOpenEdges(ent.faces) === 0) volume = m.shellVolume(ent.faces);
+    // BILLABLE volume: columns deduct the slab + drop concrete that overlaps
+    // them (quantity-survey rule); everything else reports its solid volume
+    let billable = volume;
+    if (ent.type === 'column') {
+      const t = this.takeoffColumnLength(ent);
+      const p = ent.params || {};
+      billable = (p.width || 0.3) * (p.depth || 0.3) * t.len;
+    }
     const vids = new Set();
     for (const f of faces) for (const ring of m.rings(f)) ring.forEach(v => vids.add(v));
     const bb = vids.size ? m.bbox([...vids]) : null;
@@ -4825,6 +4884,7 @@ class App {
       gross: area + openings,
       openings,
       volume,
+      billable,    // column: slab+drop deducted; others: = volume
       bbox: bb ? {
         min: [bb.min.x, bb.min.y, bb.min.z], max: [bb.max.x, bb.max.y, bb.max.z],
         size: [bb.size.x, bb.size.y, bb.size.z],
@@ -9599,7 +9659,10 @@ class App {
           value: p.locationLine || 'center',
           options: [['center', 'Center'], ['left', 'Left Face'], ['right', 'Right Face']] } : null]; break;
       case 'floor': case 'slab': list = [num('thickness', 'Thickness m', 0.01)]; break;
-      case 'droppanel': list = [num('planL', 'Plan L m', 0.05), num('planW', 'Plan W m', 0.05), num('dropDepth', 'Drop Depth m', 0.05)]; break;
+      case 'droppanel': list = [
+        { key: 'shape', label: 'Shape', kind: 'select', value: p.shape || 'rect',
+          options: [['rect', 'Rectangular'], ['circle', 'Circular'], ['ellipse', 'Elliptical']] },
+        num('planL', 'Plan L / Ø m', 0.05), num('planW', 'Plan W m', 0.05), num('dropDepth', 'Drop Depth m', 0.05)]; break;
       case 'door': case 'window':
         list = [num('width', 'Width m', 0.05), num('height', 'Height m', 0.05), num('sillHeight', 'Sill m', 0.05)];
         break;

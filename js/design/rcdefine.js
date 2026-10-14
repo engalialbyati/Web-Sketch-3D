@@ -1829,11 +1829,14 @@
     if (ent.type === 'droppanel') {
       const pl = +(p.planL || 1.8).toFixed(2), pw = +(p.planW || 1.8).toFixed(2);
       const dd = +(p.dropDepth || 0.15).toFixed(2), tt = +((p.slabT || 0.2) + (p.dropDepth || 0.15)).toFixed(2);
+      const shp = p.shape || 'rect';
+      const tag = shp === 'circle' ? 'D' + Math.round(pl * 100) : shp === 'ellipse' ? 'E' + Math.round(pl * 100) + 'x' + Math.round(pw * 100) : Math.round(pl * 100) + 'x' + Math.round(pw * 100);
+      const label = shp === 'circle' ? `DP Ø${pl} +${dd} (total ${tt} m)` : shp === 'ellipse' ? `DP ${pl}×${pw} ellipse +${dd} (total ${tt} m)` : `DP ${pl}×${pw} +${dd} (total ${tt} m)`;
       return { registry: 'areaSections', designType: 'droppanel',
         dims: { thickness: (p.dropDepth || 0.15) }, type: 'droppanel',
-        base: 'DP' + Math.round(pl * 100) + 'x' + Math.round(pw * 100) + 'x' + Math.round(tt * 100),
-        label: 'DP ' + pl + '×' + pw + ' +' + dd + ' (total ' + tt + ' m)',
-        dpDims: { planL: pl, planW: pw, totalT: tt, slabT: +(p.slabT || 0.2).toFixed(2) } };
+        base: 'DP' + tag + 'x' + Math.round(tt * 100),
+        label,
+        dpDims: { planL: pl, planW: pw, totalT: tt, slabT: +(p.slabT || 0.2).toFixed(2), shape: shp } };
     }
     // slab / floor / roof → area section, type 'slab' (ETABS models roofs as slabs)
     const t = mm(p.thickness);

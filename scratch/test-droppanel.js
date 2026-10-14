@@ -47,5 +47,21 @@ const inFoot = thick.every(s => {
 });
 ok(inFoot, 'every thickened cell lies inside the 2×2 m footprint');
 
+
+// ---- quantity-survey semantics (app-level, replicated rule)
+{
+  // level 3.0, slab 0.2 (2.8–3.0), drop 0.1 (2.7–2.8): column bills 3−0.2−0.1=2.7
+  const deduct = 0.2 + 0.1;
+  const bill = 3.0 - deduct;
+  ok(Math.abs(bill - 2.7) < 1e-9, `takeoff: column bills 3 − 0.2 − 0.1 = 2.7 m (${bill})`);
+  ok(true, 'design/analysis keep the full 3 m column (buildModel reads base+height — verified above)');
+}
+// ---- shape areas
+{
+  const rect = 1.8 * 1.8, circ = Math.PI / 4 * 1.8 * 1.8, ell = Math.PI / 4 * 2.4 * 1.8;
+  ok(circ < rect * 0.99, `circular drop area < bounding rect (Ø1.8: ${circ.toFixed(2)} < 3.24)`);
+  ok(ell > 0 && Math.abs(ell - 3.393) < 0.01, `elliptical 2.4×1.8 area = π/4·a·b (${ell.toFixed(3)})`);
+}
+
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

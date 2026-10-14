@@ -246,7 +246,7 @@
       app.setTool('wall');
       app.toast(`Wall tool — ${fam ? fam.name + ': ' : ''}${type.name}`);
     } else if (catName === 'Drop Panel') {
-      if (p.planL > 0) { app.bimOptions.dropPanel = { planL: p.planL, planW: p.planW || p.planL, dropDepth: p.dropDepth || 0.15 }; }
+      if (p.planL > 0) { app.bimOptions.dropPanel = { shape: p.shape || 'rect', planL: p.planL, planW: p.planW || p.planL, dropDepth: p.dropDepth || 0.15 }; }
       app.setTool('droppanel');
       app.toast(`Drop Panel tool — ${type.name}: click over a column`);
     } else if (catName === 'Floor' || catName === 'Slab' || catName === 'Foundation') {

@@ -18,7 +18,25 @@
 // ---------------------------------------------------------------------------
 (function () {
 
-  const DEFAULTS = { planL: 1.8, planW: 1.8, dropDepth: 0.15 };
+  const DEFAULTS = { planL: 1.8, planW: 1.8, dropDepth: 0.15, shape: 'rect' };
+
+  // plan ring by shape — ETABS draws drops as AREA OBJECTS (eSlabType.Drop,
+  // CSiAPIv1): the outline is the shape. Circle = 32-gon, ellipse = axes.
+  // The analytical footprint stays the bounding box (rectilinear mesh).
+  function dropRing(cx, cy, zTop, s) {
+    const G = window.G;
+    if ((s.shape || 'rect') === 'rect')
+      return [
+        G.v(cx - s.planL / 2, cy - s.planW / 2, zTop), G.v(cx + s.planL / 2, cy - s.planW / 2, zTop),
+        G.v(cx + s.planL / 2, cy + s.planW / 2, zTop), G.v(cx - s.planL / 2, cy + s.planW / 2, zTop)];
+    const pts = [];
+    const N = 32;
+    for (let i = 0; i < N; i++) {
+      const a = 2 * Math.PI * i / N;
+      pts.push(G.v(cx + (s.planL / 2) * Math.cos(a), cy + (s.planW / 2) * Math.sin(a), zTop));
+    }
+    return pts;
+  }
 
   // covering slab at a level: its thickness (slabs extrude DOWN from the
   // level plane) — the drop hangs flush under the soffit
@@ -51,7 +69,7 @@
     get hint() {
       const app = this.app, o = app.bimOptions || {};
       const st = this.state || {};
-      const s = Object.assign({}, DEFAULTS, { planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, o.dropPanel || {});
+      const s = Object.assign({}, DEFAULTS, { shape: st.shape, planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, o.dropPanel || {});
       const lvl = app.levelManager.getLevel(app.bimOptions.baseLevel);
       return `Drop Panel: click over a column to place a ${s.planL.toFixed(2)} × ${s.planW.toFixed(2)} m panel, ` +
         `+${s.dropDepth.toFixed(2)} m drop under the ${lvl ? lvl.name : 'level'} slab soffit. ` +
@@ -66,19 +84,17 @@
       view.clearPreview();
       app.view.showSnapDot(inf.kind === 'axis' || inf.kind === 'free' ? null : inf.p, inf.kind);
       const st = this.state || {};
-      const s = Object.assign({}, DEFAULTS, { planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, (app.bimOptions || {}).dropPanel || {});
+      const s = Object.assign({}, DEFAULTS, { shape: st.shape, planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, (app.bimOptions || {}).dropPanel || {});
       const z = app.levelManager.getElevation(app.bimOptions.baseLevel);
       const slab = coveringSlab(app, inf.p.x, inf.p.y, z);
       const t = slab ? (slab.params.thickness || 0.2) : 0.2;
       const zTop = z - t, zBot = zTop - s.dropDepth;
-      const a = G.v(inf.p.x - s.planL / 2, inf.p.y - s.planW / 2, zTop);
-      const b = G.v(inf.p.x + s.planL / 2, inf.p.y - s.planW / 2, zTop);
-      const c = G.v(inf.p.x + s.planL / 2, inf.p.y + s.planW / 2, zTop);
-      const d = G.v(inf.p.x - s.planL / 2, inf.p.y + s.planW / 2, zTop);
-      view.previewLoop([a, b, c, d], 0x7c4dff);
-      view.previewQuadsBetween([a, b, c, d], [a, b, c, d].map(q => G.v(q.x, q.y, zBot)), 0x7c4dff, 0.35);
+      const ring = dropRing(inf.p.x, inf.p.y, zTop, s);
+      view.previewLoop(ring, 0x7c4dff);
+      view.previewQuadsBetween(ring, ring.map(q => G.v(q.x, q.y, zBot)), 0x7c4dff, 0.35);
+      const shp = s.shape === 'circle' ? `Ø${s.planL.toFixed(2)}` : s.shape === 'ellipse' ? `${s.planL.toFixed(2)}×${s.planW.toFixed(2)} ellipse` : `${s.planL.toFixed(2)}×${s.planW.toFixed(2)}`;
       view.stickyLabel(G.v(inf.p.x, inf.p.y, zTop),
-        `Drop ${s.planL.toFixed(2)}×${s.planW.toFixed(2)} +${s.dropDepth.toFixed(2)}${slab ? ' — on ' + slab.id : ''}`,
+        `Drop ${shp} +${s.dropDepth.toFixed(2)}${slab ? ' — on ' + slab.id : ''}`,
         '#5e35b1', 0, 0);
       this._last = { p: inf.p, z, slab };
     }
@@ -88,7 +104,7 @@
       const lastPick = this._last;
       if (!lastPick) return;
       const st = this.state || {};
-      const s = Object.assign({}, DEFAULTS, { planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, (app.bimOptions || {}).dropPanel || {});
+      const s = Object.assign({}, DEFAULTS, { shape: st.shape, planL: st.planL, planW: st.planW, dropDepth: st.dropDepth }, (app.bimOptions || {}).dropPanel || {});
       const zLvl = app.levelManager.getElevation(app.bimOptions.baseLevel);
       const slab = coveringSlab(app, lastPick.p.x, lastPick.p.y, zLvl);
       const slabT = slab ? (slab.params.thickness || 0.2) : 0.2;
@@ -96,6 +112,7 @@
       const params = {
         base: [st.p.x, st.p.y, zTop],                  // top center of the drop
         planL: s.planL, planW: s.planW, dropDepth: s.dropDepth,
+        shape: s.shape || 'rect',
         slabT,
         baseLevel: app.bimOptions.baseLevel,
         hostSlabId: slab ? slab.id : null,
@@ -105,12 +122,7 @@
       app.transaction.run('drop panel', mm => {
         mm.bimHold = true;   // the drop deliberately touches the slab above
         try {
-          const ring = [
-            G.v(lastPick.p.x - s.planL / 2, lastPick.p.y - s.planW / 2, zTop),
-            G.v(lastPick.p.x + s.planL / 2, lastPick.p.y - s.planW / 2, zTop),
-            G.v(lastPick.p.x + s.planL / 2, lastPick.p.y + s.planW / 2, zTop),
-            G.v(lastPick.p.x - s.planL / 2, lastPick.p.y + s.planW / 2, zTop),
-          ];
+          const ring = dropRing(lastPick.p.x, lastPick.p.y, zTop, s);
           const f = m.addFaceFromRings(ring);
           if (!f) throw new Error('drop panel ring degenerate');
           if (!m.pushPull(f, -s.dropDepth)) throw new Error('drop extrusion failed');
@@ -160,11 +172,13 @@
       mode: 'bim',
       commands: ['dp', 'droppanel'],
       options: [
-        { key: 'planL', type: 'number', label: 'Plan L', step: 0.1, default: 1.8 },
+        { key: 'shape', type: 'select', label: 'Shape',
+          choices: [{ value: 'rect', label: 'Rectangular' }, { value: 'circle', label: 'Circular' }, { value: 'ellipse', label: 'Elliptical' }] },
+        { key: 'planL', type: 'number', label: 'Plan L / Ø', step: 0.1, default: 1.8 },
         { key: 'planW', type: 'number', label: 'Plan W', step: 0.1, default: 1.8 },
         { key: 'dropDepth', type: 'number', label: 'Drop', step: 0.05, default: 0.15 },
       ],
-      state: { planL: 1.8, planW: 1.8, dropDepth: 0.15 },
+      state: { shape: 'rect', planL: 1.8, planW: 1.8, dropDepth: 0.15 },
       icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="5" y="7" width="14" height="4" rx="1"/><path d="M8 11v5M12 11v5M16 11v5"/><path d="M5 7h14" stroke-dasharray="2 2"/></svg>',
     });
   }
