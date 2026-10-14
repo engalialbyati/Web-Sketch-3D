@@ -601,13 +601,13 @@
     }
   }
 
-  function frameSectionEditor(app, d, idx) {
+  function frameSectionEditor(app, d, idx, sOverride) {
     const isNew = idx < 0;
-    const s = isNew
+    const s = sOverride || (isNew
       ? { name: uniqueName(d.frameSections, 'FSEC'), type: 'rect', designType: 'beam', material: 'CONC25',
           dims: {}, modifiers: { a: 1, as2: 1, as3: 1, torsion: 1, i22: 1, i33: 1, mass: 1, weight: 1 }, autoList: [], autoStart: '',
           rebar: JSON.parse(JSON.stringify(d.frameSections[0].rebar)) }
-      : JSON.parse(JSON.stringify(d.frameSections[idx]));
+      : JSON.parse(JSON.stringify(d.frameSections[idx])));
     if (!s.dims) s.dims = {};
     if (!s.modifiers) s.modifiers = { a: 1, i22: 1, i33: 1, mass: 1, weight: 1 };
     const concMats = d.materials.filter(m => m.type === 'concrete').map(m => m.name);
@@ -672,6 +672,17 @@
       }],
       ['Cancel', null],
     ]);
+    // LIVE TYPE SWITCH — same contract as the area editor: geometry fields
+    // exist per type (rect b/h, circle D, T bf/tf/tw...), so switching the
+    // dropdown re-renders the editor with everything typed so far kept
+    const typeSel = document.getElementById('s-type');
+    if (typeSel) typeSel.addEventListener('change', () => {
+      s.name = txt('s-name', s.name) || s.name;
+      s.designType = txt('s-dt', s.designType);
+      s.material = txt('s-mat', s.material);
+      s.type = typeSel.value;
+      frameSectionEditor(app, d, idx, s);
+    });
   }
 
   function renderFrameSections(app) {
@@ -707,11 +718,11 @@
   }
 
   // ========================================================= AREA SECTIONS ==
-  function areaSectionEditor(app, d, idx) {
+  function areaSectionEditor(app, d, idx, sOverride) {
     const isNew = idx < 0;
-    const s = isNew
+    const s = sOverride || (isNew
       ? { name: uniqueName(d.areaSections, 'ASEC'), type: 'slab', material: 'CONC25', thickness: 0.2, ribs: null }
-      : JSON.parse(JSON.stringify(d.areaSections[idx]));
+      : JSON.parse(JSON.stringify(d.areaSections[idx])));
     const concMats = d.materials.filter(m => m.type === 'concrete').map(m => m.name);
     const isRib = s.type === 'ribbedslab' || s.type === 'waffleslab';
     s.ribs = s.ribs || { spacing: 0.9, ribWidth: 0.15, ribDepth: 0.35, topping: 0.06 };
@@ -755,6 +766,22 @@
       }],
       ['Cancel', null],
     ]);
+    // LIVE TYPE SWITCH: the type-dependent fields (drop panel dims, rib
+    // data) only exist for their type — re-render the editor when Type
+    // changes, keeping everything typed so far (the static dialog showed
+    // only Thickness no matter what Type said)
+    const typeSel = document.getElementById('a-type');
+    if (typeSel) typeSel.addEventListener('change', () => {
+      s.name = txt('a-name', s.name) || s.name;
+      s.material = txt('a-mat', s.material);
+      s.thickness = num('a-t', s.thickness);
+      s.type = typeSel.value;
+      if (s.type === 'ribbedslab' || s.type === 'waffleslab')
+        s.ribs = s.ribs || { spacing: 0.9, ribWidth: 0.15, ribDepth: 0.35, topping: 0.06 };
+      if (s.type === 'droppanel')
+        s.dpDims = s.dpDims || { planL: 2.0, planW: 2.0, totalT: 0.35, slabT: 0.2 };
+      areaSectionEditor(app, d, idx, s);
+    });
   }
   function renderAreaSections(app) {
     const d = ensure(app);
