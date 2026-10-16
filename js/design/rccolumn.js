@@ -28,7 +28,7 @@
     const c = cover;
     const positions = [
       { x: -(b/2 - c), y: -(h/2 - c) },
-      { x: +(b/2 - c), y: -(h/2 - c) },
+      { x: +(b/2 - c), y: +(h/2 - c) },
       { x: -(b/2 - c), y: +(h/2 - c) },
       { x: +(b/2 - c), y: +(h/2 - c) },
     ];
@@ -47,28 +47,58 @@
     return bars;
   }
 
+  // Rebar/steel material record of a section (fy/fu minimum, fye/fue expected).
+  // ETABS parity, from the decompiled engine:
+  //   • STRENGTH design (ACI 318-19, j2.cs) reads the rebar material's
+  //     specified minimum Fy only — aro.j[mat].n[1].j.a (6 reads, 0 of Fye).
+  //   • The 'expected' capacity path reads Fye — aro.j[mat].n[1].j.c —
+  //     exactly what the HingeProp engine does (amn.cs:1450).
+  // Fallback preserves legacy behavior when the material record is absent
+  // (headless tests, pre-fye models): REBAR500 defaults.
+  function resolveRebarMat(app, sec) {
+    const name = sec.rebar && sec.rebar.longMat;
+    if (root.RCDefine && app && app.model) {
+      const d = root.RCDefine.ensure(app);
+      const m = (d.materials || []).find(x => x.name === name && (x.type === 'rebar' || x.type === 'steel'));
+      const t = m && (m.rebar || m.steel);
+      if (t) return {
+        fy: t.fy || 500, fu: t.fu || 550,
+        fye: t.fye > 0 ? t.fye : (t.fy || 500),
+        fue: t.fue > 0 ? t.fue : (t.fu || 550),
+        strainAtHardening: t.strainAtHardening || 0.0068,
+        strainUltimate: t.strainUltimate || 0.09,
+      };
+    }
+    return { fy: 500, fu: 550, fye: 550, fue: 605, strainAtHardening: 0.0068, strainUltimate: 0.09 };
+  }
+
   // ==================================================== P-M curve (v2)
   // Balance-anchored strain sweep, φ per point, 0.80P₀ cap,
   // displaced-concrete deduction, non-monotonic repair.
   // Memoized: identical (section, material, angle, capType) sweeps return
   // the cached curve — the optimizer re-designs every column per iteration.
   const pmCache = new Map();
-  function generatePMCurve(sec, mat, angle, nPoints = 40, capType = 'design') {
+  function generatePMCurve(sec, mat, angle, nPoints = 40, capType = 'design', rmat = null) {
     const dims = sec.dims || {};
     const fc0 = mat.conc ? mat.conc.fc : 25;
     const cov0 = (sec.rebar && sec.rebar.colCover) || 0.04;
+    // rm carries the REAL rebar strengths; the legacy fallback keeps curves
+    // identical for callers that predate the material wiring
+    const rm = rmat || { fy: 500, fye: 550 };
     const key = [sec.name || '?', dims.b, dims.h, dims.dia, fc0, cov0,
-      JSON.stringify(sec.rebar || {}), angle, nPoints, capType].join('|');
+      JSON.stringify(sec.rebar || {}), angle, nPoints, capType, rm.fy, rm.fye].join('|');
     if (pmCache.has(key)) return pmCache.get(key);
     // section dims are stored in meters (BIM units); the design math runs in mm
     const b = (dims.b || 0.3) * 1000;
     const h = (dims.h || 0.5) * 1000;
     const fc = fc0;
-    // capacity type: 'design' = φ applied + 0.80P₀ cap
-    //                'expected' = no φ, overstrength Ω = 1.25 on fy
+    // capacity type: 'design'   = φ applied + 0.80P₀ cap, SPECIFIED minimum
+    //                              fy (ETABS j2.cs strength design — Fy only)
+    //                'expected' = no φ, EXPECTED strengths fye (decompiled
+    //                              ETABS HingeProp engine reads Fye at
+    //                              amn.cs:1450; ≤0 falls back to fy, f6.cs)
     const capTypeDesign = capType === 'design';
-    const fyCap = capTypeDesign ? 500 : Math.min(500 * 1.25, 550); // expected: Ω=1.25
-    const fy = fyCap;
+    const fy = capTypeDesign ? (rm.fy || 500) : (rm.fye > 0 ? rm.fye : rm.fy || 500);
     const b1 = beta1(fc);
     const cover = (sec.rebar && sec.rebar.colCover) || 0.04;
     const bars = rebarLayout(b, h, cover * 1000, sec.rebar || {});
@@ -223,14 +253,15 @@
   // (The eccentricity-vector method needs the curve's e(θ) table; the four
   // here bound it for rectangular sections with symmetric layouts.)
   const pmSurfaceCache = new Map();
-  function generatePMSurface(sec, mat, capType, nAngles = 7) {
+  function generatePMSurface(sec, mat, capType, nAngles = 7, rmat = null) {
+    const rm = rmat || { fy: 500, fye: 550 };
     const key = [sec.name || '?', mat.conc ? mat.conc.fc : 25,
-      JSON.stringify(sec.rebar || {}), capType, nAngles].join('|');
+      JSON.stringify(sec.rebar || {}), capType, nAngles, rm.fy, rm.fye].join('|');
     if (pmSurfaceCache.has(key)) return pmSurfaceCache.get(key);
     const curves = [];
     for (let a = 0; a < nAngles; a++) {
       const ang = a * 90 / (nAngles - 1); // 0..90
-      curves.push({ ang, pts: generatePMCurve(sec, mat, ang, 30, capType) });
+      curves.push({ ang, pts: generatePMCurve(sec, mat, ang, 30, capType, rm) });
     }
     pmSurfaceCache.set(key, curves);
     return curves;
@@ -248,8 +279,8 @@
     }
     return null;
   }
-  function capacityBiaxial(sec, mat, Pu, Mx, My, capType) {
-    const curves = generatePMSurface(sec, mat, capType, 7);
+  function capacityBiaxial(sec, mat, Pu, Mx, My, capType, rmat = null) {
+    const curves = generatePMSurface(sec, mat, capType, 7, rmat);
     const Mres = Math.hypot(Mx, My);
     const PmaxC = curves[0].pts.length ? curves[0].pts[0].P : 0;
     const last = curves[0].pts.length ? curves[0].pts[curves[0].pts.length - 1].P : 0;
@@ -432,15 +463,17 @@
       if (minEcc && Mx < Pu * eMin) Mx = Pu * eMin;
       if (minEcc && My < Pu * eMin) My = Pu * eMin;
 
-      // P-M curves at 0° and 90°
-      const pm0 = generatePMCurve(sec, mat, 0, 30, capType);
-      const pm90 = generatePMCurve(sec, mat, 90, 30, capType);
+      // P-M curves at 0° and 90° — on the REAL rebar material strengths
+      // (design: specified fy; expected: fye from Define Materials)
+      const rmat = resolveRebarMat(app, sec);
+      const pm0 = generatePMCurve(sec, mat, 0, 30, capType, rmat);
+      const pm90 = generatePMCurve(sec, mat, 90, 30, capType, rmat);
 
       const cr0 = capacityRatio(Pu, Mx, pm0);
       const cr90 = capacityRatio(Pu, My, pm90);
       // biaxial surface capacity (CSiCol parity): max of the capacity methods
       // over the NA-angle curve set — governs the DCR
-      const bx = capacityBiaxial(sec, mat, Pu, Mx, My, capType);
+      const bx = capacityBiaxial(sec, mat, Pu, Mx, My, capType, rmat);
       const dcr = Math.max(bx.dcr, 0);
 
       // column shear (cDsnCodeConcRC_ACI_08.ColumnNetShearCapacity, SI)
@@ -512,7 +545,7 @@
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Capacity Type</span>' +
       '<select id="cd-captype" style="width:230px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">' +
       '<option value="design">Design (φ applied, 0.80P₀ cap)</option>' +
-      '<option value="expected">Expected (no φ, Ω=1.25 overstrength)</option></select></div>',
+      '<option value="expected">Expected strengths (Fye/Fue from Define Materials, no φ)</option></select></div>',
       '<div class="pp-row" style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:150px;flex:none;opacity:.75;font-size:12px">Min Eccentricity</span>' +
       '<input type="checkbox" id="cd-minecc" checked style="width:20px;height:20px"> <span style="font-size:11px;opacity:.7">ACI 6.2.5: e_min = h/30</span></div>',
     ].join('');
@@ -567,5 +600,5 @@
     return Math.max(0.65, Math.min(0.85, 0.85 - 0.05 * (fc - 28) / 7));
   }
 
-  root.RCColumn = { generatePMCurve, capacityRatio, designAllColumns, open, rebarLayout, beta1 };
+  root.RCColumn = { generatePMCurve, capacityRatio, designAllColumns, open, rebarLayout, beta1, resolveRebarMat };
 })(window);

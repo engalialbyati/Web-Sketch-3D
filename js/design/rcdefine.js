@@ -32,10 +32,10 @@
     { label: 'CONC C30 (normalweight)', patch: { name: 'CONC30', type: 'concrete', weight: { value: 25, as: 'weight' }, iso: { E: 0, u: 0.2, a: 9.9e-6, G: 0, auto: true }, conc: { fc: 30, lightweight: false, fcsFactor: 1, ssType: 0, ssHysType: 0, strainAtFc: 0.0022, strainUltimate: 0.0035, finalSlope: -0.1 } } },
     { label: 'CONC C35 (normalweight)', patch: { name: 'CONC35', type: 'concrete', weight: { value: 25, as: 'weight' }, iso: { E: 0, u: 0.2, a: 9.9e-6, G: 0, auto: true }, conc: { fc: 35, lightweight: false, fcsFactor: 1, ssType: 0, ssHysType: 0, strainAtFc: 0.0022, strainUltimate: 0.0035, finalSlope: -0.1 } } },
     { label: 'CONC 4000 psi (normalweight)', patch: { name: 'CONC4KSI', type: 'concrete', weight: { value: 25, as: 'weight' }, iso: { E: 0, u: 0.2, a: 9.9e-6, G: 0, auto: true }, conc: { fc: 27.6, lightweight: false, fcsFactor: 1, ssType: 0, ssHysType: 0, strainAtFc: 0.0022, strainUltimate: 0.0035, finalSlope: -0.1 } } },
-    { label: 'REBAR B500B', patch: { name: 'REBAR500', type: 'rebar', grade: 'B500B', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, rebar: { fy: 500, fu: 550, eFy: 0.0025, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.0068, strainUltimate: 0.09 } } },
-    { label: 'REBAR ASTM A615 Gr60', patch: { name: 'A615Gr60', type: 'rebar', region: 'US', standard: 'ASTM', grade: 'A615Gr60', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, rebar: { fy: 420, fu: 620, eFy: 0.0021, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.006, strainUltimate: 0.09 } } },
-    { label: 'STEEL ASTM A992 Fy50', patch: { name: 'STEEL_A992', type: 'steel', region: 'US', standard: 'ASTM', grade: 'A992', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, steel: { fy: 345, fu: 450, eFy: 0.001725, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 } } },
-    { label: 'STEEL S355', patch: { name: 'STEEL_S355', type: 'steel', region: 'EU', standard: 'EN', grade: 'S355', iso: { E: 210000, u: 0.3, a: 12e-6, G: 80769, auto: false }, weight: { value: 78.5, as: 'weight' }, steel: { fy: 355, fu: 490, eFy: 0.00169, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 } } },
+    { label: 'REBAR B500B', patch: { name: 'REBAR500', type: 'rebar', grade: 'B500B', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, rebar: { fy: 500, fu: 550, fye: 550, fue: 605, eFy: 0.0025, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.0068, strainUltimate: 0.09 } } },
+    { label: 'REBAR ASTM A615 Gr60', patch: { name: 'A615Gr60', type: 'rebar', region: 'US', standard: 'ASTM', grade: 'A615Gr60', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, rebar: { fy: 420, fu: 620, fye: 462, fue: 682, eFy: 0.0021, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.006, strainUltimate: 0.09 } } },
+    { label: 'STEEL ASTM A992 Fy50', patch: { name: 'STEEL_A992', type: 'steel', region: 'US', standard: 'ASTM', grade: 'A992', iso: { E: 200000, u: 0.3, a: 11.7e-6, G: 76923, auto: false }, weight: { value: 78.5, as: 'weight' }, steel: { fy: 345, fu: 450, fye: 379.5, fue: 495, eFy: 0.001725, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 } } },
+    { label: 'STEEL S355', patch: { name: 'STEEL_S355', type: 'steel', region: 'EU', standard: 'EN', grade: 'S355', iso: { E: 210000, u: 0.3, a: 12e-6, G: 80769, auto: false }, weight: { value: 78.5, as: 'weight' }, steel: { fy: 355, fu: 490, fye: 390.5, fue: 539, eFy: 0.00169, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 } } },
     { label: 'TENDON ASTM A416 Gr270', patch: { name: 'TENDON270', type: 'tendon', region: 'US', standard: 'ASTM', grade: 'A416Gr270', iso: { E: 195000, u: 0.3, a: 11.7e-6, G: 75000, auto: false }, weight: { value: 78.5, as: 'weight' }, tendon: { fy: 1670, fu: 1860 } } },
   ];
 
@@ -68,7 +68,7 @@
         weight: { value: 78.5, as: 'weight' },
         damping: { modalRatio: 0.05 },
         timeDep: { model: 'none' },
-        rebar: { fy: 500, fu: 550, eFy: 0.0025, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.0068, strainUltimate: 0.09 },
+        rebar: { fy: 500, fu: 550, fye: 550, fue: 605, eFy: 0.0025, eFu: 0.06, ssType: 0, ssHysType: 0, strainAtHardening: 0.0068, strainUltimate: 0.09 },
         ssCurve: [], tempProps: [],
       },
       {
@@ -78,7 +78,7 @@
         weight: { value: 78.5, as: 'weight' },
         damping: { modalRatio: 0.05 },
         timeDep: { model: 'none' },
-        steel: { fy: 345, fu: 450, eFy: 0.001725, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 },
+        steel: { fy: 345, fu: 450, fye: 379.5, fue: 495, eFy: 0.001725, eFu: 0.045, ssType: 0, ssHysType: 0, strainAtHardening: 0.008, strainAtMaxStress: 0.05, strainAtRupture: 0.14 },
         ssCurve: [], tempProps: [],
       },
     ];
@@ -172,7 +172,10 @@
     if (m.mechType === 'orthotropic') return m.ortho ? m.ortho.E11 : 0;
     return m.iso ? m.iso.E : 0;
   }
-  function matG(m) { return m.iso ? (m.iso.G || matE(m) / (2 * (1 + m.iso.u))) : 0; }
+  // G is ALWAYS derived for isotropic materials — aro.cs:15596 recomputes
+  // G = E/(2(1+ν)) on every E/ν change; a stored iso.G is only the last
+  // dialog snapshot, never an independent user input.
+  function matG(m) { return m.iso ? matE(m) / (2 * (1 + (m.iso.u || 0.2))) : 0; }
 
   // ASCE 7 design response spectrum (Sa in g, T in s) — §11.4.5
   function asceSa(fn, T) {
@@ -210,6 +213,11 @@
       if (m.damping == null) m.damping = { modalRatio: 0.05 };
       if (m.timeDep == null) m.timeDep = { model: 'none' };
       if (m.tempProps == null) m.tempProps = [];
+      // ETABS parity (f6.cs rebar migration): Fye/Fue absent or ≤0 → fall
+      // back to the specified minimum strengths Fy/Fu (0 = "not set")
+      const t = m.rebar || m.steel;
+      if (t && (t.fye == null || t.fye <= 0)) t.fye = t.fy;
+      if (t && (t.fue == null || t.fue <= 0)) t.fue = t.fu;
     }
     // migrate legacy frame sections (dims/modifiers/designType were implicit)
     for (const s of mdl.rcDesign.frameSections || []) {
@@ -302,16 +310,125 @@
       `<span style="width:160px;flex:none;opacity:.75;font-size:12px">${label}</span>${inner}</div>`;
   }
   const inp = (id, val, type = 'text', step = '') =>
-    `<input id="${id}" type="${type}" ${step ? `step="${step}" min="0"` : ''} value="${esc(val)}" style="width:140px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px">`;
+    // numeric cells are TEXT inputs (class ws-calc): type="number" rejects
+    // the '*' and '^' characters, but every numeric field is a calculator
+    // cell in ETABS (decompiled CSICommon/Calculator.cs — type
+    // 4700*(28)^0.5 and the value evaluates on exit)
+    `<input id="${id}" ${type === 'number' ? 'type="text" inputmode="decimal" class="ws-calc"' : `type="${type}"`} value="${esc(val)}" style="width:140px;padding:4px 8px;border:1px solid #c3cad1;border-radius:4px">`;
   const sel = (id, opts, cur) =>
     `<select id="${id}" style="width:150px;padding:4px 6px;border:1px solid #c3cad1;border-radius:4px">` +
     opts.map(o => `<option value="${esc(o)}"${o === cur ? ' selected' : ''}>${esc(o)}</option>`).join('') + '</select>';
   const chk = (id, on) => `<input id="${id}" type="checkbox"${on ? ' checked' : ''}>`;
   const secTitle = t => `<div style="font-weight:600;margin:9px 0 3px;font-size:12px;color:#1a3c6e">${t}</div>`;
+
+  // ============================== calculator cells =========================
+  // ETABS parity: CSICommon/Calculator.cs — CalculateFormula(Formula, …)
+  // lets any numeric edit box hold an arithmetic expression. Supported
+  // here: + - * / ^ ( ), unary ±, MOD (infix and MOD(a,b)), PI, SQRT SQR
+  // ABS SIN COS TAN ASIN ACOS ATAN HSIN HCOS HTAN LN LOG10 EXP FACT TRUNC
+  // RNDDN RNDUP ODD EVEN, and the CSI unit converters (IN2MM, FT2M, LB2KN,
+  // D2R, F2C …). Trig takes degrees, matching the edit-control default.
+  // Plain numbers pass through untouched; anything unparseable → NaN.
+  const _DEG = Math.PI / 180;
+  const CALC_FN = {
+    SQRT: Math.sqrt, SQR: x => x * x, ABS: Math.abs,
+    SIN: x => Math.sin(x * _DEG), COS: x => Math.cos(x * _DEG), TAN: x => Math.tan(x * _DEG),
+    ASIN: x => Math.asin(x) / _DEG, ACOS: x => Math.acos(x) / _DEG, ATAN: x => Math.atan(x) / _DEG,
+    HSIN: Math.sinh, HCOS: Math.cosh, HTAN: Math.tanh,
+    LN: Math.log, LOG10: Math.log10, EXP: Math.exp,
+    FACT: n => { if (n < 0 || n > 170 || Math.abs(n - Math.round(n)) > 1e-9) return NaN;
+      let r = 1; for (let i = 2; i <= Math.round(n); i++) r *= i; return r; },
+    TRUNC: Math.trunc, RNDDN: Math.floor, RNDUP: Math.ceil,
+    ODD: n => { const s = n < 0 ? -1 : 1; let r = Math.ceil(Math.abs(n)); if (!(r % 2)) r++; return s * r; },
+    EVEN: n => { const s = n < 0 ? -1 : 1; let r = Math.ceil(Math.abs(n)); if (r % 2) r++; return s * r; },
+    MOD: (a, b) => a % b,
+    IN2FT: x => x / 12, IN2MM: x => x * 25.4, IN2CM: x => x * 2.54, IN2M: x => x * 0.0254,
+    FT2IN: x => x * 12, FT2MM: x => x * 304.8, FT2CM: x => x * 30.48, FT2M: x => x * 0.3048,
+    MM2IN: x => x / 25.4, MM2FT: x => x / 304.8, MM2CM: x => x / 10, MM2M: x => x / 1000,
+    CM2IN: x => x / 2.54, CM2FT: x => x / 30.48, CM2MM: x => x * 10, CM2M: x => x / 100,
+    M2IN: x => x / 0.0254, M2FT: x => x / 0.3048, M2MM: x => x * 1000, M2CM: x => x * 100,
+    LB2K: x => x * 0.45359237, LB2N: x => x * 4.4482216153, LB2KN: x => x * 0.0044482216153,
+    LB2KGF: x => x * 0.45359237, LB2MT: x => x * 0.00045359237,
+    K2LB: x => x / 0.45359237, N2LB: x => x / 4.4482216153, KN2LB: x => x / 0.0044482216153,
+    KGF2LB: x => x / 0.45359237, MT2LB: x => x / 0.00045359237,
+    F2C: x => (x - 32) * 5 / 9, C2F: x => x * 9 / 5 + 32,
+    DF2DC: x => x * 5 / 9, DC2DF: x => x * 9 / 5,
+    D2R: x => x * _DEG, R2D: x => x / _DEG,
+  };
+  function evalFormula(src) {
+    if (src == null) return NaN;
+    const s = String(src).trim();
+    if (!s) return NaN;
+    if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s)) return parseFloat(s);
+    let i = 0;
+    const ws = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+    function expr() {
+      let v = term();
+      for (;;) {
+        ws();
+        if (s[i] === '+') { i++; v += term(); }
+        else if (s[i] === '-') { i++; v -= term(); }
+        else return v;
+      }
+    }
+    function term() {
+      let v = unary();
+      for (;;) {
+        ws();
+        if (s[i] === '*') { i++; v *= unary(); }
+        else if (s[i] === '/') { i++; v /= unary(); }
+        else if (/^MOD\b/i.test(s.slice(i))) { i += 3; v = v % unary(); }
+        else return v;
+      }
+    }
+    function unary() {
+      ws();
+      if (s[i] === '-') { i++; return -unary(); }
+      if (s[i] === '+') { i++; return unary(); }
+      return power();
+    }
+    function power() {
+      const base = primary();
+      ws();
+      if (s[i] === '^') { i++; return Math.pow(base, unary()); } // right-assoc
+      return base;
+    }
+    function primary() {
+      ws();
+      if (s[i] === '(') { i++; const v = expr(); ws(); if (s[i] !== ')') throw 0; i++; return v; }
+      const m = /^(\d+\.?\d*|\.\d+)/.exec(s.slice(i)); // group! bare ^a|b leaves the 2nd alt unanchored
+      if (m) { i += m[0].length; return parseFloat(m[0]); }
+      const id = /^[A-Za-z][A-Za-z0-9_]*/.exec(s.slice(i));
+      if (id) {
+        const name = id[0].toUpperCase(); i += id[0].length;
+        if (name === 'PI') return Math.PI;
+        ws();
+        if (s[i] === '(' && CALC_FN[name]) {
+          i++;
+          const args = [expr()];
+          ws();
+          while (s[i] === ',') { i++; args.push(expr()); ws(); }
+          if (s[i] !== ')') throw 0;
+          i++;
+          return CALC_FN[name](...args);
+        }
+        throw 0; // unknown identifier
+      }
+      throw 0;
+    }
+    try {
+      const v = expr();
+      ws();
+      if (i < s.length) return NaN; // trailing garbage
+      return v;
+    } catch (e) { return NaN; }
+  }
+
   function num(elId, fallback) {
     const el = document.getElementById(elId);
     if (!el) return fallback;
-    const v = parseFloat(el.value);
+    // calculator cell: the field may hold an expression (4700*(28)^0.5)
+    const v = evalFormula(el.value);
     return isFinite(v) ? v : fallback;
   }
   function txt(elId, fallback) {
@@ -329,14 +446,14 @@
       `</tbody></table><button id="${prefix}-add" class="dlg-btn secondary" style="padding:2px 8px;font-size:11px;margin-top:3px">+ Row</button>`;
   }
   function rowRow(prefix, r, i) {
-    return `<tr data-i="${i}"><td style="padding:1px"><input class="${prefix}-x" type="number" step="any" value="${esc(r[0])}" style="width:90px;padding:3px 6px;border:1px solid #c3cad1;border-radius:3px"></td>` +
-      `<td style="padding:1px"><input class="${prefix}-y" type="number" step="any" value="${esc(r[1])}" style="width:90px;padding:3px 6px;border:1px solid #c3cad1;border-radius:3px"></td>` +
+    return `<tr data-i="${i}"><td style="padding:1px"><input class="${prefix}-x ws-calc" type="text" inputmode="decimal" value="${esc(r[0])}" style="width:90px;padding:3px 6px;border:1px solid #c3cad1;border-radius:3px"></td>` +
+      `<td style="padding:1px"><input class="${prefix}-y ws-calc" type="text" inputmode="decimal" value="${esc(r[1])}" style="width:90px;padding:3px 6px;border:1px solid #c3cad1;border-radius:3px"></td>` +
       `<td><button data-rm="${i}" style="padding:1px 6px">×</button></td></tr>`;
   }
   function readRows(scopeEl, prefix) {
     return [...scopeEl.querySelectorAll(`#${prefix}-tbl tbody tr`)].map(tr => [
-      parseFloat(tr.querySelector(`.${prefix}-x`).value) || 0,
-      parseFloat(tr.querySelector(`.${prefix}-y`).value) || 0,
+      evalFormula(tr.querySelector(`.${prefix}-x`).value) || 0,
+      evalFormula(tr.querySelector(`.${prefix}-y`).value) || 0,
     ]);
   }
   function wireRows(app, prefix, rows) {
@@ -402,6 +519,25 @@
     if (isNew) {
       libSel = row('Add from library', sel('m-lib', ['(blank)', ...MAT_LIBRARY.map(x => x.label)], '(blank)'));
     }
+    // Live derivations for the isotropic branch (ETABS parity):
+    //   E — when "auto" is on, the computed value is DISPLAYED (ETABS shows
+    //       the calculated modulus in the field, not just a formula)
+    //   G — always derived: G = E/(2(1+ν)) (aro.cs:15596; SetMPIsotropic
+    //       has no G parameter)
+    const eLive = () => {
+      const auto = !!(document.getElementById('m-auto') && document.getElementById('m-auto').checked);
+      if (!auto) return num('m-E', m.iso.E); // manual E from the cell
+      // concrete auto-E: ACI 19.2.2.1 from the dialog's live fc/w
+      const fc = num('m-fc', m.conc ? m.conc.fc : 25);
+      const lw = !!(document.getElementById('m-lw') && document.getElementById('m-lw').checked);
+      const wv = num('m-w', m.weight.value), was = txt('m-was', m.weight.as);
+      if (lw) {
+        const wc = (was === 'weight' ? wv * 1000 / 9.81 : wv) || 2320;
+        return 0.043 * Math.pow(wc, 1.5) * Math.sqrt(fc);
+      }
+      return 4700 * Math.sqrt(fc);
+    };
+    const gLive = () => eLive() / (2 * (1 + num('m-u', m.iso.u)));
     const mech = m.mechType === 'orthotropic' ? [
       secTitle('Orthotropic Properties'),
       row('E11 / E22 / E33', inp('m-E11', m.ortho.E11, 'number', 'any') + ' ' + inp('m-E22', m.ortho.E22, 'number', 'any') + ' ' + inp('m-E33', m.ortho.E33, 'number', 'any')),
@@ -410,10 +546,13 @@
     ].join('') : [
       secTitle('Isotropic Properties'),
       row('E (MPa)', m.mechType === 'uniaxial' ? inp('m-E', m.iso.E, 'number', 'any') :
-        (chk('m-auto', m.iso.auto) + ' <span style="font-size:11px;opacity:.7">auto from f&#8320;/w</span> ' + inp('m-E', m.iso.auto ? '' : m.iso.E, 'number', 'any'))),
+        (chk('m-auto', m.iso.auto) + ' <span style="font-size:11px;opacity:.7">auto from f&#8320;/w</span> ' +
+          '<span id="m-Elive" style="font-size:12.5px;font-weight:600"></span> ' +
+          inp('m-E', m.iso.auto ? '' : m.iso.E, 'number', 'any'))),
       row('Poisson ν', inp('m-u', m.iso.u, 'number', 'any')),
       row('Thermal α (1/°C)', inp('m-a', m.iso.a, 'number', 'any')),
-      row('G (MPa)', m.iso.auto ? '<span style="font-size:11px;opacity:.7">E / (2(1+ν))</span>' : inp('m-G', m.iso.G, 'number', 'any')),
+      row('G (MPa) — auto', '<span id="m-g-live" style="display:inline-block;min-width:80px;font-size:12.5px;font-weight:600">…</span>' +
+        '<span style="font-size:11px;opacity:.7">= E / (2(1+ν)) — derived</span>'),
     ].join('');
     const conc = m.type === 'concrete' ? [
       secTitle('Concrete (f&#8320; data)'),
@@ -425,10 +564,31 @@
       secTitle('User Stress-Strain Curve (optional)'),
       rowsEditor('ssc', m.ssCurve.map(p => [p[0], p[1]]), 'Strain', 'Stress (MPa)'),
     ].join('') : '';
+    // ETABS parity (aa2.cs "Design Properties for Steel Materials"): the
+    // four stress fields are Fy / Fu (specified minimums) + Fye / Fue
+    // (expected strengths, rebar & steel only — tendons have none). The
+    // eFy / eFu stored fields are STRAINS (ε at fy/fu), not these.
+    const t0 = m.rebar || m.steel || m.tendon || {};
+    // Usage status per material type (frontend parity note):
+    //   rebar fye/fue → consumed NOW by Column "Expected" capacity and the
+    //     Moment Curvature module (calculated-hinge inputs).
+    //   steel fye/fue → NOT USED at the current version: steel frame design
+    //     is not implemented. In ETABS they feed the steel seismic
+    //     capacity-design overwrite Fye/Fy (decompiled
+    //     cTableSteelFrameDesignOverwrites*:770 "used in capacity based
+    //     design for special seismic cases"). Wire them there when steel
+    //     design is added.
+    const expRows = (m.type === 'rebar' || m.type === 'steel') ? [
+      row('Expected yield fye (MPa)', inp('m-fye', t0.fye ?? t0.fy, 'number', 'any') +
+        ` <span style="font-size:11px;opacity:.7">0 → fy · ${m.type === 'rebar' ? 'used: Moment Curvature + column Expected capacity' : 'not used at the current version (steel design not implemented)'}</span>`),
+      row('Expected tensile fue (MPa)', inp('m-fue', t0.fue ?? t0.fu, 'number', 'any') +
+        ` <span style="font-size:11px;opacity:.7">0 → fu · ${m.type === 'rebar' ? 'used: Moment Curvature (steel curve cap)' : 'not used at the current version (steel design not implemented)'}</span>`),
+    ] : [];
     const ss = (m.type === 'rebar' || m.type === 'steel' || m.type === 'tendon') ? [
       secTitle('Uniaxial (steel / rebar / tendon)'),
-      row('fy (MPa)', inp('m-fy', (m.rebar || m.steel || m.tendon || {}).fy, 'number', 'any')),
-      row('fu (MPa)', inp('m-fu', (m.rebar || m.steel || m.tendon || {}).fu, 'number', 'any')),
+      row('Minimum yield fy (MPa)', inp('m-fy', t0.fy, 'number', 'any')),
+      row('Minimum tensile fu (MPa)', inp('m-fu', t0.fu, 'number', 'any')),
+      ...expRows,
       row('Strain at hardening', inp('m-eh', (m.rebar || m.steel || {}).strainAtHardening ?? '', 'number', 'any')),
     ].join('') : '';
     const html = `<div ${BODY_CSS}>` + [
@@ -473,7 +633,7 @@
         m.iso.E = num('m-E', m.iso.E);
         m.iso.u = num('m-u', m.iso.u);
         m.iso.a = num('m-a', m.iso.a);
-        if (!m.iso.auto) m.iso.G = num('m-G', m.iso.G);
+        m.iso.G = gLive(); // always derived for isotropic (aro.cs:15596)
         m.weight.value = num('m-w', m.weight.value);
         m.weight.as = txt('m-was', m.weight.as);
         m.damping.modalRatio = num('m-damp', m.damping.modalRatio);
@@ -489,6 +649,12 @@
         if (m.type === 'rebar' || m.type === 'steel' || m.type === 'tendon') {
           const t = m.rebar || m.steel || m.tendon || { strainAtHardening: 0.008 };
           t.fy = num('m-fy', t.fy); t.fu = num('m-fu', t.fu);
+          if (m.type === 'rebar' || m.type === 'steel') {
+            // ETABS parity (f6.cs): expected strengths left at 0 mean "unset"
+            t.fye = num('m-fye', t.fye ?? t.fy); t.fue = num('m-fue', t.fue ?? t.fu);
+            if (!(t.fye > 0)) t.fye = t.fy;
+            if (!(t.fue > 0)) t.fue = t.fu;
+          }
           if (m.rebar) m.rebar = t; else if (m.steel) m.steel = t; else m.tendon = t;
         }
         if (isNew) d.materials.push(m); else d.materials[idx] = m;
@@ -503,6 +669,27 @@
     });
     const ssc = document.getElementById('ssc-tbl');
     if (ssc) wireRows(app, 'ssc', m.ssCurve);
+    // live E + G display — recomputed on every E / ν / auto / fc / weight edit
+    const updLive = () => {
+      const auto = !!(document.getElementById('m-auto') && document.getElementById('m-auto').checked);
+      const eEl = document.getElementById('m-Elive');
+      if (eEl) {
+        const E = eLive();
+        eEl.textContent = auto && isFinite(E) && E > 0 ? '= ' + E.toFixed(0) : '';
+      }
+      const gEl = document.getElementById('m-g-live');
+      if (gEl) {
+        const g = gLive();
+        gEl.textContent = isFinite(g) && g > 0 ? g.toFixed(1) : '—';
+      }
+    };
+    for (const gid of ['m-E', 'm-u', 'm-auto', 'm-fc', 'm-lw', 'm-w', 'm-was']) {
+      const el = document.getElementById(gid);
+      if (!el) continue;
+      el.addEventListener('input', updLive);
+      if (el.tagName === 'SELECT' || el.type === 'checkbox') el.addEventListener('change', updLive);
+    }
+    updLive();
   }
 
   function renderMaterials(app) {
@@ -511,7 +698,7 @@
       ['Name', 'Type', "f'c / fy", 'E (MPa)', 'Unit w'],
       m => ['<td style="padding:4px 6px">' + esc(m.name) + '</td>',
         '<td>' + esc(MAT_LABEL[m.type] || m.type) + '</td>',
-        '<td>' + (m.conc ? "f'c " + m.conc.fc : ((m.rebar || m.steel || m.tendon) ? 'fy ' + (m.rebar || m.steel || m.tendon).fy : '—')) + ' MPa</td>',
+        '<td>' + (m.conc ? "f'c " + m.conc.fc : ((m.rebar || m.steel || m.tendon) ? 'fy ' + (m.rebar || m.steel || m.tendon).fy + ((m.rebar || m.steel) && (m.rebar || m.steel).fye ? ' / fye ' + (m.rebar || m.steel).fye : '') : '—')) + ' MPa</td>',
         '<td>' + Math.round(matE(m)) + '</td>',
         '<td>' + m.weight.value + '</td>'].join(''),
       () => materialEditor(app, d, -1),
@@ -1974,11 +2161,30 @@
 
   root.RCDefine = {
     ensure, open, matE, matG, concreteEc, frameSectionProps, defaultState,
-    MAT_LABEL, FRAME_LABEL, asceSa, rsValue,
+    MAT_LABEL, FRAME_LABEL, asceSa, rsValue, evalFormula,
+    materialEditor, // exposed for headless dialog tests (DOM-stubbed)
     // bridge
     structuralInfo, ensureAutoSection, relinkAfterEdit, sectionUsage,
     syncModelToDefine, STRUCTURAL_TYPES,
     // assign
     assignSections, selectedStructuralEnts,
   };
+
+  // calculator-cell behavior: leaving a numeric field evaluates whatever
+  // expression it holds and writes the result back into the cell — exactly
+  // what the ETABS edit control does on exit (CSICommon/Calculator.cs).
+  // Invalid text is flagged red, not silently cleared.
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('focusout', e => {
+      const el = e.target;
+      if (!el || !el.classList || !el.classList.contains('ws-calc')) return;
+      const v = evalFormula(el.value);
+      if (isFinite(v)) {
+        el.value = String(+v.toPrecision(12));
+        el.style.color = '';
+      } else if (el.value.trim() !== '') {
+        el.style.color = '#c62828';
+      }
+    });
+  }
 })(window);

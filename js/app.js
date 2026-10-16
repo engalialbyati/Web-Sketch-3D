@@ -512,6 +512,7 @@ const DEFINE_BUTTONS = {
   dsvres: { label: 'Results View', glyph: '▦c', tip: 'Color the model by governing utilization (ETABS results display): beams demand, columns PMM/shear/joint, walls DCR, slabs M11 scale', cat: 'resultsView' },
   dsinfo: { label: 'Display Design Info', glyph: 'ⓘ', tip: 'ETABS Display Design Info — Longitudinal As (mm²), Rebar %, Shear Av/s, P-M-M Capacity Ratios', cat: 'displayDesignInfo' },
   dsdet: { label: 'Design Details', glyph: '▣📈', tip: 'ETABS Concrete Member Design Details — full code check & interactive CSiCol P-M interaction curve', cat: 'memberDesignDetails' },
+  dsmc: { label: 'Moment Curvature', glyph: '∿', tip: 'ETABS Section Designer M-φ: fiber moment-curvature on specified AND expected (Fye/Fue) strengths; first yield My, Mmax, φu, μφ, EI_eff — the calculated-hinge inputs', cat: 'momentCurvature' },
   winlayout: { label: 'Windows', glyph: '⊞', tip: 'ETABS Window Management — Single, Split V, Split H, 4 Quad Views, Arrange Windows', cat: 'windowLayout' },
   defetabs: { label: 'Export ETABS (dev)', glyph: '⇪', tip: 'DEV ONLY: write an OAPI script that rebuilds this model in ETABS (elements, sections, materials, loads, combos) + this engine\'s results for diffing', cat: 'exportEtabs' },
   defsync: { label: 'Sync Model → Define', glyph: '⟳', tip: 'Catalogue every drawn wall/slab/roof/beam/column into Define sections (find-or-create by dimensions)', cat: 'sync' },
@@ -3285,7 +3286,7 @@ class App {
       this.gridManager.model = m;
       this.gridManager._hydrate();
       this.view.setGrids(this.gridManager.grids, this.levelManager.levels);
-      this.view.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
+      this.view.showGrids(this._datumsVisible() && this.gridManager.grids.length > 0);
     }
     this._snapCache = null;
   }
@@ -3766,7 +3767,7 @@ class App {
     // grid edits re-derive the level plane rectangles (they track the grid AABB)
     this.view.setLevels(this.levelManager.levels, this.gridManager.grids);
     this.view.setGrids(this.gridManager.grids, this.levelManager.levels, this.selGridIds.size ? this.selGridIds : (this.selGridId || null), this.selGridZ);
-    this.view.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
+    this.view.showGrids(this._datumsVisible() && this.gridManager.grids.length > 0);
     this._syncGridsToDb();
     const bd = document.getElementById('dialog-backdrop');
     if (bd && !bd.classList.contains('hidden') && document.getElementById('grid-body'))
@@ -3866,8 +3867,8 @@ class App {
       // plan dressing: only this level's plane and grid lines at its height
       v.setLevels([lvl]);
       if (this.gridManager) v.setGrids(this.gridManager.grids, [lvl]);
-      v.showLevels(this.mode === 'bim');
-      if (this.gridManager) v.showGrids(this.mode === 'bim' && this.gridManager.grids.length > 0);
+      v.showLevels(this._datumsVisible());
+      if (this.gridManager) v.showGrids(this._datumsVisible() && this.gridManager.grids.length > 0);
     }
     this.clearSelection();
     v.rebuild();
@@ -4183,7 +4184,7 @@ class App {
     this._sketch = null;
     this._liveSnaps = null; // sketch endpoints stop being snap candidates
     this.view.setGhost(false);
-    this.view.showLevels(this.mode === 'bim');
+    this.view.showLevels(this._datumsVisible());
     const bar = document.getElementById('sketchbar');
     if (bar) bar.classList.add('hidden');
     this.view.clearPreview();
@@ -5011,6 +5012,15 @@ class App {
     }
   }
 
+  // Grid lines & story levels are DATUMS — ETABS shows them by default in
+  // every view, analysis/design displays included; only the View menu
+  // toggles them (decompiled: "Set Grid System Visibility…" atf.cs:8583,
+  // View ▸ Show Grid). They stay visible in BIM and Design modes; Free
+  // mode keeps the clean SketchUp canvas.
+  _datumsVisible() {
+    return this.mode !== 'free';
+  }
+
   setMode(mode) {
     if (mode === this.mode) return;
     // RC Design & Analysis: a tool-less workspace mode (no drawing ribbon of
@@ -5045,8 +5055,8 @@ class App {
     }
 
     document.getElementById('bimoptions').classList.toggle('hidden', mode !== 'bim');
-    this.view.showLevels(mode === 'bim');
-    this.view.showGrids(mode === 'bim' && this.gridManager.grids.length > 0);
+    this.view.showLevels(this._datumsVisible());
+    this.view.showGrids(this._datumsVisible() && this.gridManager.grids.length > 0);
     this._buildToolbar();
     this.setTool(TOOL_DEFS[mode][0].id);
     const modeName = mode === 'bim' ? 'Precise Drawing (BIM)' : 'Free Drawing';
@@ -5079,8 +5089,11 @@ class App {
     document.body.classList.remove('mode-bim');
     document.body.classList.add('mode-design');
     document.getElementById('bimoptions').classList.add('hidden');
-    this.view.showLevels(false);
-    this.view.showGrids(false);
+    // ETABS parity: grids & story levels are datums — they stay visible in
+    // the Design & Analysis workspace (and its result displays), exactly
+    // like every ETABS plan/elevation/3D view
+    this.view.showLevels(true);
+    this.view.showGrids(this.gridManager.grids.length > 0);
     // swap in the Define ribbon (visible only in this mode) and land on it
     this._initRibbonTabs();
     if (this.ribbonTab !== 'define') this.setRibbonTab('define');
@@ -5527,7 +5540,7 @@ class App {
                 showDeflection: 'RCDiagram', analysisTables: 'RCTables',
                 beamDesign: 'RCBeam', columnDesign: 'RCColumn',
                 wallDesign: 'RCWall', slabDesign: 'RCSlab',
-                designReport: 'RCReport',
+                designReport: 'RCReport', momentCurvature: 'RCMC',
               };
               if (defBtn.cat === 'toggleRebarViz') {
                 if (window.RCViz) window.RCViz.toggle(this);

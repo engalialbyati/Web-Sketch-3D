@@ -1649,9 +1649,21 @@
       const fc = mat.conc ? mat.conc.fc : 25;
       const b = (r.b || 400), h = (r.h || 400);
 
-      // Generate or approximate P-M curve
+      // Generate or approximate P-M curve — real section + materials
+      // (legacy call passed raw b/h/fc scalars into the (sec, mat, …)
+      // signature, silently producing a default expected-mode curve)
+      const secPM = {
+        name: r.id, dims: { b: b / 1000, h: h / 1000 },
+        rebar: {
+          colCover: 0.04,
+          rebarSize: String(r.rebar ? r.rebar.dia : 20),
+          nR2: Math.max(0, Math.ceil((((r.rebar ? r.rebar.count : 8) - 4)) / 2)),
+        },
+      };
+      const rmatPM = root.RCColumn && root.RCColumn.resolveRebarMat
+        ? root.RCColumn.resolveRebarMat(app, secPM) : null;
       const pts = root.RCColumn && root.RCColumn.generatePMCurve
-        ? root.RCColumn.generatePMCurve(b, h, fc, 400, r.rebar ? r.rebar.dia : 20, r.rebar ? r.rebar.count : 8, 40, angleDeg)
+        ? root.RCColumn.generatePMCurve(secPM, mat, angleDeg, 40, 'design', rmatPM)
         : [
           { P: 0.85 * fc * b * h * 0.8 / 1e3, M: 0 },
           { P: 0.85 * fc * b * h * 0.4 / 1e3, M: fc * b * h * h * 0.14 / 1e6 },

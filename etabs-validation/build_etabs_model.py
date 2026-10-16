@@ -54,8 +54,13 @@ def main():
                                             0.002, 0.003, 0, 0, 0, 0)
         else:
             sap.PropMaterial.SetMaterial(name, 6)  # REBAR
-            sap.PropMaterial.SetORebar_1(name, m['fy'], m['fy'] * 1.17, 0.0021,
-                                         0.08, 1, 1, 0.0068, 0.09, 0.05, False, 0)
+            # SetORebar_1(Name, Fy, Fu, EFy, EFu, ...) — EFy/EFu are the
+            # expected STRENGTHS (MPa), 0 lets ETABS apply its own default
+            sap.PropMaterial.SetORebar_1(name, m['fy'],
+                                         m.get('fu') or m['fy'] * 1.08,
+                                         m.get('fye') or 0,
+                                         m.get('fue') or 0,
+                                         1, 1, 0.0068, 0.09, 0.05, False, 0)
 
     # ---------------- frame sections (rect): T3 = depth, T2 = width — meters
     for s in SECTIONS:

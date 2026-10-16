@@ -16,7 +16,13 @@
     const out = { materials: {}, sections: [], members: [], patterns: [], combos: [] };
     for (const m of d.materials) {
       if (m.type === 'concrete') out.materials[m.name] = { type: 'concrete', fc: m.conc.fc };
-      else if (m.type === 'rebar') out.materials[m.name] = { type: 'rebar', fy: m.rebar.fy };
+      else if (m.type === 'rebar') out.materials[m.name] = {
+        type: 'rebar', fy: m.rebar.fy, fu: m.rebar.fu,
+        // ETABS OAPI SetORebar_1: Fy, Fu, EFy(expected yield), EFu(expected
+        // tensile) are STRESSES — never pass the eFy/eFu strains here
+        fye: m.rebar.fye > 0 ? m.rebar.fye : m.rebar.fy,
+        fue: m.rebar.fue > 0 ? m.rebar.fue : m.rebar.fu,
+      };
     }
     for (const s of d.frameSections) {
       if (s.type !== 'rect') continue;
@@ -264,8 +270,15 @@ def main():
                                             0.002, 0.003, 0, 0, 0, 0)
         else:
             sap.PropMaterial.SetMaterial(name, 6)  # REBAR
-            sap.PropMaterial.SetORebar_1(name, m['fy'], m['fy'] * 1.17, 0.0021,
-                                         0.08, 1, 1, 0.0068, 0.09, 0.05, False, 0)
+            # SetORebar_1(Name, Fy, Fu, EFy, EFu, SSType, SSHysType,
+            #             StrainAtHardening, StrainUltimate, FinalSlope,
+            #             UseCaltransSSDefaults, Temp) — EFy/EFu are the
+            # expected STRENGTHS (MPa), 0 lets ETABS apply its own default
+            sap.PropMaterial.SetORebar_1(name, m['fy'],
+                                         m.get('fu') or m['fy'] * 1.08,
+                                         m.get('fye') or 0,
+                                         m.get('fue') or 0,
+                                         1, 1, 0.0068, 0.09, 0.05, False, 0)
 
     # ---------------- frame sections (rect): T3 = depth, T2 = width — meters
     for s in SECTIONS:
